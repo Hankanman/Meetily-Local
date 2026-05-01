@@ -108,6 +108,14 @@
         },
         "windows": {
             "signCommand": "powershell -ExecutionPolicy Bypass -File scripts/sign-windows.ps1 -FilePath %1"
+        },
+        "linux": {
+            "rpm": {
+                "compression": {
+                    "type": "gzip",
+                    "level": 1
+                }
+            }
         }
     },
     "plugins": {
