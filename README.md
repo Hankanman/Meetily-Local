@@ -1,7 +1,5 @@
 <div align="center" style="border-bottom: none">
     <h1>
-        <img src="docs/Meetily-6.png" style="border-radius: 10px;" />
-        <br>
         Meetily-Local — Privacy-First AI Meeting Assistant
     </h1>
     <a href="https://github.com/Hankanman/Meetily-Local/releases"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License"></a>
@@ -24,37 +22,16 @@ A privacy-first AI meeting assistant that captures, transcribes, and summarizes 
 
 **Meetily-Local** is an independent fork of the original [Zackriya-Solutions/meeting-minutes](https://github.com/Zackriya-Solutions/meeting-minutes) project (the "Meetily Community Edition"), which is MIT-licensed.
 
-The original project's maintainer pivoted toward monetising a closed-source "Meetily PRO" product, with the open-source community edition increasingly receiving only the features that didn't make it into PRO. PRs sat unreviewed, Linux support was de-prioritised, and the codebase began stagnating on aging dependencies. After 11+ days of zero activity on multiple Linux/audio fix PRs, this fork was created to keep the open-source side of the project healthy and moving forward.
-
-This fork is **fully independent** — not technically a GitHub fork anymore — and there is no commercial product, no "PRO" tier, and no upsell. Everything is and will remain MIT-licensed and free.
+This fork is **fully independent** — not technically a GitHub fork anymore — and there is no commercial product. Everything is and will remain MIT-licensed and free.
 
 **What's different in Meetily-Local vs. upstream as of v0.4.0:**
 
 - ✅ **Linux is a first-class target.** Audio capture (cpal/PipeWire), WebKitGTK rendering, and ALSA device enumeration all fixed and tested.
 - ✅ **Modern dependencies.** `whisper-rs` 0.13 → 0.16 (drops ~30 MB of vendored patches), Tauri 2.6 → 2.11, all plugins current.
-- ✅ **Single-script build.** `./build.sh` and `./clean.sh` at the repo root with auto GPU detection and Fedora-CUDA 13 environment defaults.
-- ✅ **Honest error messages.** The recording-start toast surfaces the real validator error instead of generic "still downloading".
-- ✅ **No PRO upsell content.** The README, in-app UI, and docs are scoped to what the open-source build actually does.
 
 Credit for the original architecture, models, and significant feature work goes to [Sujith S](https://github.com/sujithatzackriya) and the original Zackriya-Solutions community. See [Acknowledgments](#acknowledgments).
 
 ---
-
-<details>
-<summary>Table of Contents</summary>
-
-- [Introduction](#introduction)
-- [Why this exists](#why-this-exists)
-- [Features](#features)
-- [Installation](#installation)
-- [Build from source](#build-from-source)
-- [Key features](#key-features)
-- [System architecture](#system-architecture)
-- [Contributing](#contributing)
-- [License](#license)
-- [Acknowledgments](#acknowledgments)
-
-</details>
 
 ## Introduction
 
