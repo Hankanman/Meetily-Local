@@ -1,6 +1,6 @@
 import { useCallback, RefObject } from 'react';
 import { Transcript, Summary } from '@/types';
-import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
+import { TiptapSummaryViewRef } from '@/components/AISummary/TiptapSummaryView';
 import { toast } from 'sonner';
 import Analytics from '@/lib/analytics';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
@@ -10,7 +10,7 @@ interface UseCopyOperationsProps {
   transcripts: Transcript[];
   meetingTitle: string;
   aiSummary: Summary | null;
-  blockNoteSummaryRef: RefObject<BlockNoteSummaryViewRef | null>;
+  summaryRef: RefObject<TiptapSummaryViewRef | null>;
 }
 
 export function useCopyOperations({
@@ -18,7 +18,7 @@ export function useCopyOperations({
   transcripts,
   meetingTitle,
   aiSummary,
-  blockNoteSummaryRef,
+  summaryRef,
 }: UseCopyOperationsProps) {
 
   // Helper function to fetch ALL transcripts for copying (not just paginated data)
@@ -112,9 +112,9 @@ export function useCopyOperations({
       console.log('🔍 Copy Summary - Starting...');
 
       // Try to get markdown from BlockNote editor first
-      if (blockNoteSummaryRef.current?.getMarkdown) {
+      if (summaryRef.current?.getMarkdown) {
         console.log('📝 Trying to get markdown from ref...');
-        summaryMarkdown = await blockNoteSummaryRef.current.getMarkdown();
+        summaryMarkdown = await summaryRef.current.getMarkdown();
         console.log('📝 Got markdown from ref, length:', summaryMarkdown.length);
       }
 
@@ -187,7 +187,7 @@ export function useCopyOperations({
       console.error('❌ Failed to copy summary:', error);
       toast.error("Failed to copy summary");
     }
-  }, [aiSummary, meetingTitle, meeting, blockNoteSummaryRef]);
+  }, [aiSummary, meetingTitle, meeting, summaryRef]);
 
   return {
     handleCopyTranscript,

@@ -229,13 +229,9 @@ function MeetingDetailsContent() {
 
         console.log('🔍 FETCH SUMMARY: Parsed data:', parsedData);
 
-        // Priority 1: BlockNote JSON format
-        if (parsedData.summary_json) {
-          setMeetingSummary(parsedData as any);
-          return;
-        }
-
-        // Priority 2: Markdown format
+        // Markdown is the canonical format — old saves may also have a
+        // `summary_json` field (BlockNote-shaped), but markdown was always
+        // saved alongside, so we route everything through it.
         if (parsedData.markdown) {
           setMeetingSummary(parsedData as any);
           return;

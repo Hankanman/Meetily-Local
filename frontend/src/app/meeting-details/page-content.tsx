@@ -127,7 +127,7 @@ export default function PageContent({
     transcripts: meetingData.transcripts,
     meetingTitle: meetingData.meetingTitle,
     aiSummary: meetingData.aiSummary,
-    blockNoteSummaryRef: meetingData.blockNoteSummaryRef,
+    summaryRef: meetingData.summaryRef,
   });
 
   const meetingOperations = useMeetingOperations({
@@ -200,7 +200,7 @@ export default function PageContent({
           onStartEditTitle={() => meetingData.setIsEditingTitle(true)}
           onFinishEditTitle={() => meetingData.setIsEditingTitle(false)}
           isTitleDirty={meetingData.isTitleDirty}
-          summaryRef={meetingData.blockNoteSummaryRef}
+          summaryRef={meetingData.summaryRef}
           isSaving={meetingData.isSaving}
           onSaveAll={meetingData.saveAllChanges}
           onCopySummary={copyOperations.handleCopySummary}

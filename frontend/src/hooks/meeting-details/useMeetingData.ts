@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { Transcript, Summary } from '@/types';
-import { BlockNoteSummaryViewRef } from '@/components/AISummary/BlockNoteSummaryView';
+import { TiptapSummaryViewRef } from '@/components/AISummary/TiptapSummaryView';
 import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider';
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
@@ -23,8 +23,8 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
   const [, setIsSummaryDirty] = useState(false);
   const [, setError] = useState<string>('');
 
-  // Ref for BlockNoteSummaryView
-  const blockNoteSummaryRef = useRef<BlockNoteSummaryViewRef>(null);
+  // Ref for TiptapSummaryView
+  const summaryRef = useRef<TiptapSummaryViewRef>(null);
 
   // Sidebar context
   const { setCurrentMeeting, setMeetings, meetings: sidebarMeetings } = useSidebar();
@@ -73,19 +73,19 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
     }
   }, [meeting.id, meetingTitle, sidebarMeetings, setMeetings, setCurrentMeeting]);
 
-  const handleSaveSummary = useCallback(async (summary: Summary | { markdown?: string; summary_json?: any[] }) => {
+  const handleSaveSummary = useCallback(async (summary: Summary | { markdown: string }) => {
     console.log('📄 handleSaveSummary called with:', {
       hasMarkdown: 'markdown' in summary,
-      hasSummaryJson: 'summary_json' in summary,
       summaryKeys: Object.keys(summary)
     });
 
     try {
       let formattedSummary: any;
 
-      // Check if it's the new BlockNote format
-      if ('markdown' in summary || 'summary_json' in summary) {
-        console.log('📄 Saving new format (markdown/blocknote)');
+      // Markdown is the canonical save format. Legacy section-based summaries
+      // (from before the markdown switch) get wrapped on save.
+      if ('markdown' in summary) {
+        console.log('📄 Saving markdown format');
         formattedSummary = summary;
       } else {
         console.log('📄 Saving legacy format');
@@ -125,9 +125,9 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
       }
 
       // Save BlockNote editor changes if dirty
-      if (blockNoteSummaryRef.current?.isDirty) {
+      if (summaryRef.current?.isDirty) {
         console.log('💾 Saving BlockNote editor changes...');
-        await blockNoteSummaryRef.current.saveSummary();
+        await summaryRef.current.saveSummary();
       } else if (aiSummary) {
         await handleSaveSummary(aiSummary);
       }
@@ -160,7 +160,7 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
     isTitleDirty,
     aiSummary,
     isSaving,
-    blockNoteSummaryRef,
+    summaryRef,
 
     // Setters
     setMeetingTitle,

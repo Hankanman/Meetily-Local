@@ -65,20 +65,15 @@ export interface SummaryResponse {
   };
 }
 
-// BlockNote-specific types
+// Summary storage formats. `blocknote` is retained as a value so existing
+// stored payloads with `summary_json` aren't treated as parse errors;
+// going forward the only live format is `markdown`.
 export type SummaryFormat = 'legacy' | 'markdown' | 'blocknote';
-
-export interface BlockNoteBlock {
-  id: string;
-  type: string;
-  props?: Record<string, any>;
-  content?: any[];
-  children?: BlockNoteBlock[];
-}
 
 export interface SummaryDataResponse {
   markdown?: string;
-  summary_json?: BlockNoteBlock[];
+  /** Legacy field from BlockNote-era saves. Read but never written. */
+  summary_json?: unknown[];
   // Legacy format fields
   MeetingName?: string;
   _section_order?: string[];

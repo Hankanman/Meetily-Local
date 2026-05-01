@@ -4,8 +4,8 @@
     "private": true,
     "main": "electron/main.js",
     "scripts": {
-        "dev": "next dev --webpack -p 3118",
-        "build": "next build --webpack",
+        "dev": "next dev -p 3118",
+        "build": "next build",
         "export": "next export",
         "start": "next start -p 3118",
         "tauri": "tauri",
@@ -28,9 +28,6 @@
         "lint": "next lint"
     },
     "dependencies": {
-        "@blocknote/core": "0.49.0",
-        "@blocknote/react": "0.49.0",
-        "@blocknote/shadcn": "0.49.0",
         "@heroicons/react": "^2.2.0",
         "@hookform/resolvers": "^5.2.2",
         "@radix-ui/react-accordion": "^1.2.12",
@@ -63,6 +60,7 @@
         "@tauri-apps/plugin-process": "^2.3.1",
         "@tauri-apps/plugin-store": "^2.4.2",
         "@tauri-apps/plugin-updater": "^2.10.1",
+        "@tiptap/core": "^3.22.5",
         "@tiptap/pm": "^3.22.5",
         "@tiptap/react": "^3.22.5",
         "@tiptap/starter-kit": "^3.22.5",
@@ -84,6 +82,7 @@
         "sonner": "^2.0.7",
         "tailwind-merge": "^3.5.0",
         "tailwindcss-animate": "^1.0.7",
+        "tiptap-markdown": "^0.9.0",
         "zod": "^4.4.1"
     },
     "devDependencies": {
