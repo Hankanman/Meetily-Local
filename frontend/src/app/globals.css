@@ -1,6 +1,9 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Tailwind 4: single import replaces @tailwind directives. */
+@import "tailwindcss";
+
+/* Keep using the existing JS config (theme, content, plugins) — Tailwind 4
+   would otherwise auto-detect content but ignore the JS theme overrides. */
+@config "../../tailwind.config.ts";
 
 @keyframes vibrate {
   0% {
@@ -135,7 +138,9 @@
 
 @layer base {
   * {
-    @apply border-border;
+    /* Tailwind 4: replaced `@apply border-border` (missing in JS config) with
+       direct CSS using the --border var defined above. */
+    border-color: hsl(var(--border));
   }
 
   /* html, */
