@@ -20,7 +20,7 @@ A privacy-first AI meeting assistant that captures, transcribes, and summarizes 
 
 ## About this fork
 
-**Meetily-Local** is an independent fork of the original [Zackriya-Solutions/meeting-minutes](https://github.com/Zackriya-Solutions/meeting-minutes) project (the "Meetily Community Edition"), which is MIT-licensed.
+**Meetily-Local** is an independent fork of the original [Zackriya-Solutions/meetily](https://github.com/Zackriya-Solutions/meetily) project (the "Meetily Community Edition"), which is MIT-licensed.
 
 This fork is **fully independent** — not technically a GitHub fork anymore — and there is no commercial product. Everything is and will remain MIT-licensed and free.
 
