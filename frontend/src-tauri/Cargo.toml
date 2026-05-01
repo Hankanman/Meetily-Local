@@ -6,7 +6,7 @@ authors = ["Sujith S"]
 license = "MIT"
 repository = "https://github.com/Zackriya-Solutions/meeting-minutes"
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.85"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
