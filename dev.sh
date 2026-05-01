@@ -51,6 +51,15 @@ esac
 echo "==> Dev mode: $MODE"
 cd "$ROOT/frontend"
 
+# ----- compiler-cache opt-in (auto-enables if sccache is installed) -----
+if command -v sccache >/dev/null 2>&1; then
+    export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
+    export CMAKE_C_COMPILER_LAUNCHER="${CMAKE_C_COMPILER_LAUNCHER:-sccache}"
+    export CMAKE_CXX_COMPILER_LAUNCHER="${CMAKE_CXX_COMPILER_LAUNCHER:-sccache}"
+    export CMAKE_CUDA_COMPILER_LAUNCHER="${CMAKE_CUDA_COMPILER_LAUNCHER:-sccache}"
+    echo "==> sccache enabled (cached compiles for Rust + C/C++ + CUDA)"
+fi
+
 # ----- pre-flight -----
 if ! command -v pnpm >/dev/null 2>&1; then
     echo "error: pnpm not found (install via 'npm i -g pnpm' or 'corepack enable')" >&2
@@ -82,10 +91,15 @@ case "$(uname -s)" in
                 echo "==> CUDAHOSTCXX=/usr/bin/g++-14"
             fi
         fi
-        # CUDA 13 dropped sm_52 (Maxwell). Pin to Turing+ unless overridden.
+        # Dev defaults to a single GPU arch — much faster nvcc compile than
+        # the multi-arch list build.sh uses for portable binaries.
+        # Override with `CUDAARCHS=...` if you have a different GPU than 8.6.
+        # Detect compute capability via nvidia-smi if available, fall back to 86.
         if [[ "$MODE" == "cuda" && -z "${CUDAARCHS:-}" ]]; then
-            export CUDAARCHS="75;80;86;89;90"
-            echo "==> CUDAARCHS=$CUDAARCHS"
+            CC=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '.')
+            : "${CC:=86}"
+            export CUDAARCHS="${CC}-real"
+            echo "==> CUDAARCHS=$CUDAARCHS (single-arch dev build)"
         fi
         ;;
 esac

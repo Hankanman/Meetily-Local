@@ -79,6 +79,15 @@ case "$(uname -s)" in
         ;;
 esac
 
+# ----- compiler-cache opt-in (auto-enables if sccache is installed) -----
+if command -v sccache >/dev/null 2>&1; then
+    export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
+    export CMAKE_C_COMPILER_LAUNCHER="${CMAKE_C_COMPILER_LAUNCHER:-sccache}"
+    export CMAKE_CXX_COMPILER_LAUNCHER="${CMAKE_CXX_COMPILER_LAUNCHER:-sccache}"
+    export CMAKE_CUDA_COMPILER_LAUNCHER="${CMAKE_CUDA_COMPILER_LAUNCHER:-sccache}"
+    echo "==> sccache enabled (cached compiles for Rust + C/C++ + CUDA)"
+fi
+
 # ----- pre-flight -----
 if ! command -v pnpm >/dev/null 2>&1; then
     echo "error: pnpm not found (install via 'npm i -g pnpm' or 'corepack enable')" >&2
