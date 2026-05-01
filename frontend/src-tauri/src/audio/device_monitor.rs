@@ -166,7 +166,21 @@ impl AudioDeviceMonitor {
         stop_signal: Arc<tokio::sync::Notify>,
     ) {
         let mut last_device_list = Vec::new();
-        let check_interval = Duration::from_secs(2); // Poll every 2 seconds
+
+        // On Linux, `list_audio_devices()` goes through cpal's ALSA backend and
+        // probes every ALSA PCM (dmix:*, dsnoop:*, route:*, iec958:*, hw:*,
+        // plughw:*). Each probe opens/closes a PipeWire node via pipewire-alsa
+        // and jitters the whole audio graph — which shows up as audible fuzz
+        // in the active recording and in any concurrent Teams/Zoom/WebRTC
+        // call. A 2 s poll is fine on CoreAudio/WASAPI but way too aggressive
+        // on pipewire-alsa. Fall back to a 30 s interval on Linux; the cpal
+        // stream's error callback still catches actual device disconnects
+        // immediately, so polling only matters for detecting newly-available
+        // devices in the picker, which doesn't need to be instant.
+        #[cfg(target_os = "linux")]
+        let check_interval = Duration::from_secs(30);
+        #[cfg(not(target_os = "linux"))]
+        let check_interval = Duration::from_secs(2);
 
         loop {
             // Check for stop signal with timeout
@@ -177,6 +191,22 @@ impl AudioDeviceMonitor {
                 }
                 _ = tokio::time::sleep(check_interval) => {
                     // Continue with monitoring check
+                }
+            }
+
+            // While actively recording on Linux, skip the enumeration entirely.
+            // cpal's ALSA probe during `list_audio_devices()` perturbs the
+            // PipeWire graph and produces audible fuzz on the in-flight
+            // capture stream. Mid-recording disconnects are still caught
+            // immediately by the cpal stream's own error callback, so
+            // skipping the periodic poll doesn't lose the reconnection flow
+            // — it only delays detection of *new* devices becoming
+            // available, which doesn't matter until the user stops recording
+            // and re-opens the picker.
+            #[cfg(target_os = "linux")]
+            {
+                if crate::audio::recording_commands::is_recording().await {
+                    continue;
                 }
             }
 

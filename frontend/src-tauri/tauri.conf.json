@@ -1,7 +1,7 @@
 {
     "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
     "productName": "meetily",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "identifier": "com.meetily.ai",
     "build": {
         "frontendDist": "../out",
@@ -108,6 +108,14 @@
         },
         "windows": {
             "signCommand": "powershell -ExecutionPolicy Bypass -File scripts/sign-windows.ps1 -FilePath %1"
+        },
+        "linux": {
+            "rpm": {
+                "compression": {
+                    "type": "gzip",
+                    "level": 1
+                }
+            }
         }
     },
     "plugins": {
