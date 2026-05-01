@@ -77,8 +77,8 @@ export function AudioBackendSelector({
   if (loading) {
     return (
       <div className="animate-pulse">
-        <div className="h-4 bg-gray-200 rounded w-32 mb-2"></div>
-        <div className="h-10 bg-gray-200 rounded"></div>
+        <div className="h-4 bg-muted rounded w-32 mb-2"></div>
+        <div className="h-10 bg-muted rounded"></div>
       </div>
     );
   }
@@ -91,7 +91,7 @@ export function AudioBackendSelector({
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <label className="text-sm font-medium text-gray-700">
+        <label className="text-sm font-medium text-foreground">
           System Audio Backend
         </label>
         <div className="relative">
@@ -99,7 +99,7 @@ export function AudioBackendSelector({
             type="button"
             onMouseEnter={() => setShowTooltip(true)}
             onMouseLeave={() => setShowTooltip(false)}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
+            className="text-muted-foreground/70 hover:text-muted-foreground transition-colors"
           >
             <Info className="h-4 w-4" />
           </button>
@@ -113,7 +113,7 @@ export function AudioBackendSelector({
                   </li>
                 ))}
               </ul>
-              <p className="mt-2 text-gray-300">
+              <p className="mt-2 text-muted-foreground/70">
                 Try different backends to find which works best for your system.
               </p>
             </div>
@@ -139,7 +139,7 @@ export function AudioBackendSelector({
               className={`flex items-start p-3 border rounded-lg transition-all ${
                 currentBackend === backend.id
                   ? 'border-blue-500 bg-blue-50'
-                  : 'border-gray-300 hover:border-gray-400 bg-white'
+                  : 'border-border hover:border-border bg-background'
               } ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
             >
               <input
@@ -149,11 +149,11 @@ export function AudioBackendSelector({
                 checked={currentBackend === backend.id}
                 onChange={() => handleBackendChange(backend.id)}
                 disabled={isDisabled}
-                className="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300"
+                className="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500 border-border"
               />
               <div className="ml-3 flex-1">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-900">
+                  <span className="text-sm font-medium text-foreground">
                     {backend.name}
                   </span>
                   {currentBackend === backend.id && (
@@ -162,19 +162,19 @@ export function AudioBackendSelector({
                     </span>
                   )}
                   {isCoreAudio && (
-                    <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
+                    <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-0.5 rounded">
                       Disabled
                     </span>
                   )}
                 </div>
-                <p className="mt-1 text-xs text-gray-600">{backend.description}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{backend.description}</p>
               </div>
             </label>
           );
         })}
       </div>
 
-      <div className="text-xs text-gray-500 space-y-1">
+      <div className="text-xs text-muted-foreground space-y-1">
         <p>• Backend selection only affects system audio capture</p>
         <p>• Microphone always uses the default method</p>
         <p>• Changes apply to new recording sessions</p>

@@ -138,7 +138,7 @@ Quarterly product review session with stakeholders.
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-4">{note.title}</h1>
         
-        <div className="flex flex-wrap gap-4 text-gray-600">
+        <div className="flex flex-wrap gap-4 text-muted-foreground">
           {note.date && (
             <div className="flex items-center gap-1">
               <Calendar className="w-4 h-4" />

@@ -177,8 +177,8 @@ export function LanguageSelection({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Globe className="h-4 w-4 text-gray-600" />
-          <h4 className="text-sm font-medium text-gray-900">Transcription Language</h4>
+          <Globe className="h-4 w-4 text-muted-foreground" />
+          <h4 className="text-sm font-medium text-foreground">Transcription Language</h4>
         </div>
       </div>
 
@@ -187,7 +187,7 @@ export function LanguageSelection({
           value={selectedLanguage}
           onChange={(e) => handleLanguageChange(e.target.value)}
           disabled={disabled || saving}
-          className="w-full px-3 py-2 text-sm bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-50 disabled:text-gray-500"
+          className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:bg-muted disabled:text-muted-foreground"
         >
           {availableLanguages.map((language) => (
             <option key={language.code} value={language.code}>
@@ -207,7 +207,7 @@ export function LanguageSelection({
 
         {/* Info text */}
         <div className="text-xs space-y-2 pt-2">
-          <p className="text-gray-600">
+          <p className="text-muted-foreground">
             <strong>Current:</strong> {selectedLanguageName}
           </p>
           {selectedLanguage === 'auto' && (
@@ -223,7 +223,7 @@ export function LanguageSelection({
             </div>
           )}
           {selectedLanguage !== 'auto' && selectedLanguage !== 'auto-translate' && (
-            <p className="text-gray-600">
+            <p className="text-muted-foreground">
               Transcription will be optimized for <strong>{selectedLanguageName}</strong>
             </p>
           )}

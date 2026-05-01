@@ -11,7 +11,7 @@ export function ImportDropOverlay({ visible }: ImportDropOverlayProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm
+      className="fixed inset-0 z-50 bg-foreground/60 backdrop-blur-sm
                  flex items-center justify-center pointer-events-none
                  transition-opacity duration-200"
     >

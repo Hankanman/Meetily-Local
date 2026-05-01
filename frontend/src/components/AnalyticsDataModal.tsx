@@ -13,17 +13,17 @@ export default function AnalyticsDataModal({ isOpen, onClose, onConfirmDisable }
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-foreground bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-background rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
+        <div className="flex items-center justify-between p-6 border-b border-border">
           <div className="flex items-center gap-3">
             <Shield className="w-6 h-6 text-blue-600" />
-            <h2 className="text-xl font-semibold text-gray-900">What We Collect</h2>
+            <h2 className="text-xl font-semibold text-foreground">What We Collect</h2>
           </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 transition-colors"
+            className="text-muted-foreground/70 hover:text-muted-foreground transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -44,62 +44,62 @@ export default function AnalyticsDataModal({ isOpen, onClose, onConfirmDisable }
 
           {/* Data Categories */}
           <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-gray-900">Data We Collect:</h3>
+            <h3 className="text-lg font-semibold text-foreground">Data We Collect:</h3>
 
             {/* Model Preferences */}
-            <div className="border border-gray-200 rounded-lg p-4">
-              <h4 className="font-semibold text-gray-900 mb-2">1. Model Preferences</h4>
-              <ul className="text-sm text-gray-700 space-y-1 ml-4">
+            <div className="border border-border rounded-lg p-4">
+              <h4 className="font-semibold text-foreground mb-2">1. Model Preferences</h4>
+              <ul className="text-sm text-foreground space-y-1 ml-4">
                 <li>• Transcription model (e.g., "Whisper large-v3", "Parakeet")</li>
                 <li>• Summary model (e.g., "Llama 3.2", "Claude Sonnet")</li>
                 <li>• Model provider (e.g., "Local", "Ollama", "OpenRouter")</li>
               </ul>
-              <p className="text-xs text-gray-500 mt-2 italic">Helps us understand which models users prefer</p>
+              <p className="text-xs text-muted-foreground mt-2 italic">Helps us understand which models users prefer</p>
             </div>
 
             {/* Meeting Metrics */}
-            <div className="border border-gray-200 rounded-lg p-4">
-              <h4 className="font-semibold text-gray-900 mb-2">2. Anonymous Meeting Metrics</h4>
-              <ul className="text-sm text-gray-700 space-y-1 ml-4">
+            <div className="border border-border rounded-lg p-4">
+              <h4 className="font-semibold text-foreground mb-2">2. Anonymous Meeting Metrics</h4>
+              <ul className="text-sm text-foreground space-y-1 ml-4">
                 <li>• Recording duration (e.g., "125 seconds")</li>
                 <li>• Pause duration (e.g., "5 seconds")</li>
                 <li>• Number of transcript segments</li>
                 <li>• Number of audio chunks processed</li>
               </ul>
-              <p className="text-xs text-gray-500 mt-2 italic">Helps us optimize performance and understand usage patterns</p>
+              <p className="text-xs text-muted-foreground mt-2 italic">Helps us optimize performance and understand usage patterns</p>
             </div>
 
             {/* Device Types */}
-            <div className="border border-gray-200 rounded-lg p-4">
-              <h4 className="font-semibold text-gray-900 mb-2">3. Device Types (Not Names)</h4>
-              <ul className="text-sm text-gray-700 space-y-1 ml-4">
+            <div className="border border-border rounded-lg p-4">
+              <h4 className="font-semibold text-foreground mb-2">3. Device Types (Not Names)</h4>
+              <ul className="text-sm text-foreground space-y-1 ml-4">
                 <li>• Microphone type: "Bluetooth" or "Wired" or "Unknown"</li>
                 <li>• System audio type: "Bluetooth" or "Wired" or "Unknown"</li>
               </ul>
-              <p className="text-xs text-gray-500 mt-2 italic">Helps us improve compatibility, NOT the actual device names</p>
+              <p className="text-xs text-muted-foreground mt-2 italic">Helps us improve compatibility, NOT the actual device names</p>
             </div>
 
             {/* Usage Patterns */}
-            <div className="border border-gray-200 rounded-lg p-4">
-              <h4 className="font-semibold text-gray-900 mb-2">4. App Usage Patterns</h4>
-              <ul className="text-sm text-gray-700 space-y-1 ml-4">
+            <div className="border border-border rounded-lg p-4">
+              <h4 className="font-semibold text-foreground mb-2">4. App Usage Patterns</h4>
+              <ul className="text-sm text-foreground space-y-1 ml-4">
                 <li>• App started/stopped events</li>
                 <li>• Session duration</li>
                 <li>• Feature usage (e.g., "settings changed")</li>
                 <li>• Error occurrences (helps us fix bugs)</li>
               </ul>
-              <p className="text-xs text-gray-500 mt-2 italic">Helps us improve user experience</p>
+              <p className="text-xs text-muted-foreground mt-2 italic">Helps us improve user experience</p>
             </div>
 
             {/* Platform Info */}
-            <div className="border border-gray-200 rounded-lg p-4">
-              <h4 className="font-semibold text-gray-900 mb-2">5. Platform Information</h4>
-              <ul className="text-sm text-gray-700 space-y-1 ml-4">
+            <div className="border border-border rounded-lg p-4">
+              <h4 className="font-semibold text-foreground mb-2">5. Platform Information</h4>
+              <ul className="text-sm text-foreground space-y-1 ml-4">
                 <li>• Operating system (e.g., "macOS", "Windows")</li>
                 <li>• App version (automatically included in all events)</li>
                 <li>• Architecture (e.g., "x86_64", "aarch64")</li>
               </ul>
-              <p className="text-xs text-gray-500 mt-2 italic">Helps us prioritize platform support</p>
+              <p className="text-xs text-muted-foreground mt-2 italic">Helps us prioritize platform support</p>
             </div>
           </div>
 
@@ -117,9 +117,9 @@ export default function AnalyticsDataModal({ isOpen, onClose, onConfirmDisable }
           </div>
 
           {/* Example Event */}
-          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-            <h4 className="font-semibold text-gray-900 mb-2">Example Event:</h4>
-            <pre className="text-xs text-gray-700 overflow-x-auto">
+          <div className="bg-muted border border-border rounded-lg p-4">
+            <h4 className="font-semibold text-foreground mb-2">Example Event:</h4>
+            <pre className="text-xs text-foreground overflow-x-auto">
               {`{
   "event": "meeting_ended",
   "app_version": "0.3.0",
@@ -138,10 +138,10 @@ export default function AnalyticsDataModal({ isOpen, onClose, onConfirmDisable }
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between gap-4 p-6 border-t border-gray-200 bg-gray-50">
+        <div className="flex items-center justify-between gap-4 p-6 border-t border-border bg-muted">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+            className="px-4 py-2 text-foreground bg-background border border-border rounded-md hover:bg-muted transition-colors"
           >
             Keep Analytics Enabled
           </button>

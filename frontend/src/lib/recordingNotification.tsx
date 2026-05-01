@@ -22,7 +22,7 @@ export async function showRecordingNotification(): Promise<void> {
       const toastId = toast.info('🔴 Recording Started', {
         description: (
           <div className="space-y-3 min-w-[280px]">
-            <p className="text-sm font-medium text-gray-900">
+            <p className="text-sm font-medium text-foreground">
               Inform all participants this meeting is being recorded.
             </p>
             <label className="flex items-center gap-2 text-xs cursor-pointer hover:bg-blue-100 p-2 rounded transition-colors">
@@ -31,9 +31,9 @@ export async function showRecordingNotification(): Promise<void> {
                 onChange={(e) => {
                   dontShowAgain = e.target.checked;
                 }}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 focus:ring-2"
+                className="rounded border-border text-blue-600 focus:ring-blue-500 focus:ring-2"
               />
-              <span className="select-none text-gray-700">Don't show this again</span>
+              <span className="select-none text-foreground">Don't show this again</span>
             </label>
             <button
               onClick={async () => {
