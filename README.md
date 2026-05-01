@@ -155,7 +155,7 @@ Meetily-Local is a single self-contained Tauri 2.x desktop application:
 
 - **Backend (Rust)**: audio capture, mixing, VAD, Whisper/Parakeet inference, sqlite persistence
 - **Frontend (Next.js + React)**: UI, meeting management, settings
-- **No external server required** for core operation. An optional companion FastAPI backend exists in the `backend/` directory for users who want a network-accessible meeting service.
+- **No external server required** — meeting/summary persistence, transcription, and LLM calls all happen inside the Tauri Rust process.
 
 For more details, see [docs/architecture.md](docs/architecture.md).
 

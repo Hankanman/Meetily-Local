@@ -4,17 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Meetily** is a privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on local infrastructure. The project consists of two main components:
-
-1. **Frontend**: Tauri-based desktop application (Rust + Next.js + TypeScript)
-2. **Backend**: FastAPI server for meeting storage and LLM-based summarization (Python)
+**Meetily-Local** is a privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on local infrastructure. It's a single self-contained Tauri desktop application — no separate backend server.
 
 ### Key Technology Stack
-- **Desktop App**: Tauri 2.x (Rust) + Next.js 14 + React 18
+- **Desktop shell**: Tauri 2.11 (Rust) + Next.js 16 + React 19 + Tailwind 4
 - **Audio Processing**: Rust (cpal, whisper-rs, professional audio mixing)
-- **Transcription**: Whisper.cpp (local, GPU-accelerated)
-- **Backend API**: FastAPI + SQLite (aiosqlite)
-- **LLM Integration**: Ollama (local), Claude, Groq, OpenRouter
+- **Transcription**: Whisper.cpp (local, GPU-accelerated, in-process via whisper-rs)
+- **Persistence**: SQLite via sqlx in the Tauri Rust process
+- **LLM Integration**: built-in llama.cpp sidecar (`llama-helper` crate), or remote Ollama / Claude / Groq / OpenRouter / OpenAI-compatible endpoint
 
 ## Essential Development Commands
 
@@ -45,56 +42,28 @@ pnpm run tauri:dev:vulkan   # AMD/Intel Vulkan
 pnpm run tauri:dev:cpu      # CPU-only (no GPU)
 ```
 
-### Backend Development (FastAPI Server)
+### Service Endpoint
+- **Frontend Dev**: http://localhost:3118 (Next.js Turbopack with HMR)
 
-**Location**: `/backend`
-
-```bash
-# macOS
-./build_whisper.sh small              # Build Whisper with 'small' model
-./clean_start_backend.sh              # Start FastAPI server (port 5167)
-
-# Windows
-build_whisper.cmd small               # Build Whisper with model
-start_with_output.ps1                 # Interactive setup and start
-clean_start_backend.cmd               # Start server
-
-# Docker (Cross-Platform)
-./run-docker.sh start --interactive   # Interactive setup (macOS/Linux)
-.\run-docker.ps1 start -Interactive   # Interactive setup (Windows)
-./run-docker.sh logs --service app    # View logs
-```
-
-**Available Whisper Models**: `tiny`, `tiny.en`, `base`, `base.en`, `small`, `small.en`, `medium`, `medium.en`, `large-v1`, `large-v2`, `large-v3`, `large-v3-turbo`
-
-### Service Endpoints
-- **Whisper Server**: http://localhost:8178
-- **Backend API**: http://localhost:5167
-- **Backend Docs**: http://localhost:5167/docs
-- **Frontend Dev**: http://localhost:3118
+The Tauri Rust side has no HTTP listener — frontend ↔ Rust communication is
+all in-process via `invoke()` commands and emitted events.
 
 ## High-Level Architecture
 
-### Three-Tier System Architecture
-
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Frontend (Tauri Desktop App)                  │
-│  ┌──────────────────┐  ┌─────────────────┐  ┌────────────────┐ │
-│  │   Next.js UI     │  │  Rust Backend   │  │ Whisper Engine │ │
-│  │  (React/TS)      │←→│  (Audio + IPC)  │←→│  (Local STT)   │ │
-│  └──────────────────┘  └─────────────────┘  └────────────────┘ │
-│         ↑ Tauri Events           ↑ Audio Pipeline               │
-└─────────┼────────────────────────┼─────────────────────────────┘
-          │ HTTP/WebSocket         │
-          ↓                        │
-┌─────────────────────────────────┼─────────────────────────────┐
-│              Backend (FastAPI)  │                              │
-│  ┌────────────┐  ┌─────────────┴──────┐  ┌────────────────┐  │
-│  │   SQLite   │←→│  Meeting Manager   │←→│  LLM Provider  │  │
-│  │ (Meetings) │  │  (CRUD + Summary)  │  │ (Ollama/etc.)  │  │
-│  └────────────┘  └────────────────────┘  └────────────────┘  │
+│                    Tauri Desktop App (single process)           │
+│  ┌──────────────────┐    ┌──────────────────────────────────┐  │
+│  │ Next.js UI       │    │ Rust core                        │  │
+│  │ (React/TS)       │←──→│   • Audio capture + mixing + VAD │  │
+│  │                  │    │   • whisper-rs / parakeet        │  │
+│  └──────────────────┘    │   • SQLite via sqlx              │  │
+│         ↑ Tauri events   │   • Summary engine               │  │
+│         ↓ invoke()       │   • llama-helper sidecar         │  │
+│                          └──────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
+                ↓ optional outbound LLM calls
+   Ollama (local or remote) / Claude / Groq / OpenRouter / custom OpenAI
 ```
 
 ### Audio Processing Pipeline (Critical Understanding)
@@ -196,7 +165,7 @@ await listen<TranscriptUpdate>('transcript-update', (event) => {
 ### Whisper Model Management
 
 **Model Storage Locations**:
-- **Development**: `frontend/models/` or `backend/whisper-server-package/models/`
+- **Development**: `frontend/models/`
 - **Production (macOS)**: `~/Library/Application Support/Meetily/models/`
 - **Production (Windows)**: `%APPDATA%\Meetily\models\`
 
@@ -257,8 +226,8 @@ macro_rules! perf_debug {
 
 **Sidebar Context** (components/Sidebar/SidebarProvider.tsx):
 - Global state for meetings list, current meeting, recording status
-- Communicates with backend API (http://localhost:5167)
-- Manages WebSocket connections for real-time updates
+- Communicates with the Rust side exclusively via Tauri `invoke()` commands
+- No HTTP/WebSocket — everything is in-process
 
 **Pattern**: Tauri commands update Rust state → Emit events → Frontend listeners update React state → Context propagates to components
 
@@ -309,22 +278,12 @@ RUST_LOG=app_lib::audio=debug ./clean_run.sh
 # Check Developer Console in the app (Cmd+Shift+I on macOS)
 ```
 
-### Backend API Development
+### Adding a Tauri Command (Rust → frontend)
 
-**Adding New Endpoints** (backend/app/main.py):
-```python
-@app.post("/api/my-endpoint")
-async def my_endpoint(request: MyRequest) -> MyResponse:
-    # Use DatabaseManager for persistence
-    db = DatabaseManager()
-    result = await db.some_operation()
-    return result
-```
-
-**Database Operations** (backend/app/db.py):
-- All meeting data stored in SQLite
-- Use `DatabaseManager` class for all DB operations
-- Async operations with `aiosqlite`
+Define in any module under `src-tauri/src/api/` or similar, register in
+`lib.rs`'s `generate_handler![]` block, call from JS via `invoke()`. SQLite
+persistence goes through sqlx; see `database/repositories/*.rs` for the
+existing repository patterns.
 
 ## Testing and Debugging
 
@@ -343,18 +302,6 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
 - Open DevTools: `Cmd+Shift+I` (macOS) or `Ctrl+Shift+I` (Windows)
 - Console Toggle: Built into app UI (console icon)
 - View Rust logs: Check terminal output
-
-### Backend Debugging
-
-**View API Logs**:
-```bash
-# Backend logs show in terminal with detailed formatting:
-# 2025-01-03 12:34:56 - INFO - [main.py:123 - endpoint_name()] - Message
-```
-
-**Test API Directly**:
-- Swagger UI: http://localhost:5167/docs
-- ReDoc: http://localhost:5167/redoc
 
 ### Audio Pipeline Debugging
 
@@ -416,11 +363,12 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
 
 3. **Whisper Model Loading**: Models are loaded once and cached. Changing models requires app restart or manual unload/reload.
 
-4. **Backend Dependency**: Frontend can run standalone (local Whisper), but meeting persistence and LLM features require backend running.
+4. **No external server**: meeting persistence, transcription, summary
+   generation all happen inside the Tauri Rust process. The old `backend/`
+   FastAPI dir was deleted; if you see references to `:5167` they're
+   stale.
 
-5. **CORS Configuration**: Backend allows all origins (`"*"`) for development. Restrict for production deployment.
-
-6. **File Paths**: Use Tauri's path APIs (`downloadDir`, etc.) for cross-platform compatibility. Never hardcode paths.
+5. **File Paths**: Use Tauri's path APIs (`downloadDir`, etc.) for cross-platform compatibility. Never hardcode paths.
 
 7. **Audio Permissions**: Request permissions early. macOS requires both microphone AND screen recording for system audio.
 
@@ -440,7 +388,7 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
 **Core Coordination**:
 - [frontend/src-tauri/src/lib.rs](frontend/src-tauri/src/lib.rs) - Main Tauri entry point, command registration
 - [frontend/src-tauri/src/audio/mod.rs](frontend/src-tauri/src/audio/mod.rs) - Audio module exports
-- [backend/app/main.py](backend/app/main.py) - FastAPI application, API endpoints
+- [frontend/src-tauri/src/api/api.rs](frontend/src-tauri/src/api/api.rs) - Tauri command handlers (meetings, summaries, transcripts)
 
 **Audio System**:
 - [frontend/src-tauri/src/audio/recording_manager.rs](frontend/src-tauri/src/audio/recording_manager.rs) - Recording orchestration
