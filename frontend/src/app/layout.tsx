@@ -8,6 +8,7 @@ import MainContent from '@/components/MainContent'
 import AnalyticsProvider from '@/components/AnalyticsProvider'
 import { Toaster, toast } from 'sonner'
 import "sonner/dist/styles.css"
+import { ThemeProvider } from 'next-themes'
 import { useState, useEffect, useCallback } from 'react'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
@@ -231,8 +232,16 @@ export default function RootLayout({
   }
 
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body className={`${sourceSans3.variable} font-sans antialiased`}>
+        {/*
+          ThemeProvider toggles the shadcn `.dark` class on <html> based on
+          the OS / GTK color-scheme preference. attribute="class" matches
+          the existing globals.css setup; defaultTheme="system" follows
+          OS pref unless user explicitly overrides; enableSystem keeps
+          tracking live changes (Pure-Adwaita ↔ Pure-Adwaita-Dark, etc.).
+        */}
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
         <AnalyticsProvider>
           <RecordingStateProvider>
             <TranscriptProvider>
@@ -275,6 +284,7 @@ export default function RootLayout({
             </TranscriptProvider>
           </RecordingStateProvider>
         </AnalyticsProvider>
+        </ThemeProvider>
 
         <Toaster position="bottom-center" richColors closeButton />
       </body>
