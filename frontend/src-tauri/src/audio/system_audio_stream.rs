@@ -35,7 +35,6 @@ impl SystemAudioStreamManager {
             system_stream.sample_rate(),
             2, // Assume stereo for system audio
             DeviceType::Output,
-            recording_sender,
         );
 
         // Spawn task to process system audio stream

@@ -170,7 +170,9 @@ fn preferred_input_config(device: &cpal::Device) -> Result<cpal::SupportedStream
     Ok(default_cfg)
 }
 
-#[cfg(not(target_os = "windows"))]
+// Only the macOS branch of get_device_and_config calls this; on Linux/Windows
+// the output path uses different mechanisms (PulseAudio monitor source / WASAPI).
+#[cfg(target_os = "macos")]
 fn preferred_output_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig> {
     use cpal::traits::DeviceTrait;
     device

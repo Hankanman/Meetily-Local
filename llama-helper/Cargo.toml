@@ -16,7 +16,6 @@ metal = ["llama-cpp-2/metal"]
 cuda = ["llama-cpp-2/cuda"]
 vulkan = ["llama-cpp-2/vulkan"]
 
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = "s"  # Optimize for size for faster loading
+
+# Release profile lives at the workspace root (Cargo only honors profiles
+# from the root manifest). See top-level Cargo.toml.

@@ -103,11 +103,16 @@ impl AudioStream {
     }
 
     /// Create a CPAL-based stream (ScreenCaptureKit on macOS)
+    ///
+    /// `_recording_sender` is plumbed through the call chain but unused — pre-mixed
+    /// audio for the saved file is published by the pipeline's
+    /// `recording_sender_for_mixed`, not from per-stream raw chunks. Kept on the
+    /// signature so the existing call sites don't need refactoring.
     async fn create_cpal_stream(
         device: Arc<AudioDevice>,
         state: Arc<RecordingState>,
         device_type: DeviceType,
-        recording_sender: Option<mpsc::UnboundedSender<super::recording_state::AudioChunk>>,
+        _recording_sender: Option<mpsc::UnboundedSender<super::recording_state::AudioChunk>>,
     ) -> Result<Self> {
         info!("Creating CPAL stream for device: {}", device.name);
 
@@ -124,7 +129,6 @@ impl AudioStream {
             config.sample_rate().0,
             config.channels(),
             device_type,
-            recording_sender,
         );
 
         // Build the appropriate stream based on sample format
@@ -176,7 +180,6 @@ impl AudioStream {
             sample_rate,
             1, // Core Audio tap is MONO (not stereo!)
             device_type,
-            recording_sender,
         );
 
         // Spawn task to process Core Audio stream samples
