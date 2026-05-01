@@ -23,7 +23,11 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
   }, []);
 
   const { updateInfo, isChecking, checkForUpdates } = useUpdateCheck({
-    checkOnMount: true,
+    // Auto-check disabled until the Meetily-Local fork starts publishing
+    // signed `latest.json` release manifests. Manual "Check for updates"
+    // (About panel + tray menu) still works — those just hit the same
+    // endpoint and surface any error inline.
+    checkOnMount: false,
     showNotification: true,
     onUpdateAvailable: (info) => {
       // Show notification, dialog will be shown when user clicks notification
