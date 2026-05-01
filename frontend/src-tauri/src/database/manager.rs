@@ -56,7 +56,10 @@ impl DatabaseManager {
             .join("meeting_minutes.sqlite")
             .to_string_lossy()
             .to_string();
-        // Legacy backend DB path (for auto-migration if exists)
+        // Legacy DB path — kept so users migrating from the original
+        // upstream Meetily Community Edition (which used a separate FastAPI
+        // backend writing to `meeting_minutes.db`) get an automatic
+        // one-time import. Meetily-Local has never written to this path.
         let backend_db_path = app_data_dir
             .join("meeting_minutes.db")
             .to_string_lossy()
@@ -67,7 +70,9 @@ impl DatabaseManager {
         let shm_path = app_data_dir.join("meeting_minutes.sqlite-shm");
 
         log::info!("Tauri DB path: {}", tauri_db_path);
-        log::info!("Legacy backend DB path: {}", backend_db_path);
+        if std::path::Path::new(&backend_db_path).exists() {
+            log::info!("Found legacy upstream DB to migrate: {}", backend_db_path);
+        }
 
         // Try to open database with defensive WAL handling
         match Self::new(&tauri_db_path, &backend_db_path).await {
