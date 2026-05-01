@@ -5,13 +5,12 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  // Add basePath configuration
   basePath: '',
   assetPrefix: '/',
 
-  // BlockNote 0.49 ships ESM-only deps (e.g. @handlewithcare/prosemirror-inputrules)
-  // whose `exports` field requires a real bundler step to resolve. Without this,
-  // webpack chokes on `Module not found: Package path . is not exported`.
+  // BlockNote 0.49+ ships CJS dist files that `require()` packages whose
+  // package.json `exports` field declares only an `import` (ESM) entry.
+  // Both webpack and Turbopack need help resolving these.
   transpilePackages: [
     "@blocknote/core",
     "@blocknote/react",
@@ -19,7 +18,14 @@ const nextConfig = {
     "@handlewithcare/prosemirror-inputrules",
   ],
 
-  // Add webpack configuration for Tauri
+  // We're locked to webpack until BlockNote ships ESM-only dist files.
+  // BlockNote 0.49 has a CJS bundle that `require()`s packages whose
+  // package.json `exports` field declares only `import` (e.g.
+  // @handlewithcare/prosemirror-inputrules). Webpack's `conditionNames`
+  // option loosely accepts the `import` entry from a CJS caller; Turbopack's
+  // resolver is stricter and refuses, with no clean workaround that doesn't
+  // require pnpm-patching the upstream package's exports field.
+  // Build scripts pin `--webpack`. Revisit when BlockNote drops the CJS bundle.
   webpack: (config, { isServer, webpack }) => {
     if (!isServer) {
       // BlockNote 0.49+ pulls in unified/vfile/lib0 which conditionally
@@ -34,8 +40,7 @@ const nextConfig = {
         url: false,
         process: false,
       };
-      // Strip the `node:` prefix from imports so webpack's fallback
-      // mechanism can match the bare module names above.
+      // Strip the `node:` prefix so the fallback above matches bare names.
       config.plugins = config.plugins || [];
       config.plugins.push(
         new webpack.NormalModuleReplacementPlugin(/^node:/, (resource) => {
@@ -43,12 +48,10 @@ const nextConfig = {
         })
       );
     }
-    // BlockNote 0.49+ depends on packages that only ship `import` in their
-    // `exports` field. Force webpack to consider the ESM entry even when
-    // resolving from a CJS context.
+    // Force webpack to honour the `import` exports condition even from CJS callers.
     config.resolve.conditionNames = ["import", "require", "node", "default"];
     return config;
   },
-}
+};
 
-module.exports = nextConfig
+module.exports = nextConfig;
