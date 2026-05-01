@@ -8,7 +8,7 @@ interface ComplianceNotificationProps {
   isOpen: boolean;
   onClose: () => void;
   onAcknowledge: () => void;
-  recordingButtonRef?: React.RefObject<HTMLElement | HTMLButtonElement>;
+  recordingButtonRef?: React.RefObject<HTMLElement | HTMLButtonElement | null>;
 }
 
 export const ComplianceNotification: React.FC<ComplianceNotificationProps> = ({

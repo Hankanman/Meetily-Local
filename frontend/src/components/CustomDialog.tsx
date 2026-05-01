@@ -5,7 +5,7 @@ import { VisuallyHidden } from "./ui/visually-hidden";
 import { SettingTabs } from "./SettingTabs";
 
 interface DialogProps {
-    triggerComponent: React.ReactElement;
+    triggerComponent: React.ReactElement<any>;
     dialogContent: React.ReactNode;
     dialogTitle?: string;
 }

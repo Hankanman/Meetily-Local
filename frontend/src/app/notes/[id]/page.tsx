@@ -2,9 +2,9 @@ import React from 'react';
 import { Clock, Users, Calendar, Tag } from 'lucide-react';
 
 interface PageProps {
-  params: {
+  params: Promise<{
     id: string;
-  };
+  }>;
 }
 
 interface Note {
@@ -26,7 +26,8 @@ export function generateStaticParams() {
   ];
 }
 
-const NotePage = ({ params }: PageProps) => {
+const NotePage = async (props: PageProps) => {
+  const params = await props.params;
   // This would normally come from your database
   const sampleData: Record<string, Note> = {
     'team-sync-dec-26': {
