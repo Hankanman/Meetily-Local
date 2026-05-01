@@ -74,6 +74,7 @@ node_modules/
 *.sw?
 experiments/
 .cursor/
+.claude/
 target/
 
 frontend/src-tauri/binaries/
