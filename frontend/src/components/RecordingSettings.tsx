@@ -193,7 +193,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
             </button>
           </div>
 
-          <div className="p-4 border rounded-lg bg-blue-50">
+          <div className="p-4 border rounded-lg bg-blue-600/10">
             <div className="text-sm text-blue-800">
               <strong>File Format:</strong> {preferences.file_format.toUpperCase()} files
             </div>

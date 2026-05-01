@@ -315,7 +315,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                           Ready
                         </span>
                         {selectedModel === model.name && (
-                          <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded">
+                          <span className="px-2 py-0.5 text-xs font-medium bg-blue-600/15 text-blue-700 rounded">
                             Selected
                           </span>
                         )}

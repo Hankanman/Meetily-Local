@@ -90,7 +90,7 @@ export function HomebrewDatabaseDetector({ onImportSuccess, onDecline }: Homebre
   };
 
   return (
-    <div className="mb-4 p-4 bg-blue-50 border-2 border-blue-300 rounded-lg">
+    <div className="mb-4 p-4 bg-blue-600/10 border-2 border-blue-300 rounded-lg">
       <div className="flex items-start gap-3">
         <Database className="h-6 w-6 text-blue-600 mt-0.5 flex-shrink-0" />
         <div className="flex-1">
@@ -138,7 +138,7 @@ export function HomebrewDatabaseDetector({ onImportSuccess, onDecline }: Homebre
             <button
               onClick={handleNo}
               disabled={isImporting}
-              className="flex-1 px-4 py-2 border-2 border-blue-400 text-blue-700 rounded-lg hover:bg-blue-100 disabled:bg-muted disabled:cursor-not-allowed transition-colors"
+              className="flex-1 px-4 py-2 border-2 border-blue-400 text-blue-700 rounded-lg hover:bg-blue-600/15 disabled:bg-muted disabled:cursor-not-allowed transition-colors"
             >
               No, Browse Manually
             </button>

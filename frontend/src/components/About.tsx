@@ -117,7 +117,7 @@ export function About() {
             </div>
 
             {/* Coming Soon - Compact */}
-            <div className="bg-blue-50 rounded p-3">
+            <div className="bg-blue-600/10 rounded p-3">
                 <p className="text-s text-blue-800">
                     <span className="font-bold">Coming soon:</span> A library of on-device AI agents-automating follow-ups, action tracking, and more.
                 </p>

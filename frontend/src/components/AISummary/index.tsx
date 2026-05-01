@@ -617,7 +617,7 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
   );
 
   const renderLoadingState = () => (
-    <div className="w-full p-4 bg-blue-50 border border-blue-200 rounded-lg">
+    <div className="w-full p-4 bg-blue-600/10 border border-blue-500/30 rounded-lg">
       <div className="flex items-center space-x-3">
         <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-500 border-t-transparent"></div>
         <div>

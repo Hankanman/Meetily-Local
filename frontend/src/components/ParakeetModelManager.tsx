@@ -459,7 +459,7 @@ function ModelCard({
       className={`
         relative rounded-lg border-2 transition-all cursor-pointer
         ${isSelected && isAvailable
-          ? 'border-blue-500 bg-blue-50'
+          ? 'border-blue-500 bg-blue-600/10'
           : isAvailable
             ? 'border-border hover:border-border bg-background'
             : 'border-border bg-muted'

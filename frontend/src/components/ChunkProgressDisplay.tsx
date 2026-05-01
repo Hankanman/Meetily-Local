@@ -78,7 +78,7 @@ export function ChunkProgressDisplay({
       case 'completed':
         return 'text-green-600 bg-green-50 border-green-200';
       case 'processing':
-        return 'text-blue-600 bg-blue-50 border-blue-200';
+        return 'text-blue-600 bg-blue-600/10 border-blue-500/30';
       case 'failed':
         return 'text-red-600 bg-red-50 border-red-200';
       case 'pending':
@@ -181,7 +181,7 @@ export function ChunkProgressDisplay({
 
       {/* Time Estimate */}
       {progress.estimated_remaining_ms && progress.estimated_remaining_ms > 0 && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+        <div className="bg-blue-600/10 border border-blue-500/30 rounded-lg p-3 mb-4">
           <div className="flex items-center space-x-2">
             <span className="text-blue-600">⏱️</span>
             <span className="text-sm text-blue-800">
