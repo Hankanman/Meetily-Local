@@ -17,8 +17,7 @@
                 "height": 700,
                 "resizable": true,
                 "fullscreen": false,
-                "theme": "Light",
-                "decorations": true
+                "decorations": false
             }
         ],
         "macOSPrivateApi": true,
@@ -55,6 +54,11 @@
                         "core:path:default",
                         "core:event:default",
                         "core:window:default",
+                        "core:window:allow-start-dragging",
+                        "core:window:allow-minimize",
+                        "core:window:allow-toggle-maximize",
+                        "core:window:allow-is-maximized",
+                        "core:window:allow-close",
                         "core:app:default",
                         "core:resources:default",
                         "core:menu:default",

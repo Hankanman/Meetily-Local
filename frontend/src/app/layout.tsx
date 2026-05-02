@@ -23,6 +23,7 @@ import { DownloadProgressToastProvider } from "@/components/shared/DownloadProgr
 import { RecordingPostProcessingProvider } from "@/contexts/RecordingPostProcessingProvider";
 import { ImportAudioDialog, ImportDropOverlay } from "@/components/ImportAudio";
 import { ImportDialogProvider } from "@/contexts/ImportDialogContext";
+import { TitleBar } from "@/components/TitleBar";
 import {
   isAudioExtension,
   getAudioFormatsDisplayList,
@@ -253,12 +254,18 @@ export default function RootLayout({
           tracking live changes (Pure-Adwaita ↔ Pure-Adwaita-Dark, etc.).
         */}
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-          <RecordingStateProvider>
-            <TranscriptProvider>
-              <ConfigProvider>
-                <OllamaDownloadProvider>
-                  <OnboardingProvider>
-                    <SidebarProvider>
+          {/* Custom title bar + content stacked vertically. TitleBar replaces
+              the native window decorations on every platform so the look is
+              consistent (Tauri/GTK forces CSD on Linux, which never matches
+              the system theme). */}
+          <div className="flex h-screen flex-col">
+            <TitleBar />
+            <RecordingStateProvider>
+              <TranscriptProvider>
+                <ConfigProvider>
+                  <OllamaDownloadProvider>
+                    <OnboardingProvider>
+                      <SidebarProvider>
                         <TooltipProvider>
                           <RecordingPostProcessingProvider>
                             <ImportDialogProvider
@@ -269,11 +276,13 @@ export default function RootLayout({
 
                               {/* Show onboarding or main app */}
                               {showOnboarding ? (
-                                <OnboardingFlow
-                                  onComplete={handleOnboardingComplete}
-                                />
+                                <div className="min-h-0 flex-1 overflow-hidden">
+                                  <OnboardingFlow
+                                    onComplete={handleOnboardingComplete}
+                                  />
+                                </div>
                               ) : (
-                                <div className="flex">
+                                <div className="flex min-h-0 flex-1 overflow-hidden">
                                   <Sidebar />
                                   <MainContent>{children}</MainContent>
                                 </div>
@@ -291,11 +300,12 @@ export default function RootLayout({
                           </RecordingPostProcessingProvider>
                         </TooltipProvider>
                       </SidebarProvider>
-                  </OnboardingProvider>
-                </OllamaDownloadProvider>
-              </ConfigProvider>
-            </TranscriptProvider>
-          </RecordingStateProvider>
+                    </OnboardingProvider>
+                  </OllamaDownloadProvider>
+                </ConfigProvider>
+              </TranscriptProvider>
+            </RecordingStateProvider>
+          </div>
         </ThemeProvider>
 
         <Toaster position="bottom-center" richColors closeButton />
