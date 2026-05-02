@@ -14,6 +14,31 @@ use tokio_util::sync::CancellationToken;
 
 use super::models;
 use super::sidecar::SidecarManager;
+use crate::summary::processor::rough_token_count;
+
+/// Pick the smallest power-of-two context window that holds the prompt plus
+/// generation budget plus a safety buffer, capped at the model's max context.
+///
+/// Why: built-in AI runs on a user's GPU. Asking llama.cpp for the full 32k
+/// context unconditionally pre-allocates ~4 GB of KV cache and a compute
+/// buffer sized for the full window — that fails with cudaMalloc OOM on
+/// modest GPUs (e.g. RTX 30xx-class) even when the actual prompt is a few
+/// thousand tokens. Sizing n_ctx to what the request actually needs avoids
+/// the OOM without changing user-visible behavior.
+fn pick_context_size(prompt_tokens: usize, max_tokens: i32, model_max_ctx: u32) -> u32 {
+    const SAFETY_BUFFER_TOKENS: usize = 1024;
+    const MIN_CTX: u32 = 4096;
+
+    let needed = prompt_tokens
+        .saturating_add(max_tokens.max(0) as usize)
+        .saturating_add(SAFETY_BUFFER_TOKENS);
+
+    let mut ctx = MIN_CTX;
+    while (ctx as usize) < needed && ctx < model_max_ctx {
+        ctx = ctx.saturating_mul(2);
+    }
+    ctx.min(model_max_ctx)
+}
 
 // ============================================================================
 // Request/Response Types
@@ -171,11 +196,27 @@ pub async fn generate_with_builtin(
         }
     }
 
+    // Size the llama context to what this request actually needs, instead of
+    // always asking for the model's max. See pick_context_size doc comment.
+    let prompt_tokens = rough_token_count(&formatted_prompt);
+    let chosen_ctx = pick_context_size(
+        prompt_tokens,
+        models::DEFAULT_MAX_TOKENS,
+        model_def.context_size,
+    );
+    log::info!(
+        "Sized llama_context: prompt={} tok, max_gen={} tok, ctx={} (model max {})",
+        prompt_tokens,
+        models::DEFAULT_MAX_TOKENS,
+        chosen_ctx,
+        model_def.context_size,
+    );
+
     // Prepare generation request with model-specific sampling parameters
     let request = Request::Generate {
         prompt: formatted_prompt,
         max_tokens: Some(models::DEFAULT_MAX_TOKENS),
-        context_size: Some(model_def.context_size),
+        context_size: Some(chosen_ctx),
         model_path: Some(model_path.to_string_lossy().to_string()),
         temperature: Some(model_def.sampling.temperature),
         top_k: Some(model_def.sampling.top_k),
