@@ -12,7 +12,7 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel, Special};
+use llama_cpp_2::model::{AddBos, LlamaModel};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -70,7 +70,7 @@ fn detect_vram_gb() -> f32 {
         }
     }
 
-    /// TODO: Vulkan VRAM detection
+    // TODO: Vulkan VRAM detection
 
     eprintln!("VRAM detection not available, using conservative estimate");
     4.0 // Conservative fallback
@@ -368,8 +368,12 @@ impl ModelState {
                 break;
             }
 
+            // Replaces deprecated `token_to_bytes(token, Special::Tokenize)`.
+            // Buffer size 8 matches the upstream deprecated impl; `true` is the
+            // boolean equivalent of `Special::Tokenize` (render special tokens
+            // as their textual form rather than skipping them).
             let output_bytes = model
-                .token_to_bytes(token, Special::Tokenize)
+                .token_to_piece_bytes(token, 8, true, None)
                 .context("Failed to convert token to bytes")?;
 
             let mut token_text = String::with_capacity(32);

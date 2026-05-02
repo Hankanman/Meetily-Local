@@ -311,7 +311,6 @@ pub fn log_performance_summary(
 mod tests {
     use super::*;
     use crate::audio::devices::DeviceType;
-    use cpal::SampleFormat;
 
     #[test]
     fn test_diagnostics_dont_panic() {
@@ -322,8 +321,8 @@ mod tests {
         // Just ensure the diagnostic functions don't panic
         let detected_kind = InputDeviceKind::Wired;
 
-        log_detection_summary("Test Device", detected_kind, 512, 48000);
-        log_buffer_health("Test Device", detected_kind, 100, 1000, 0);
+        log_detection_summary(&device.name, detected_kind, 512, 48000);
+        log_buffer_health(&device.name, detected_kind, 100, 1000, 0);
         log_mixer_status(500, 500, 0, 0.0);
         log_performance_summary(1000, 50.0, 0, 0);
 
