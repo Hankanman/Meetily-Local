@@ -6,6 +6,12 @@ import { Section } from "./Section";
 import { EditableTitle } from "../EditableTitle";
 import { AlertTriangle as ExclamationTriangleIcon } from "lucide-react";
 
+// Lives outside the component so the `Date.now()` / `Math.random()` calls
+// don't run during render — keeps react-hooks/purity happy and matches
+// React 19 guidance for impure helpers.
+const generateUniqueId = (sectionKey: string) =>
+  `${sectionKey}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+
 interface Props {
   summary: Summary | null;
   status:
@@ -33,10 +39,6 @@ export const AISummary = ({
   onRegenerateSummary,
   meeting,
 }: Props) => {
-  const generateUniqueId = (sectionKey: string) => {
-    return `${sectionKey}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  };
-
   const ensureUniqueBlockIds = (summary: Summary): Summary => {
     // Deep clone to avoid mutating readonly props
     const updatedSummary: Summary = {};

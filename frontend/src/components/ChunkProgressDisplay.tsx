@@ -267,7 +267,7 @@ export function ChunkProgressDisplay({
 
                 {chunk.text_preview && (
                   <div className="mt-1 truncate text-xs text-foreground">
-                    "{chunk.text_preview}"
+                    &quot;{chunk.text_preview}&quot;
                   </div>
                 )}
 

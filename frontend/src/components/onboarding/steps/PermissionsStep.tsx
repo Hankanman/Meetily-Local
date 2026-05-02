@@ -182,12 +182,12 @@ export function PermissionsStep() {
               hover:text-neutral-700
             "
           >
-            I'll do this later
+            I&apos;ll do this later
           </button>
 
           {!allPermissionsGranted && (
             <p className="text-center text-xs text-muted-foreground">
-              Recording won't work without permissions. You can grant them later
+              Recording won&apos;t work without permissions. You can grant them later
               in settings.
             </p>
           )}

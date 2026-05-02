@@ -117,7 +117,7 @@ export function SetupOverviewStep() {
               hover:bg-gray-800
             "
           >
-            Let's Go
+            Let&apos;s Go
           </Button>
           <div className="text-center">
             <a

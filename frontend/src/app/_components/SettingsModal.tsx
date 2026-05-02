@@ -70,8 +70,8 @@ export function SettingsModals({
       {modals.modelSettings && (
         <div
           className="
-          bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center
-          bg-foreground p-4
+          fixed inset-0 z-50 flex items-center justify-center
+          bg-foreground/50 p-4
         "
         >
           <div
@@ -258,8 +258,8 @@ export function SettingsModals({
       {modals.deviceSettings && (
         <div
           className="
-          bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center
-          bg-foreground
+          fixed inset-0 z-50 flex items-center justify-center
+          bg-foreground/50
         "
         >
           <div
@@ -331,8 +331,8 @@ export function SettingsModals({
       {modals.languageSettings && (
         <div
           className="
-          bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center
-          bg-foreground
+          fixed inset-0 z-50 flex items-center justify-center
+          bg-foreground/50
         "
         >
           <div
@@ -397,8 +397,8 @@ export function SettingsModals({
       {modals.modelSelector && (
         <div
           className="
-          bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center
-          bg-foreground
+          fixed inset-0 z-50 flex items-center justify-center
+          bg-foreground/50
         "
         >
           <div
@@ -520,8 +520,8 @@ export function SettingsModals({
       {modals.errorAlert && (
         <div
           className="
-          bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center
-          bg-foreground
+          fixed inset-0 z-50 flex items-center justify-center
+          bg-foreground/50
         "
         >
           <Alert
@@ -550,8 +550,8 @@ export function SettingsModals({
       {modals.chunkDropWarning && (
         <div
           className="
-          bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center
-          bg-foreground
+          fixed inset-0 z-50 flex items-center justify-center
+          bg-foreground/50
         "
         >
           <Alert

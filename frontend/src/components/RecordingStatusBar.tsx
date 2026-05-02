@@ -2,7 +2,6 @@
 
 import { motion } from "framer-motion";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
-import { useEffect, useState } from "react";
 
 interface RecordingStatusBarProps {
   isPaused?: boolean;
@@ -15,16 +14,8 @@ export const RecordingStatusBar: React.FC<RecordingStatusBarProps> = ({
   // Backend polls every 500ms, providing smooth updates
   const { activeDuration, isRecording } = useRecordingState();
 
-  // Display state synced from backend
-  const [displaySeconds, setDisplaySeconds] = useState(0);
-
-  // Sync with backend duration when it changes (handles refresh/navigation)
-  useEffect(() => {
-    if (activeDuration !== null) {
-      // Round to nearest second to avoid decimal issues
-      setDisplaySeconds(Math.floor(activeDuration));
-    }
-  }, [activeDuration]);
+  // Derived directly — was previously mirrored into state via an effect.
+  const displaySeconds = activeDuration !== null ? Math.floor(activeDuration) : 0;
 
   const formatDuration = (seconds: number): string => {
     const mins = Math.floor(seconds / 60);

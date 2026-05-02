@@ -169,7 +169,7 @@ export function About() {
           Ready to push your business further?
         </h3>
         <p className="text-s text-muted-foreground">
-          If you're planning to build privacy-first custom AI agents or a fully
+          If you&apos;re planning to build privacy-first custom AI agents or a fully
           tailored product for your <span className="font-bold">business</span>,
           we can help you build it.
         </p>

@@ -17,8 +17,8 @@ export function ConfirmationModal({
 
   return (
     <div className="
-      bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center
-      bg-foreground
+      fixed inset-0 z-50 flex items-center justify-center
+      bg-foreground/50
     ">
       <div className="mx-4 w-full max-w-md rounded-lg bg-background p-6">
         <h2 className="mb-4 text-xl font-semibold">Confirm Delete</h2>

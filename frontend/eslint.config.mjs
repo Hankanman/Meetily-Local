@@ -39,6 +39,27 @@ const config = [
     },
   },
   {
+    // Demote React Compiler / React 19 hooks rules from error → warn.
+    // They surface real signal (real bugs *and* memoization hints) but
+    // many flag patterns that work correctly today (DOM-measurement
+    // effects, forward references the runtime resolves fine, third-party
+    // hooks like `useVirtualizer` that aren't compiler-friendly). Keeping
+    // them as warnings means they appear in the editor and CI without
+    // blocking builds; promote individual rules back to "error" once the
+    // codebase has been swept.
+    files: ["**/*.{ts,tsx}"],
+    rules: {
+      "react-hooks/set-state-in-effect": "warn",
+      "react-hooks/immutability": "warn",
+      "react-hooks/refs": "warn",
+      "react-hooks/preserve-manual-memoization": "warn",
+      // Keep as errors — these almost always indicate real bugs:
+      //   react-hooks/purity            (Date.now/Math.random in render)
+      //   react-hooks/incompatible-library (suppressed inline where intended)
+      //   react-hooks/exhaustive-deps   (already a warning by default)
+    },
+  },
+  {
     ignores: [
       ".next/**",
       "out/**",

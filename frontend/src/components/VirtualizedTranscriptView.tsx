@@ -143,7 +143,10 @@ export const VirtualizedTranscriptView: React.FC<
   // Force re-render without flushSync (avoids React warning)
   const [, rerender] = useReducer((x: number) => x + 1, 0);
 
-  // Setup virtualizer for efficient rendering of large lists
+  // Setup virtualizer for efficient rendering of large lists.
+  // React Compiler bails out of memoizing callers that close over the
+  // virtualizer's returned methods (they're intentionally unstable).
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: segments.length,
     getScrollElement: () => scrollRef.current,

@@ -221,7 +221,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       {!preferences.auto_save && (
         <div className="rounded-lg border bg-yellow-50 p-4">
           <div className="text-sm text-yellow-800">
-            Audio recording is disabled. Enable "Save Audio Recordings" to
+            Audio recording is disabled. Enable &quot;Save Audio Recordings&quot; to
             automatically save your meeting audio.
           </div>
         </div>

@@ -246,8 +246,8 @@ export function TranscriptSettings({
                   <div
                     onClick={handleInputClick}
                     className="
-                      bg-opacity-50 absolute inset-0 flex cursor-not-allowed
-                      items-center justify-center rounded-md bg-muted
+                      absolute inset-0 flex cursor-not-allowed
+                      items-center justify-center rounded-md bg-muted/50
                     "
                   />
                 )}
