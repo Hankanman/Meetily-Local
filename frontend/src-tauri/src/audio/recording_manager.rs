@@ -123,7 +123,7 @@ impl RecordingManager {
 
         // Start audio streams - they send RAW unmixed chunks to pipeline for mixing
         // Pipeline handles mixing and distribution to both recording and transcription
-        self.stream_manager.start_streams(microphone_device.clone(), system_device.clone(), None).await?;
+        self.stream_manager.start_streams(microphone_device.clone(), system_device.clone()).await?;
 
         // Start device monitoring to detect disconnects
         if let Some(ref mut monitor) = self.device_monitor {
@@ -521,7 +521,7 @@ impl RecordingManager {
                     self.stream_manager.stop_streams()?;
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-                    self.stream_manager.start_streams(Some(device_arc.clone()), system_device, None).await?;
+                    self.stream_manager.start_streams(Some(device_arc.clone()), system_device).await?;
                     self.state.set_microphone_device(device_arc);
 
                     info!("✅ Microphone reconnected successfully");
@@ -535,7 +535,7 @@ impl RecordingManager {
                     self.stream_manager.stop_streams()?;
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-                    self.stream_manager.start_streams(microphone_device, Some(device_arc.clone()), None).await?;
+                    self.stream_manager.start_streams(microphone_device, Some(device_arc.clone())).await?;
                     self.state.set_system_device(device_arc);
 
                     info!("✅ System audio reconnected successfully");

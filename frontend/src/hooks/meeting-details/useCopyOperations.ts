@@ -89,7 +89,7 @@ export function useCopyOperations({
     try {
       let summaryMarkdown = '';
 
-      // Try to get markdown from BlockNote editor first
+      // Try to get markdown from the Tiptap editor first
       if (summaryRef.current?.getMarkdown) {
         summaryMarkdown = await summaryRef.current.getMarkdown();
       }
