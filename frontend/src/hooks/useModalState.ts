@@ -1,15 +1,15 @@
-import { useState, useEffect, useCallback } from 'react';
-import { listen } from '@tauri-apps/api/event';
-import { toast } from 'sonner';
-import { TranscriptModelProps } from '@/components/TranscriptSettings';
+import { useState, useEffect, useCallback } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { toast } from "sonner";
+import { TranscriptModelProps } from "@/components/TranscriptSettings";
 
 export type ModalType =
-  | 'modelSettings'
-  | 'deviceSettings'
-  | 'languageSettings'
-  | 'modelSelector'
-  | 'errorAlert'
-  | 'chunkDropWarning';
+  | "modelSettings"
+  | "deviceSettings"
+  | "languageSettings"
+  | "modelSelector"
+  | "errorAlert"
+  | "chunkDropWarning";
 
 interface ModalState {
   modelSettings: boolean;
@@ -43,7 +43,9 @@ interface UseModalStateReturn {
  * - Event listeners for chunk drops, transcription errors, model downloads
  * - Auto-close on model download completion
  */
-export function useModalState(transcriptModelConfig?: TranscriptModelProps): UseModalStateReturn {
+export function useModalState(
+  transcriptModelConfig?: TranscriptModelProps,
+): UseModalStateReturn {
   // Modal visibility state
   const [modals, setModals] = useState<ModalState>({
     modelSettings: false,
@@ -56,28 +58,37 @@ export function useModalState(transcriptModelConfig?: TranscriptModelProps): Use
 
   // Modal messages
   const [messages, setMessages] = useState<ModalMessages>({
-    errorAlert: '',
-    chunkDropWarning: '',
-    modelSelector: '',
+    errorAlert: "",
+    chunkDropWarning: "",
+    modelSelector: "",
   });
 
   // Show modal with optional message
   const showModal = useCallback((name: ModalType, message?: string) => {
-    setModals(prev => ({ ...prev, [name]: true }));
+    setModals((prev) => ({ ...prev, [name]: true }));
 
     // Set message if provided
-    if (message && (name === 'errorAlert' || name === 'chunkDropWarning' || name === 'modelSelector')) {
-      setMessages(prev => ({ ...prev, [name]: message }));
+    if (
+      message &&
+      (name === "errorAlert" ||
+        name === "chunkDropWarning" ||
+        name === "modelSelector")
+    ) {
+      setMessages((prev) => ({ ...prev, [name]: message }));
     }
   }, []);
 
   // Hide modal and clear its message
   const hideModal = useCallback((name: ModalType) => {
-    setModals(prev => ({ ...prev, [name]: false }));
+    setModals((prev) => ({ ...prev, [name]: false }));
 
     // Clear message when closing
-    if (name === 'errorAlert' || name === 'chunkDropWarning' || name === 'modelSelector') {
-      setMessages(prev => ({ ...prev, [name]: '' }));
+    if (
+      name === "errorAlert" ||
+      name === "chunkDropWarning" ||
+      name === "modelSelector"
+    ) {
+      setMessages((prev) => ({ ...prev, [name]: "" }));
     }
   }, []);
 
@@ -92,9 +103,9 @@ export function useModalState(transcriptModelConfig?: TranscriptModelProps): Use
       chunkDropWarning: false,
     });
     setMessages({
-      errorAlert: '',
-      chunkDropWarning: '',
-      modelSelector: '',
+      errorAlert: "",
+      chunkDropWarning: "",
+      modelSelector: "",
     });
   }, []);
 
@@ -104,21 +115,21 @@ export function useModalState(transcriptModelConfig?: TranscriptModelProps): Use
 
     const setupChunkDropListener = async () => {
       try {
-        console.log('Setting up chunk-drop-warning listener...');
-        unlistenFn = await listen<string>('chunk-drop-warning', (event) => {
-          console.log('Chunk drop warning received:', event.payload);
-          showModal('chunkDropWarning', event.payload);
+        console.log("Setting up chunk-drop-warning listener...");
+        unlistenFn = await listen<string>("chunk-drop-warning", (event) => {
+          console.log("Chunk drop warning received:", event.payload);
+          showModal("chunkDropWarning", event.payload);
         });
-        console.log('Chunk drop warning listener setup complete');
+        console.log("Chunk drop warning listener setup complete");
       } catch (error) {
-        console.error('Failed to setup chunk drop warning listener:', error);
+        console.error("Failed to setup chunk drop warning listener:", error);
       }
     };
 
     setupChunkDropListener();
 
     return () => {
-      console.log('Cleaning up chunk drop warning listener...');
+      console.log("Cleaning up chunk drop warning listener...");
       if (unlistenFn) {
         unlistenFn();
       }
@@ -131,32 +142,36 @@ export function useModalState(transcriptModelConfig?: TranscriptModelProps): Use
 
     const setupTranscriptionErrorListener = async () => {
       try {
-        console.log('Setting up transcription-error listener...');
-        unlistenFn = await listen<{ error: string, userMessage: string, actionable: boolean }>('transcription-error', (event) => {
-          console.log('Transcription error received:', event.payload);
+        console.log("Setting up transcription-error listener...");
+        unlistenFn = await listen<{
+          error: string;
+          userMessage: string;
+          actionable: boolean;
+        }>("transcription-error", (event) => {
+          console.log("Transcription error received:", event.payload);
           const { userMessage, actionable } = event.payload;
 
           if (actionable) {
             // This is a model-related error that requires user action
-            showModal('modelSelector', userMessage);
+            showModal("modelSelector", userMessage);
           } else {
             // Show toast instead of modal for non-actionable errors (consistent with sidebar)
-            toast.error('', {
+            toast.error("", {
               description: userMessage,
               duration: 5000,
             });
           }
         });
-        console.log('Transcription error listener setup complete');
+        console.log("Transcription error listener setup complete");
       } catch (error) {
-        console.error('Failed to setup transcription error listener:', error);
+        console.error("Failed to setup transcription error listener:", error);
       }
     };
 
     setupTranscriptionErrorListener();
 
     return () => {
-      console.log('Cleaning up transcription error listener...');
+      console.log("Cleaning up transcription error listener...");
       if (unlistenFn) {
         unlistenFn();
       }
@@ -169,20 +184,29 @@ export function useModalState(transcriptModelConfig?: TranscriptModelProps): Use
       const unlisteners: (() => void)[] = [];
 
       // Listen for Whisper model download complete
-      const unlistenWhisper = await listen<{ modelName: string }>('model-download-complete', (event) => {
-        const { modelName } = event.payload;
-        console.log('[useModalState] Whisper model download complete:', modelName);
+      const unlistenWhisper = await listen<{ modelName: string }>(
+        "model-download-complete",
+        (event) => {
+          const { modelName } = event.payload;
+          console.log(
+            "[useModalState] Whisper model download complete:",
+            modelName,
+          );
 
-        // Auto-close modal if the downloaded model matches the selected one
-        if (transcriptModelConfig?.provider === 'localWhisper' && transcriptModelConfig?.model === modelName) {
-          toast.success('Model ready! Closing window...', { duration: 1500 });
-          setTimeout(() => hideModal('modelSelector'), 1500);
-        }
-      });
+          // Auto-close modal if the downloaded model matches the selected one
+          if (
+            transcriptModelConfig?.provider === "localWhisper" &&
+            transcriptModelConfig?.model === modelName
+          ) {
+            toast.success("Model ready! Closing window...", { duration: 1500 });
+            setTimeout(() => hideModal("modelSelector"), 1500);
+          }
+        },
+      );
       unlisteners.push(unlistenWhisper);
 
       return () => {
-        unlisteners.forEach(unsub => unsub());
+        unlisteners.forEach((unsub) => unsub());
       };
     };
 

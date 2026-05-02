@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { Info } from 'lucide-react';
+import React, { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { Info } from "lucide-react";
 
 export interface BackendInfo {
   id: string;
@@ -20,7 +20,7 @@ export function AudioBackendSelector({
   disabled = false,
 }: AudioBackendSelectorProps) {
   const [backends, setBackends] = useState<BackendInfo[]>([]);
-  const [currentBackend, setCurrentBackend] = useState<string>('coreaudio');
+  const [currentBackend, setCurrentBackend] = useState<string>("coreaudio");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showTooltip, setShowTooltip] = useState(false);
@@ -33,19 +33,21 @@ export function AudioBackendSelector({
         setError(null);
 
         // Get backend info (includes name and description)
-        const backendInfo = await invoke<BackendInfo[]>('get_audio_backend_info');
+        const backendInfo = await invoke<BackendInfo[]>(
+          "get_audio_backend_info",
+        );
         setBackends(backendInfo);
 
         // Get current backend if not provided via props
         if (!propBackend) {
-          const current = await invoke<string>('get_current_audio_backend');
+          const current = await invoke<string>("get_current_audio_backend");
           setCurrentBackend(current);
         } else {
           setCurrentBackend(propBackend);
         }
       } catch (err) {
-        console.error('Failed to load audio backends:', err);
-        setError('Failed to load backend options');
+        console.error("Failed to load audio backends:", err);
+        setError("Failed to load backend options");
       } finally {
         setLoading(false);
       }
@@ -58,7 +60,7 @@ export function AudioBackendSelector({
   const handleBackendChange = async (backendId: string) => {
     try {
       setError(null);
-      await invoke('set_audio_backend', { backend: backendId });
+      await invoke("set_audio_backend", { backend: backendId });
       setCurrentBackend(backendId);
 
       // Notify parent component
@@ -68,8 +70,8 @@ export function AudioBackendSelector({
 
       console.log(`Audio backend changed to: ${backendId}`);
     } catch (err) {
-      console.error('Failed to set audio backend:', err);
-      setError('Failed to change backend. Please try again.');
+      console.error("Failed to set audio backend:", err);
+      setError("Failed to change backend. Please try again.");
     }
   };
 
@@ -109,7 +111,8 @@ export function AudioBackendSelector({
               <ul className="space-y-1">
                 {backends.map((backend) => (
                   <li key={backend.id}>
-                    <span className="font-medium">{backend.name}:</span> {backend.description}
+                    <span className="font-medium">{backend.name}:</span>{" "}
+                    {backend.description}
                   </li>
                 ))}
               </ul>
@@ -130,7 +133,7 @@ export function AudioBackendSelector({
       <div className="space-y-2">
         {backends.map((backend) => {
           // Disable Core Audio option
-          const isCoreAudio = backend.id === 'screencapturekit';
+          const isCoreAudio = backend.id === "screencapturekit";
           const isDisabled = disabled || isCoreAudio;
 
           return (
@@ -138,9 +141,9 @@ export function AudioBackendSelector({
               key={backend.id}
               className={`flex items-start p-3 border rounded-lg transition-all ${
                 currentBackend === backend.id
-                  ? 'border-blue-500 bg-blue-600/10'
-                  : 'border-border hover:border-border bg-background'
-              } ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                  ? "border-blue-500 bg-blue-600/10"
+                  : "border-border hover:border-border bg-background"
+              } ${isDisabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
             >
               <input
                 type="radio"
@@ -167,7 +170,9 @@ export function AudioBackendSelector({
                     </span>
                   )}
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground">{backend.description}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {backend.description}
+                </p>
               </div>
             </label>
           );

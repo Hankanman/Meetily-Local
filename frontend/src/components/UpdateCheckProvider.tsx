@@ -1,10 +1,19 @@
-'use client'
+"use client";
 
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { useUpdateCheck } from '@/hooks/useUpdateCheck';
-import { UpdateInfo } from '@/services/updateService';
-import { UpdateDialog } from './UpdateDialog';
-import { setUpdateDialogCallback, showUpdateNotification } from './UpdateNotification';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  useEffect,
+} from "react";
+import { useUpdateCheck } from "@/hooks/useUpdateCheck";
+import { UpdateInfo } from "@/services/updateService";
+import { UpdateDialog } from "./UpdateDialog";
+import {
+  setUpdateDialogCallback,
+  showUpdateNotification,
+} from "./UpdateNotification";
 
 interface UpdateCheckContextType {
   updateInfo: UpdateInfo | null;
@@ -13,9 +22,15 @@ interface UpdateCheckContextType {
   showUpdateDialog: () => void;
 }
 
-const UpdateCheckContext = createContext<UpdateCheckContextType | undefined>(undefined);
+const UpdateCheckContext = createContext<UpdateCheckContextType | undefined>(
+  undefined,
+);
 
-export function UpdateCheckProvider({ children }: { children: React.ReactNode }) {
+export function UpdateCheckProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const [showDialog, setShowDialog] = useState(false);
 
   const handleShowDialog = useCallback(() => {
@@ -50,8 +65,9 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
       setShowDialog(true);
     };
 
-    window.addEventListener('check-updates-from-tray', handleTrayCheck);
-    return () => window.removeEventListener('check-updates-from-tray', handleTrayCheck);
+    window.addEventListener("check-updates-from-tray", handleTrayCheck);
+    return () =>
+      window.removeEventListener("check-updates-from-tray", handleTrayCheck);
   }, [checkForUpdates]);
 
   return (
@@ -76,7 +92,9 @@ export function UpdateCheckProvider({ children }: { children: React.ReactNode })
 export function useUpdateCheckContext() {
   const context = useContext(UpdateCheckContext);
   if (context === undefined) {
-    throw new Error('useUpdateCheckContext must be used within UpdateCheckProvider');
+    throw new Error(
+      "useUpdateCheckContext must be used within UpdateCheckProvider",
+    );
   }
   return context;
 }

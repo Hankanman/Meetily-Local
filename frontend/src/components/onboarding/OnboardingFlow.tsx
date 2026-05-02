@@ -1,11 +1,11 @@
-import React, { useEffect } from 'react';
-import { useOnboarding } from '@/contexts/OnboardingContext';
+import React, { useEffect } from "react";
+import { useOnboarding } from "@/contexts/OnboardingContext";
 import {
   WelcomeStep,
   PermissionsStep,
   DownloadProgressStep,
   SetupOverviewStep,
-} from './steps';
+} from "./steps";
 
 interface OnboardingFlowProps {
   onComplete: () => void;
@@ -20,12 +20,12 @@ export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
     const checkPlatform = async () => {
       try {
         // Dynamic import to avoid SSR issues if any
-        const { platform } = await import('@tauri-apps/plugin-os');
-        setIsMac(platform() === 'macos');
+        const { platform } = await import("@tauri-apps/plugin-os");
+        setIsMac(platform() === "macos");
       } catch (e) {
-        console.error('Failed to detect platform:', e);
+        console.error("Failed to detect platform:", e);
         // Fallback
-        setIsMac(navigator.userAgent.includes('Mac'));
+        setIsMac(navigator.userAgent.includes("Mac"));
       }
     };
     checkPlatform();

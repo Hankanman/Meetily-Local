@@ -1,8 +1,8 @@
-'use client';
+"use client";
 
-import React, { useState, useEffect, useRef } from 'react';
-import { Button } from './ui/button';
-import { AlertTriangle, CheckCircle, X } from 'lucide-react';
+import React, { useState, useEffect, useRef } from "react";
+import { Button } from "./ui/button";
+import { AlertTriangle, CheckCircle, X } from "lucide-react";
 
 interface ComplianceNotificationProps {
   isOpen: boolean;
@@ -23,13 +23,13 @@ export const ComplianceNotification: React.FC<ComplianceNotificationProps> = ({
   useEffect(() => {
     if (isOpen) {
       setIsVisible(true);
-      
+
       // Calculate position relative to recording button
       if (recordingButtonRef?.current) {
         const buttonRect = recordingButtonRef.current.getBoundingClientRect();
         const buttonWidth = buttonRect.width;
         const notificationWidth = buttonWidth * 1.5; // 1.5x the button width
-        
+
         setPosition({
           top: buttonRect.top - 100, // 100px above the button
           left: buttonRect.left + (buttonWidth - notificationWidth) / 2, // Center the notification relative to button
@@ -61,9 +61,9 @@ export const ComplianceNotification: React.FC<ComplianceNotificationProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div 
+    <div
       className={`fixed z-50 transition-all duration-300 ${
-        isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2'
+        isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2"
       }`}
       style={{
         top: `${position.top}px`,

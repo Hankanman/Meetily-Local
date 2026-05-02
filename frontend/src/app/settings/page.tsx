@@ -1,25 +1,32 @@
-'use client';
+"use client";
 
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { ArrowLeft, Settings2, Mic, Database as DatabaseIcon, SparkleIcon, FlaskConical } from 'lucide-react';
-import { useRouter } from 'next/navigation';
-import { invoke } from '@tauri-apps/api/core';
-import { motion } from 'framer-motion';
-import { TranscriptSettings } from '@/components/TranscriptSettings';
-import { RecordingSettings } from '@/components/RecordingSettings';
-import { PreferenceSettings } from '@/components/PreferenceSettings';
-import { SummaryModelSettings } from '@/components/SummaryModelSettings';
-import { BetaSettings } from '@/components/BetaSettings';
-import { useConfig } from '@/contexts/ConfigContext';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
+import {
+  ArrowLeft,
+  Settings2,
+  Mic,
+  Database as DatabaseIcon,
+  SparkleIcon,
+  FlaskConical,
+} from "lucide-react";
+import { useRouter } from "next/navigation";
+import { invoke } from "@tauri-apps/api/core";
+import { motion } from "framer-motion";
+import { TranscriptSettings } from "@/components/TranscriptSettings";
+import { RecordingSettings } from "@/components/RecordingSettings";
+import { PreferenceSettings } from "@/components/PreferenceSettings";
+import { SummaryModelSettings } from "@/components/SummaryModelSettings";
+import { BetaSettings } from "@/components/BetaSettings";
+import { useConfig } from "@/contexts/ConfigContext";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 // Tabs configuration (constant)
 const TABS = [
-  { value: 'general', label: 'General', icon: Settings2 },
-  { value: 'recording', label: 'Recordings', icon: Mic },
-  { value: 'Transcriptionmodels', label: 'Transcription', icon: DatabaseIcon },
-  { value: 'summaryModels', label: 'Summary', icon: SparkleIcon },
-  { value: 'beta', label: 'Beta', icon: FlaskConical }
+  { value: "general", label: "General", icon: Settings2 },
+  { value: "recording", label: "Recordings", icon: Mic },
+  { value: "Transcriptionmodels", label: "Transcription", icon: DatabaseIcon },
+  { value: "summaryModels", label: "Summary", icon: SparkleIcon },
+  { value: "beta", label: "Beta", icon: FlaskConical },
 ] as const;
 
 export default function SettingsPage() {
@@ -27,7 +34,7 @@ export default function SettingsPage() {
   const { transcriptModelConfig, setTranscriptModelConfig } = useConfig();
 
   // Animation state for tabs
-  const [activeTab, setActiveTab] = useState('general');
+  const [activeTab, setActiveTab] = useState("general");
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const [underlineStyle, setUnderlineStyle] = useState({ left: 0, width: 0 });
 
@@ -35,17 +42,17 @@ export default function SettingsPage() {
   useEffect(() => {
     const loadTranscriptConfig = async () => {
       try {
-        const config = await invoke('api_get_transcript_config') as any;
+        const config = (await invoke("api_get_transcript_config")) as any;
         if (config) {
-          console.log('Loaded saved transcript config:', config);
+          console.log("Loaded saved transcript config:", config);
           setTranscriptModelConfig({
-            provider: config.provider || 'localWhisper',
-            model: config.model || 'large-v3',
-            apiKey: config.apiKey || null
+            provider: config.provider || "localWhisper",
+            model: config.model || "large-v3",
+            apiKey: config.apiKey || null,
           });
         }
       } catch (error) {
-        console.error('Failed to load transcript config:', error);
+        console.error("Failed to load transcript config:", error);
       }
     };
     loadTranscriptConfig();
@@ -53,7 +60,7 @@ export default function SettingsPage() {
 
   // Update underline position when active tab changes
   useLayoutEffect(() => {
-    const activeIndex = TABS.findIndex(tab => tab.value === activeTab);
+    const activeIndex = TABS.findIndex((tab) => tab.value === activeTab);
     const activeTabElement = tabRefs.current[activeIndex];
 
     if (activeTabElement) {
@@ -92,7 +99,9 @@ export default function SettingsPage() {
                   <TabsTrigger
                     key={tab.value}
                     value={tab.value}
-                    ref={el => { tabRefs.current[index] = el }}
+                    ref={(el) => {
+                      tabRefs.current[index] = el;
+                    }}
                     className="flex items-center gap-2 px-6 py-4 bg-transparent rounded-none border-0 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 data-[state=active]:shadow-none text-muted-foreground hover:text-foreground relative z-10"
                   >
                     <Icon className="w-4 h-4" />
@@ -104,8 +113,11 @@ export default function SettingsPage() {
               <motion.div
                 className="absolute bottom-0 z-20 h-0.5 bg-blue-600"
                 layoutId="underline"
-                style={{ left: underlineStyle.left, width: underlineStyle.width }}
-                transition={{ type: 'spring', stiffness: 400, damping: 40 }}
+                style={{
+                  left: underlineStyle.left,
+                  width: underlineStyle.width,
+                }}
+                transition={{ type: "spring", stiffness: 400, damping: 40 }}
               />
             </TabsList>
 
@@ -132,4 +144,4 @@ export default function SettingsPage() {
       </div>
     </div>
   );
-};
+}

@@ -1,14 +1,20 @@
-'use client';
+"use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Summary, Block } from '@/types';
-import { Section } from './Section';
-import { EditableTitle } from '../EditableTitle';
-import { AlertTriangle as ExclamationTriangleIcon } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Summary, Block } from "@/types";
+import { Section } from "./Section";
+import { EditableTitle } from "../EditableTitle";
+import { AlertTriangle as ExclamationTriangleIcon } from "lucide-react";
 
 interface Props {
   summary: Summary | null;
-  status: 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
+  status:
+    | "idle"
+    | "processing"
+    | "summarizing"
+    | "regenerating"
+    | "completed"
+    | "error";
   error: string | null;
   onSummaryChange: (summary: Summary) => void;
   onRegenerateSummary: () => void;
@@ -19,7 +25,14 @@ interface Props {
   };
 }
 
-export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerateSummary, meeting }: Props) => {
+export const AISummary = ({
+  summary,
+  status,
+  error,
+  onSummaryChange,
+  onRegenerateSummary,
+  meeting,
+}: Props) => {
   const generateUniqueId = (sectionKey: string) => {
     return `${sectionKey}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   };
@@ -33,16 +46,18 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
       if (section && Array.isArray(section.blocks)) {
         updatedSummary[sectionKey] = {
           ...section,
-          blocks: section.blocks.map(block => ({
+          blocks: section.blocks.map((block) => ({
             ...block,
-            id: block.id.includes(sectionKey) ? block.id : generateUniqueId(sectionKey)
-          }))
+            id: block.id.includes(sectionKey)
+              ? block.id
+              : generateUniqueId(sectionKey),
+          })),
         };
       } else {
         // Initialize empty blocks array if missing or invalid
         updatedSummary[sectionKey] = {
           title: section?.title || sectionKey,
-          blocks: []
+          blocks: [],
         };
       }
     });
@@ -56,14 +71,16 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
         Agenda: { title: "Agenda", blocks: [] },
         Decisions: { title: "Decisions", blocks: [] },
         ActionItems: { title: "Action Items", blocks: [] },
-        ClosingRemarks: { title: "Closing Remarks", blocks: [] }
+        ClosingRemarks: { title: "Closing Remarks", blocks: [] },
       };
     }
     return ensureUniqueBlockIds(summary);
   }, [summary]);
 
   const [selectedBlocks, setSelectedBlocks] = useState<string[]>([]);
-  const [lastSelectedBlock, setLastSelectedBlock] = useState<string | null>(null);
+  const [lastSelectedBlock, setLastSelectedBlock] = useState<string | null>(
+    null,
+  );
   const [isDragging, setIsDragging] = useState(false);
   const [dragStartBlock, setDragStartBlock] = useState<string | null>(null);
   const hiddenInputRef = useRef<HTMLTextAreaElement>(null);
@@ -75,7 +92,8 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
 
   // Add to history when summary changes
   useEffect(() => {
-    if (!isUndoRedoing && summary) {  // Only update history if summary is not null
+    if (!isUndoRedoing && summary) {
+      // Only update history if summary is not null
       const newHistory = history.slice(0, currentHistoryIndex + 1);
       newHistory.push(summary);
       setHistory(newHistory);
@@ -105,7 +123,7 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
   const getAllBlocks = () => {
     const allBlocks: { id: string; sectionKey: string }[] = [];
     Object.entries(currentSummary).forEach(([sectionKey, section]) => {
-      section.blocks.forEach(block => {
+      section.blocks.forEach((block) => {
         allBlocks.push({ id: block.id, sectionKey });
       });
     });
@@ -114,7 +132,7 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
 
   const findBlockAndSection = (blockId: string) => {
     for (const [sectionKey, section] of Object.entries(currentSummary)) {
-      const block = section.blocks.find(b => b.id === blockId);
+      const block = section.blocks.find((b) => b.id === blockId);
       if (block) {
         return { block, sectionKey };
       }
@@ -122,19 +140,20 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
     return null;
   };
 
-  const handleBlockNavigate = (blockId: string, direction: 'up' | 'down') => {
+  const handleBlockNavigate = (blockId: string, direction: "up" | "down") => {
     const allBlocks = getAllBlocks();
-    const currentIndex = allBlocks.findIndex(b => b.id === blockId);
-    
+    const currentIndex = allBlocks.findIndex((b) => b.id === blockId);
+
     if (currentIndex === -1) return;
-    
+
     let targetIndex: number;
-    if (direction === 'up') {
+    if (direction === "up") {
       targetIndex = currentIndex > 0 ? currentIndex - 1 : currentIndex;
     } else {
-      targetIndex = currentIndex < allBlocks.length - 1 ? currentIndex + 1 : currentIndex;
+      targetIndex =
+        currentIndex < allBlocks.length - 1 ? currentIndex + 1 : currentIndex;
     }
-    
+
     if (targetIndex !== currentIndex) {
       const targetBlock = allBlocks[targetIndex];
       setSelectedBlocks([targetBlock.id]);
@@ -144,18 +163,22 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
 
   const getBlockRange = (startId: string, endId: string) => {
     const allBlocks = getAllBlocks();
-    const startIndex = allBlocks.findIndex(b => b.id === startId);
-    const endIndex = allBlocks.findIndex(b => b.id === endId);
-    
+    const startIndex = allBlocks.findIndex((b) => b.id === startId);
+    const endIndex = allBlocks.findIndex((b) => b.id === endId);
+
     if (startIndex === -1 || endIndex === -1) return [];
-    
+
     const start = Math.min(startIndex, endIndex);
     const end = Math.max(startIndex, endIndex);
-    
-    return allBlocks.slice(start, end + 1).map(b => b.id);
+
+    return allBlocks.slice(start, end + 1).map((b) => b.id);
   };
 
-  const handleBlockMouseDown = (blockId: string, sectionKey: keyof Summary, e: React.MouseEvent<HTMLDivElement>) => {
+  const handleBlockMouseDown = (
+    blockId: string,
+    sectionKey: keyof Summary,
+    e: React.MouseEvent<HTMLDivElement>,
+  ) => {
     if (!e.shiftKey) {
       setDragStartBlock(blockId);
       setLastSelectedBlock(blockId);
@@ -164,14 +187,21 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
     setIsDragging(true);
   };
 
-  const handleBlockMouseEnter = (blockId: string, sectionKey: keyof Summary) => {
+  const handleBlockMouseEnter = (
+    blockId: string,
+    sectionKey: keyof Summary,
+  ) => {
     if (isDragging && dragStartBlock) {
       const range = getBlockRange(dragStartBlock, blockId);
       setSelectedBlocks(range);
     }
   };
 
-  const handleBlockMouseUp = (blockId: string, sectionKey: keyof Summary, e: React.MouseEvent<HTMLDivElement>) => {
+  const handleBlockMouseUp = (
+    blockId: string,
+    sectionKey: keyof Summary,
+    e: React.MouseEvent<HTMLDivElement>,
+  ) => {
     if (e.shiftKey && lastSelectedBlock) {
       const range = getBlockRange(lastSelectedBlock, blockId);
       setSelectedBlocks(range);
@@ -179,23 +209,27 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
     setIsDragging(false);
   };
 
-  const handleBlockChange = (sectionKey: keyof Summary, blockId: string, newContent: string) => {
+  const handleBlockChange = (
+    sectionKey: keyof Summary,
+    blockId: string,
+    newContent: string,
+  ) => {
     onSummaryChange({
       ...currentSummary,
       [sectionKey]: {
         ...currentSummary[sectionKey],
-        blocks: currentSummary[sectionKey].blocks.map(block => 
-          block.id === blockId ? { ...block, content: newContent } : block
-        )
-      }
+        blocks: currentSummary[sectionKey].blocks.map((block) =>
+          block.id === blockId ? { ...block, content: newContent } : block,
+        ),
+      },
     });
   };
 
-  const handleBlockTypeChange = (blockId: string, newType: Block['type']) => {
+  const handleBlockTypeChange = (blockId: string, newType: Block["type"]) => {
     // Find the section key for this block
     let blockSectionKey: string | null = null;
     for (const [sectionKey, section] of Object.entries(currentSummary)) {
-      if (section.blocks.some(b => b.id === blockId)) {
+      if (section.blocks.some((b) => b.id === blockId)) {
         blockSectionKey = sectionKey;
         break;
       }
@@ -207,41 +241,49 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
       ...currentSummary,
       [blockSectionKey]: {
         ...currentSummary[blockSectionKey],
-        blocks: currentSummary[blockSectionKey].blocks.map(block => 
-          block.id === blockId ? { ...block, type: newType } : block
-        )
-      }
+        blocks: currentSummary[blockSectionKey].blocks.map((block) =>
+          block.id === blockId ? { ...block, type: newType } : block,
+        ),
+      },
     });
   };
 
   const handleTitleChange = (sectionKey: keyof Summary, newTitle: string) => {
-    console.log('Title change:', { sectionKey, newTitle });
+    console.log("Title change:", { sectionKey, newTitle });
     const updatedSummary = {
       ...currentSummary,
       [sectionKey]: {
         ...currentSummary[sectionKey],
-        title: newTitle
-      }
+        title: newTitle,
+      },
     };
-    console.log('Updated summary:', updatedSummary);
+    console.log("Updated summary:", updatedSummary);
     onSummaryChange(updatedSummary);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent, blockId: string) => {
-    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBlocks.length > 1) {
+    if (
+      (e.key === "Delete" || e.key === "Backspace") &&
+      selectedBlocks.length > 1
+    ) {
       // Handle multi-block deletion
       e.preventDefault();
       handleDeleteSelectedBlocks();
     }
   };
 
-  const handleCreateNewBlock = (blockId: string, newBlockContent: string, blockType: Block['type'], currentBlockContent?: string) => {
+  const handleCreateNewBlock = (
+    blockId: string,
+    newBlockContent: string,
+    blockType: Block["type"],
+    currentBlockContent?: string,
+  ) => {
     // Find the section key for this block
     let blockSectionKey: string | null = null;
     let currentBlockIndex = -1;
-    
+
     for (const [sectionKey, section] of Object.entries(currentSummary)) {
-      currentBlockIndex = section.blocks.findIndex(b => b.id === blockId);
+      currentBlockIndex = section.blocks.findIndex((b) => b.id === blockId);
       if (currentBlockIndex !== -1) {
         blockSectionKey = sectionKey;
         break;
@@ -250,48 +292,51 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
 
     if (!blockSectionKey) return;
 
-    const currentBlock = currentSummary[blockSectionKey].blocks[currentBlockIndex];
+    const currentBlock =
+      currentSummary[blockSectionKey].blocks[currentBlockIndex];
     if (!currentBlock) return;
-    
+
     const newId = generateUniqueId(blockSectionKey);
-    
+
     // Update the blocks array for the specific section
     const updatedBlocks = [...currentSummary[blockSectionKey].blocks];
-    
+
     // Get the type of the new block (inherit from current block for bullets)
-    const newBlockType = blockType === 'bullet' ? 'bullet' : 'text';
-    
+    const newBlockType = blockType === "bullet" ? "bullet" : "text";
+
     // Update the current block's content if provided
     if (currentBlockContent !== undefined) {
       updatedBlocks[currentBlockIndex] = {
         ...currentBlock,
-        content: currentBlockContent
+        content: currentBlockContent,
       };
     }
-    
+
     // Insert new block after current block
     updatedBlocks.splice(currentBlockIndex + 1, 0, {
       id: newId,
       type: newBlockType,
       content: newBlockContent,
-      color: currentBlock.color || 'default'
+      color: currentBlock.color || "default",
     });
-    
+
     onSummaryChange({
       ...currentSummary,
       [blockSectionKey]: {
         ...currentSummary[blockSectionKey],
-        blocks: updatedBlocks
-      }
+        blocks: updatedBlocks,
+      },
     });
-    
+
     // Focus and select the new block
     setSelectedBlocks([newId]);
     setLastSelectedBlock(newId);
-    
+
     // Use setTimeout to ensure the textarea is mounted
     setTimeout(() => {
-      const newTextarea = document.querySelector(`[data-block-id="${newId}"]`) as HTMLTextAreaElement;
+      const newTextarea = document.querySelector(
+        `[data-block-id="${newId}"]`,
+      ) as HTMLTextAreaElement;
       if (newTextarea) {
         newTextarea.focus();
         newTextarea.setSelectionRange(0, 0);
@@ -305,7 +350,7 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
     let currentBlockIndex = -1;
 
     for (const [sectionKey, section] of Object.entries(currentSummary)) {
-      currentBlockIndex = section.blocks.findIndex(b => b.id === blockId);
+      currentBlockIndex = section.blocks.findIndex((b) => b.id === blockId);
       if (currentBlockIndex !== -1) {
         blockSectionKey = sectionKey;
         break;
@@ -315,37 +360,39 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
     if (!blockSectionKey) return;
 
     const updatedBlocks = [...currentSummary[blockSectionKey].blocks];
-    
+
     // If there's content to merge and a previous block exists
     if (mergeContent && currentBlockIndex > 0) {
       const previousBlock = updatedBlocks[currentBlockIndex - 1];
       const previousContent = previousBlock.content;
       const cursorPosition = previousContent.length;
-      
+
       // Update previous block with merged content
       updatedBlocks[currentBlockIndex - 1] = {
         ...previousBlock,
-        content: previousContent + mergeContent
+        content: previousContent + mergeContent,
       };
-      
+
       // Remove current block
       updatedBlocks.splice(currentBlockIndex, 1);
-      
+
       onSummaryChange({
         ...currentSummary,
         [blockSectionKey]: {
           ...currentSummary[blockSectionKey],
-          blocks: updatedBlocks
-        }
+          blocks: updatedBlocks,
+        },
       });
 
       // Select the previous block and set cursor at merge point
       setSelectedBlocks([previousBlock.id]);
       setLastSelectedBlock(previousBlock.id);
-      
+
       // Use setTimeout to ensure the textarea is mounted
       setTimeout(() => {
-        const textarea = document.querySelector(`[data-block-id="${previousBlock.id}"]`) as HTMLTextAreaElement;
+        const textarea = document.querySelector(
+          `[data-block-id="${previousBlock.id}"]`,
+        ) as HTMLTextAreaElement;
         if (textarea) {
           textarea.focus();
           textarea.setSelectionRange(cursorPosition, cursorPosition);
@@ -354,18 +401,19 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
     } else {
       // Just remove the block if no content to merge
       updatedBlocks.splice(currentBlockIndex, 1);
-      
+
       onSummaryChange({
         ...currentSummary,
         [blockSectionKey]: {
           ...currentSummary[blockSectionKey],
-          blocks: updatedBlocks
-        }
+          blocks: updatedBlocks,
+        },
       });
 
       // Select the previous block if it exists, otherwise the next block
       if (updatedBlocks.length > 0) {
-        const newSelectedBlock = updatedBlocks[Math.max(0, currentBlockIndex - 1)];
+        const newSelectedBlock =
+          updatedBlocks[Math.max(0, currentBlockIndex - 1)];
         setSelectedBlocks([newSelectedBlock.id]);
         setLastSelectedBlock(newSelectedBlock.id);
       } else {
@@ -377,17 +425,17 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
 
   const getSelectedBlocksContent = useCallback(() => {
     return selectedBlocks
-      .map(blockId => {
+      .map((blockId) => {
         for (const [sectionKey, section] of Object.entries(currentSummary)) {
-          const block = section.blocks.find(b => b.id === blockId);
+          const block = section.blocks.find((b) => b.id === blockId);
           if (block) {
             return block.content;
           }
         }
-        return '';
+        return "";
       })
       .filter(Boolean)
-      .join('\n');
+      .join("\n");
   }, [selectedBlocks, currentSummary]);
 
   useEffect(() => {
@@ -404,47 +452,54 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey)) {
-        if (e.key === 'z') {
+      if (e.metaKey || e.ctrlKey) {
+        if (e.key === "z") {
           e.preventDefault();
           if (e.shiftKey) {
             handleRedo();
           } else {
             handleUndo();
           }
-        } else if (e.key === 'c') {
-          const blockContents = selectedBlocks.map(blockId => {
-            for (const [sectionKey, section] of Object.entries(currentSummary)) {
-              const block = section.blocks.find(b => b.id === blockId);
-              if (block) {
-                return block.content;
+        } else if (e.key === "c") {
+          const blockContents = selectedBlocks
+            .map((blockId) => {
+              for (const [sectionKey, section] of Object.entries(
+                currentSummary,
+              )) {
+                const block = section.blocks.find((b) => b.id === blockId);
+                if (block) {
+                  return block.content;
+                }
               }
-            }
-            return '';
-          }).filter(Boolean);
+              return "";
+            })
+            .filter(Boolean);
 
-          navigator.clipboard.writeText(blockContents.join('\n'));
+          navigator.clipboard.writeText(blockContents.join("\n"));
         }
-      } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBlocks.length > 1) {
+      } else if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        selectedBlocks.length > 1
+      ) {
         e.preventDefault();
         handleDeleteSelectedBlocks();
       }
     };
 
-    document.addEventListener('mouseup', handleMouseUp);
-    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener("mouseup", handleMouseUp);
+    document.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.removeEventListener('mouseup', handleMouseUp);
-      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener("mouseup", handleMouseUp);
+      document.removeEventListener("keydown", handleKeyDown);
     };
   }, [selectedBlocks, currentSummary, handleUndo, handleRedo]);
 
   const handleDeleteSelectedBlocks = () => {
     // Group selected blocks by section
     const blocksBySection = new Map<string, string[]>();
-    selectedBlocks.forEach(blockId => {
+    selectedBlocks.forEach((blockId) => {
       Object.entries(currentSummary).forEach(([sectionKey, section]) => {
-        if (section.blocks.some(b => b.id === blockId)) {
+        if (section.blocks.some((b) => b.id === blockId)) {
           const blocks = blocksBySection.get(sectionKey) || [];
           blocks.push(blockId);
           blocksBySection.set(sectionKey, blocks);
@@ -457,7 +512,9 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
     blocksBySection.forEach((blockIds, sectionKey) => {
       newSummary[sectionKey] = {
         ...newSummary[sectionKey],
-        blocks: newSummary[sectionKey].blocks.filter(b => !blockIds.includes(b.id))
+        blocks: newSummary[sectionKey].blocks.filter(
+          (b) => !blockIds.includes(b.id),
+        ),
       };
     });
 
@@ -476,57 +533,57 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
   // Close context menu when clicking outside
   useEffect(() => {
     const handleClickOutside = () => {
-      setContextMenu(prev => ({ ...prev, visible: false }));
+      setContextMenu((prev) => ({ ...prev, visible: false }));
     };
-    document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
   }, []);
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
-    
+
     const menuWidth = 160;
     const menuHeight = 80; // Approximate height for 2 items
-    
+
     let x = e.clientX;
     let y = e.clientY;
-    
+
     // Check right boundary
     if (x + menuWidth > window.innerWidth) {
       x = window.innerWidth - menuWidth - 10;
     }
-    
+
     // Check bottom boundary
     if (y + menuHeight > window.innerHeight) {
       y = window.innerHeight - menuHeight - 10;
     }
-    
+
     // Check left boundary
     if (x < 10) {
       x = 10;
     }
-    
+
     // Check top boundary
     if (y < 10) {
       y = 10;
     }
-    
+
     setContextMenu({
       x,
       y,
-      visible: true
+      visible: true,
     });
   };
 
   const handleCopyBlocks = useCallback(() => {
     const content = getSelectedBlocksContent();
     navigator.clipboard.writeText(content);
-    setContextMenu(prev => ({ ...prev, visible: false }));
+    setContextMenu((prev) => ({ ...prev, visible: false }));
   }, [getSelectedBlocksContent]);
 
   const handleDeleteBlocks = () => {
     handleDeleteSelectedBlocks();
-    setContextMenu(prev => ({ ...prev, visible: false }));
+    setContextMenu((prev) => ({ ...prev, visible: false }));
   };
 
   const handleSectionDelete = (sectionKey: keyof Summary) => {
@@ -541,64 +598,66 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
     const newSummary: Summary = {
       ...currentSummary,
       [newSectionKey]: {
-        title: 'New Section',
-        blocks: [{
-          id: newBlockId,
-          type: 'text' as const,
-          content: '',
-          color: 'default' as const
-        }]
-      }
+        title: "New Section",
+        blocks: [
+          {
+            id: newBlockId,
+            type: "text" as const,
+            content: "",
+            color: "default" as const,
+          },
+        ],
+      },
     };
     onSummaryChange(newSummary);
-    
+
     // Select the new block
     setSelectedBlocks([newBlockId]);
     setLastSelectedBlock(newBlockId);
   };
 
   const convertToMarkdown = () => {
-    let markdown = `# AI Generated Summary of Meeting: ${meeting?.id || 'Unknown'} - ${meeting?.title || 'Untitled Meeting'}\n\n`;
+    let markdown = `# AI Generated Summary of Meeting: ${meeting?.id || "Unknown"} - ${meeting?.title || "Untitled Meeting"}\n\n`;
     markdown += `## Date: ${meeting?.created_at ? new Date(meeting.created_at).toLocaleDateString() : new Date().toLocaleDateString()}\n\n`;
-    
+
     Object.entries(currentSummary).forEach(([key, section]) => {
-      if (key === 'title') {
-        markdown = `# ${section.title || 'AI Enhanced Summary'}\n\n`;
+      if (key === "title") {
+        markdown = `# ${section.title || "AI Enhanced Summary"}\n\n`;
       } else {
         markdown += `## ${section.title || key}\n\n`;
-        section.blocks.forEach(block => {
+        section.blocks.forEach((block) => {
           switch (block.type) {
-            case 'heading1':
+            case "heading1":
               markdown += `### ${block.content}\n\n`;
               break;
-            case 'heading2':
+            case "heading2":
               markdown += `#### ${block.content}\n\n`;
               break;
-            case 'bullet':
+            case "bullet":
               markdown += `- ${block.content}\n`;
               break;
-            case 'text':
+            case "text":
             default:
               markdown += `${block.content}\n\n`;
           }
         });
         // Add an extra newline after bullet lists
-        if (section.blocks.some(block => block.type === 'bullet')) {
-          markdown += '\n';
+        if (section.blocks.some((block) => block.type === "bullet")) {
+          markdown += "\n";
         }
       }
     });
-    
+
     return markdown;
   };
 
   const handleExport = () => {
     const markdown = convertToMarkdown();
-    const blob = new Blob([markdown], { type: 'text/markdown' });
+    const blob = new Blob([markdown], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    const a = document.createElement("a");
     a.href = url;
-    a.download = `${currentSummary.title || 'ai-summary'}.md`;
+    a.download = `${currentSummary.title || "ai-summary"}.md`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -612,7 +671,9 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
         <h3 className="text-red-700 font-medium">Error Generating Summary</h3>
       </div>
       <p className="text-red-600 text-sm">{error}</p>
-      <p className="text-red-500 text-xs mt-2">Please check your model configuration and API keys, or try again.</p>
+      <p className="text-red-500 text-xs mt-2">
+        Please check your model configuration and API keys, or try again.
+      </p>
     </div>
   );
 
@@ -622,12 +683,14 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
         <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-500 border-t-transparent"></div>
         <div>
           <h3 className="text-blue-700 font-medium">
-            {status === 'processing' ? 'Processing Transcript' : 'Generating Summary'}
+            {status === "processing"
+              ? "Processing Transcript"
+              : "Generating Summary"}
           </h3>
           <p className="text-blue-600 text-sm">
-            {status === 'processing' 
-              ? 'Analyzing your transcript...' 
-              : 'Creating a detailed summary of your meeting...'}
+            {status === "processing"
+              ? "Analyzing your transcript..."
+              : "Creating a detailed summary of your meeting..."}
           </p>
         </div>
       </div>
@@ -638,27 +701,33 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
     return renderErrorState();
   }
 
-  if (status === 'processing' || status === 'summarizing' || status === 'regenerating') {
+  if (
+    status === "processing" ||
+    status === "summarizing" ||
+    status === "regenerating"
+  ) {
     return renderLoadingState();
   }
 
-  const hasContent = Object.values(currentSummary).some(section => 
-    section?.blocks?.length > 0 && section?.blocks?.some(block => block.content.trim())
+  const hasContent = Object.values(currentSummary).some(
+    (section) =>
+      section?.blocks?.length > 0 &&
+      section?.blocks?.some((block) => block.content.trim()),
   );
 
-  if (!hasContent && status === 'completed') {
+  if (!hasContent && status === "completed") {
     return (
       <div className="w-full p-4 bg-muted border border-border rounded-lg text-center">
         <p className="text-muted-foreground">No summary content available.</p>
-        <p className="text-muted-foreground text-sm mt-1">Try generating a new summary.</p>
+        <p className="text-muted-foreground text-sm mt-1">
+          Try generating a new summary.
+        </p>
       </div>
     );
   }
 
   return (
     <div className="relative">
-
-      
       {selectedBlocks.length > 1 && (
         <textarea
           ref={hiddenInputRef}
@@ -668,31 +737,41 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
           tabIndex={-1}
         />
       )}
-      
+
       {/* Context Menu */}
       {contextMenu.visible && selectedBlocks.length > 0 && (
         <div
           className="fixed z-50 bg-background shadow-lg rounded-lg py-1 min-w-[160px] border border-border
                      animate-in fade-in zoom-in-95 duration-150"
-          style={{ 
-            left: contextMenu.x, 
-            top: contextMenu.y
+          style={{
+            left: contextMenu.x,
+            top: contextMenu.y,
           }}
-          onClick={e => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
         >
           <button
             className="w-full px-4 py-2 text-left hover:bg-muted flex items-center space-x-2"
             onClick={handleCopyBlocks}
           >
             <span className="text-muted-foreground">📋</span>
-            <span>Copy {selectedBlocks.length > 1 ? `${selectedBlocks.length} blocks` : 'block'}</span>
+            <span>
+              Copy{" "}
+              {selectedBlocks.length > 1
+                ? `${selectedBlocks.length} blocks`
+                : "block"}
+            </span>
           </button>
           <button
             className="w-full px-4 py-2 text-left hover:bg-muted text-red-600 flex items-center space-x-2"
             onClick={handleDeleteBlocks}
           >
             <span>🗑️</span>
-            <span>Delete {selectedBlocks.length > 1 ? `${selectedBlocks.length} blocks` : 'block'}</span>
+            <span>
+              Delete{" "}
+              {selectedBlocks.length > 1
+                ? `${selectedBlocks.length} blocks`
+                : "block"}
+            </span>
           </button>
         </div>
       )}
@@ -791,8 +870,8 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
       </div> */}
 
       {Object.keys(currentSummary)
-        .filter(key => currentSummary[key]?.blocks?.length > 0)
-        .map(key => {
+        .filter((key) => currentSummary[key]?.blocks?.length > 0)
+        .map((key) => {
           const section = currentSummary[key];
           return (
             <Section
@@ -801,21 +880,32 @@ export const AISummary = ({ summary, status, error, onSummaryChange, onRegenerat
               sectionKey={key}
               selectedBlocks={selectedBlocks}
               onBlockTypeChange={handleBlockTypeChange}
-              onBlockChange={(blockId, content) => handleBlockChange(key, blockId, content)}
-              onBlockMouseDown={(blockId, e) => handleBlockMouseDown(blockId, key, e)}
-              onBlockMouseEnter={(blockId) => handleBlockMouseEnter(blockId, key)}
-              onBlockMouseUp={(blockId, e) => handleBlockMouseUp(blockId, key, e)}
+              onBlockChange={(blockId, content) =>
+                handleBlockChange(key, blockId, content)
+              }
+              onBlockMouseDown={(blockId, e) =>
+                handleBlockMouseDown(blockId, key, e)
+              }
+              onBlockMouseEnter={(blockId) =>
+                handleBlockMouseEnter(blockId, key)
+              }
+              onBlockMouseUp={(blockId, e) =>
+                handleBlockMouseUp(blockId, key, e)
+              }
               onKeyDown={handleKeyDown}
               onTitleChange={handleTitleChange}
               onSectionDelete={handleSectionDelete}
-              onBlockDelete={(blockId, mergeContent) => handleBlockDelete(blockId, mergeContent)}
+              onBlockDelete={(blockId, mergeContent) =>
+                handleBlockDelete(blockId, mergeContent)
+              }
               onContextMenu={handleContextMenu}
-              onBlockNavigate={(blockId, direction) => handleBlockNavigate(blockId, direction)}
+              onBlockNavigate={(blockId, direction) =>
+                handleBlockNavigate(blockId, direction)
+              }
               onCreateNewBlock={handleCreateNewBlock}
             />
           );
         })}
-
     </div>
   );
 };

@@ -22,8 +22,8 @@ export interface SystemAudioCommands {
 
 // Event types emitted by the system audio detector
 export interface SystemAudioEvents {
-  'system-audio-started': string[]; // Array of app names using system audio
-  'system-audio-stopped': void;
+  "system-audio-started": string[]; // Array of app names using system audio
+  "system-audio-stopped": void;
 }
 
 // Example usage in React component:

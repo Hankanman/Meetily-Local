@@ -1,19 +1,24 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { Mic, Volume2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { OnboardingContainer } from '../OnboardingContainer';
-import { PermissionRow } from '../shared';
-import { useOnboarding } from '@/contexts/OnboardingContext';
+import React, { useEffect, useState, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { Mic, Volume2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { OnboardingContainer } from "../OnboardingContainer";
+import { PermissionRow } from "../shared";
+import { useOnboarding } from "@/contexts/OnboardingContext";
 
 export function PermissionsStep() {
-  const { setPermissionStatus, setPermissionsSkipped, permissions, completeOnboarding } = useOnboarding();
+  const {
+    setPermissionStatus,
+    setPermissionsSkipped,
+    permissions,
+    completeOnboarding,
+  } = useOnboarding();
   const [isPending, setIsPending] = useState(false);
 
   // Check permissions - only logs current state, doesn't auto-authorize
   // Actual permission checks are done via explicit user actions (clicking Enable)
   const checkPermissions = useCallback(async () => {
-    console.log('[PermissionsStep] Current permission states:');
+    console.log("[PermissionsStep] Current permission states:");
     console.log(`  - Microphone: ${permissions.microphone}`);
     console.log(`  - System Audio: ${permissions.systemAudio}`);
     // Don't auto-set permissions based on device availability
@@ -27,31 +32,36 @@ export function PermissionsStep() {
 
   // Request microphone permission
   const handleMicrophoneAction = async () => {
-    if (permissions.microphone === 'denied') {
+    if (permissions.microphone === "denied") {
       // Try to open system settings
       try {
-        await invoke('open_system_settings');
+        await invoke("open_system_settings");
       } catch {
-        alert('Please enable microphone access in System Preferences > Security & Privacy > Microphone');
+        alert(
+          "Please enable microphone access in System Preferences > Security & Privacy > Microphone",
+        );
       }
       return;
     }
 
     setIsPending(true);
     try {
-      console.log('[PermissionsStep] Triggering microphone permission...');
-      const granted = await invoke<boolean>('trigger_microphone_permission');
-      console.log('[PermissionsStep] Microphone permission result:', granted);
+      console.log("[PermissionsStep] Triggering microphone permission...");
+      const granted = await invoke<boolean>("trigger_microphone_permission");
+      console.log("[PermissionsStep] Microphone permission result:", granted);
 
       if (granted) {
-        setPermissionStatus('microphone', 'authorized');
+        setPermissionStatus("microphone", "authorized");
       } else {
         // Permission was denied or dialog was dismissed
-        setPermissionStatus('microphone', 'denied');
+        setPermissionStatus("microphone", "denied");
       }
     } catch (err) {
-      console.error('[PermissionsStep] Failed to request microphone permission:', err);
-      setPermissionStatus('microphone', 'denied');
+      console.error(
+        "[PermissionsStep] Failed to request microphone permission:",
+        err,
+      );
+      setPermissionStatus("microphone", "denied");
     } finally {
       setIsPending(false);
     }
@@ -59,35 +69,46 @@ export function PermissionsStep() {
 
   // Request system audio permission
   const handleSystemAudioAction = async () => {
-    if (permissions.systemAudio === 'denied') {
+    if (permissions.systemAudio === "denied") {
       // Try to open system settings
       try {
-        await invoke('open_system_settings');
+        await invoke("open_system_settings");
       } catch {
-        alert('Please enable Audio Capture in System Settings → Privacy & Security → Audio Capture');
+        alert(
+          "Please enable Audio Capture in System Settings → Privacy & Security → Audio Capture",
+        );
       }
       return;
     }
 
     setIsPending(true);
     try {
-      console.log('[PermissionsStep] Triggering Audio Capture permission...');
+      console.log("[PermissionsStep] Triggering Audio Capture permission...");
       // Backend creates Core Audio tap, captures audio, and verifies it's not silence
       // Returns true if permission granted and audio verified, false if denied (silence)
-      const granted = await invoke<boolean>('trigger_system_audio_permission_command');
-      console.log('[PermissionsStep] System audio permission result:', granted);
+      const granted = await invoke<boolean>(
+        "trigger_system_audio_permission_command",
+      );
+      console.log("[PermissionsStep] System audio permission result:", granted);
 
       if (granted) {
-        setPermissionStatus('systemAudio', 'authorized');
-        console.log('[PermissionsStep] Audio Capture permission verified - audio is not silence');
+        setPermissionStatus("systemAudio", "authorized");
+        console.log(
+          "[PermissionsStep] Audio Capture permission verified - audio is not silence",
+        );
       } else {
         // Permission was denied (audio is silence)
-        setPermissionStatus('systemAudio', 'denied');
-        console.log('[PermissionsStep] Audio Capture permission denied - audio is silence');
+        setPermissionStatus("systemAudio", "denied");
+        console.log(
+          "[PermissionsStep] Audio Capture permission denied - audio is silence",
+        );
       }
     } catch (err) {
-      console.error('[PermissionsStep] Failed to request system audio permission:', err);
-      setPermissionStatus('systemAudio', 'denied');
+      console.error(
+        "[PermissionsStep] Failed to request system audio permission:",
+        err,
+      );
+      setPermissionStatus("systemAudio", "denied");
     } finally {
       setIsPending(false);
     }
@@ -98,7 +119,7 @@ export function PermissionsStep() {
       await completeOnboarding();
       window.location.reload();
     } catch (error) {
-      console.error('Failed to complete onboarding:', error);
+      console.error("Failed to complete onboarding:", error);
     }
   };
 
@@ -108,8 +129,8 @@ export function PermissionsStep() {
   };
 
   const allPermissionsGranted =
-    permissions.microphone === 'authorized' &&
-    permissions.systemAudio === 'authorized';
+    permissions.microphone === "authorized" &&
+    permissions.systemAudio === "authorized";
 
   return (
     <OnboardingContainer
@@ -146,7 +167,11 @@ export function PermissionsStep() {
 
         {/* Action Buttons */}
         <div className="flex flex-col gap-3 pt-4">
-          <Button onClick={handleFinish} disabled={!allPermissionsGranted} className="w-full h-11">
+          <Button
+            onClick={handleFinish}
+            disabled={!allPermissionsGranted}
+            className="w-full h-11"
+          >
             Finish Setup
           </Button>
 
@@ -159,7 +184,8 @@ export function PermissionsStep() {
 
           {!allPermissionsGranted && (
             <p className="text-xs text-center text-muted-foreground">
-              Recording won't work without permissions. You can grant them later in settings.
+              Recording won't work without permissions. You can grant them later
+              in settings.
             </p>
           )}
         </div>

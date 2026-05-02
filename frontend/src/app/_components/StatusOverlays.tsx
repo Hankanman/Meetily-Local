@@ -1,10 +1,10 @@
 interface StatusOverlaysProps {
   // Status flags
-  isProcessing: boolean;      // Processing transcription after recording stops
-  isSaving: boolean;          // Saving transcript to database
+  isProcessing: boolean; // Processing transcription after recording stops
+  isSaving: boolean; // Saving transcript to database
 
   // Layout
-  sidebarCollapsed: boolean;  // For responsive margin calculation
+  sidebarCollapsed: boolean; // For responsive margin calculation
 }
 
 // Internal reusable component for individual status overlays
@@ -14,7 +14,11 @@ interface StatusOverlayProps {
   sidebarCollapsed: boolean;
 }
 
-function StatusOverlay({ show, message, sidebarCollapsed }: StatusOverlayProps) {
+function StatusOverlay({
+  show,
+  message,
+  sidebarCollapsed,
+}: StatusOverlayProps) {
   if (!show) return null;
 
   return (
@@ -22,7 +26,7 @@ function StatusOverlay({ show, message, sidebarCollapsed }: StatusOverlayProps) 
       <div
         className="flex justify-center pl-8 transition-[margin] duration-300"
         style={{
-          marginLeft: sidebarCollapsed ? '4rem' : '16rem'
+          marginLeft: sidebarCollapsed ? "4rem" : "16rem",
         }}
       >
         <div className="w-2/3 max-w-[750px] flex justify-center">
@@ -40,7 +44,7 @@ function StatusOverlay({ show, message, sidebarCollapsed }: StatusOverlayProps) 
 export function StatusOverlays({
   isProcessing,
   isSaving,
-  sidebarCollapsed
+  sidebarCollapsed,
 }: StatusOverlaysProps) {
   return (
     <>

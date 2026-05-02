@@ -1,12 +1,12 @@
-'use client';
+"use client";
 
-import { Transcript } from '@/types';
-import { useEffect, useRef, useState } from 'react';
-import { ConfidenceIndicator } from './ConfidenceIndicator';
-import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
-import { RecordingStatusBar } from './RecordingStatusBar';
-import { motion, AnimatePresence } from 'framer-motion';
-import { formatRecordingTime } from '@/lib/utils';
+import { Transcript } from "@/types";
+import { useEffect, useRef, useState } from "react";
+import { ConfidenceIndicator } from "./ConfidenceIndicator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { RecordingStatusBar } from "./RecordingStatusBar";
+import { motion, AnimatePresence } from "framer-motion";
+import { formatRecordingTime } from "@/lib/utils";
 
 interface TranscriptViewProps {
   transcripts: Transcript[];
@@ -65,7 +65,7 @@ function cleanRepetitions(text: string): string {
     }
   }
 
-  return cleanedWords.join(' ');
+  return cleanedWords.join(" ");
 }
 
 // Helper function to remove filler words and stop words from transcripts
@@ -75,36 +75,55 @@ function cleanStopWords(text: string): string {
 
   // THEN: Remove filler words
   const stopWords = [
-    'uh', 'um', 'er', 'ah', 'hmm', 'hm', 'eh', 'oh',
+    "uh",
+    "um",
+    "er",
+    "ah",
+    "hmm",
+    "hm",
+    "eh",
+    "oh",
     // 'like', 'you know', 'i mean', 'sort of', 'kind of',
     // 'basically', 'actually', 'literally', 'right',
     // 'thank you', 'thanks'
   ];
 
   // Remove each stop word (case-insensitive, with word boundaries)
-  stopWords.forEach(word => {
+  stopWords.forEach((word) => {
     // Match the stop word at word boundaries, with optional punctuation
-    const pattern = new RegExp(`\\b${word}\\b[,\\s]*`, 'gi');
-    cleanedText = cleanedText.replace(pattern, ' ');
+    const pattern = new RegExp(`\\b${word}\\b[,\\s]*`, "gi");
+    cleanedText = cleanedText.replace(pattern, " ");
   });
 
   // Clean up extra whitespace and trim
-  cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
+  cleanedText = cleanedText.replace(/\s+/g, " ").trim();
 
   return cleanedText;
 }
 
-export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isRecording = false, isPaused = false, isProcessing = false, isStopping = false, enableStreaming = false }) => {
+export const TranscriptView: React.FC<TranscriptViewProps> = ({
+  transcripts,
+  isRecording = false,
+  isPaused = false,
+  isProcessing = false,
+  isStopping = false,
+  enableStreaming = false,
+}) => {
   const [speechDetected, setSpeechDetected] = useState(false);
 
   // Debug: Log the props to understand what's happening
-  console.log('TranscriptView render:', {
+  console.log("TranscriptView render:", {
     isRecording,
     isPaused,
     isProcessing,
     isStopping,
     transcriptCount: transcripts.length,
-    shouldShowListening: !isStopping && isRecording && !isPaused && !isProcessing && transcripts.length > 0
+    shouldShowListening:
+      !isStopping &&
+      isRecording &&
+      !isPaused &&
+      !isProcessing &&
+      transcripts.length > 0,
   });
 
   // Streaming effect state
@@ -118,9 +137,9 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
 
   // Load preference for showing confidence indicator
   const [showConfidence, setShowConfidence] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('showConfidenceIndicator');
-      return saved !== null ? saved === 'true' : true; // Default to true
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("showConfidenceIndicator");
+      return saved !== null ? saved === "true" : true; // Default to true
     }
     return true;
   });
@@ -132,8 +151,15 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
       setShowConfidence(customEvent.detail);
     };
 
-    window.addEventListener('confidenceIndicatorChanged', handleConfidenceChange);
-    return () => window.removeEventListener('confidenceIndicatorChanged', handleConfidenceChange);
+    window.addEventListener(
+      "confidenceIndicatorChanged",
+      handleConfidenceChange,
+    );
+    return () =>
+      window.removeEventListener(
+        "confidenceIndicatorChanged",
+        handleConfidenceChange,
+      );
   }, []);
 
   // Listen for speech-detected event
@@ -141,8 +167,8 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
     let unsubscribe: (() => void) | undefined;
 
     const setupListener = async () => {
-      const { listen } = await import('@tauri-apps/api/event');
-      unsubscribe = await listen<SpeechDetectedEvent>('speech-detected', () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      unsubscribe = await listen<SpeechDetectedEvent>("speech-detected", () => {
         setSpeechDetected(true);
       });
     };
@@ -175,8 +201,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
     }
 
     // Find the latest non-partial transcript
-    const latestTranscript = transcripts
-      .slice(-1)[0];
+    const latestTranscript = transcripts.slice(-1)[0];
 
     if (!latestTranscript) return;
 
@@ -204,7 +229,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
       setStreamingTranscript({
         id: latestTranscript.id,
         visibleText: fullText.substring(0, INITIAL_CHARS),
-        fullText: fullText
+        fullText: fullText,
       });
 
       streamingIntervalRef.current = setInterval(() => {
@@ -216,11 +241,11 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
           streamingIntervalRef.current = null;
           setStreamingTranscript(null);
         } else {
-          setStreamingTranscript(prev => {
+          setStreamingTranscript((prev) => {
             if (!prev) return null;
             return {
               ...prev,
-              visibleText: fullText.substring(0, charIndex)
+              visibleText: fullText.substring(0, charIndex),
             };
           });
         }
@@ -252,20 +277,29 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
 
       {transcripts?.map((transcript, index) => {
         const isStreaming = streamingTranscript?.id === transcript.id;
-        const textToShow = isStreaming ? streamingTranscript.visibleText : transcript.text;
+        const textToShow = isStreaming
+          ? streamingTranscript.visibleText
+          : transcript.text;
         // Clean up text for display - remove repetitions and filler words
         const filteredText = cleanStopWords(textToShow);
         // Show [Silence] ONLY if the ORIGINAL transcript was empty (not just after filtering)
-        const originalWasEmpty = transcript.text.trim() === '';
-        const displayText = originalWasEmpty && !isStreaming ? '[Silence]' : filteredText;
+        const originalWasEmpty = transcript.text.trim() === "";
+        const displayText =
+          originalWasEmpty && !isStreaming ? "[Silence]" : filteredText;
 
         // Sizer text: use cleaned version for proper sizing, fallback to [Silence] only if original was empty
-        const sizerText = cleanStopWords(isStreaming ? streamingTranscript.fullText : transcript.text)
-          || (originalWasEmpty && !isStreaming ? '[Silence]' : '');
+        const sizerText =
+          cleanStopWords(
+            isStreaming ? streamingTranscript.fullText : transcript.text,
+          ) || (originalWasEmpty && !isStreaming ? "[Silence]" : "");
 
         return (
           <motion.div
-            key={transcript.id ? `${transcript.id}-${index}` : `transcript-${index}`}
+            key={
+              transcript.id
+                ? `${transcript.id}-${index}`
+                : `transcript-${index}`
+            }
             initial={{ opacity: 0, y: 5 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.15 }}
@@ -299,7 +333,10 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
                   // Streaming transcript - show in bubble (full width)
                   <div className="bg-muted border border-border rounded-lg px-3 py-2">
                     <div className="relative">
-                      <p className="text-base text-foreground leading-relaxed" style={{ visibility: 'hidden' }}>
+                      <p
+                        className="text-base text-foreground leading-relaxed"
+                        style={{ visibility: "hidden" }}
+                      >
                         {sizerText}
                       </p>
                       <p className="text-base text-foreground leading-relaxed absolute top-0 left-0">
@@ -310,7 +347,10 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
                 ) : (
                   // Regular transcript - simple text
                   <div className="relative">
-                    <p className="text-base text-foreground leading-relaxed" style={{ visibility: 'hidden' }}>
+                    <p
+                      className="text-base text-foreground leading-relaxed"
+                      style={{ visibility: "hidden" }}
+                    >
                       {sizerText}
                     </p>
                     <p className="text-base text-foreground leading-relaxed absolute top-0 left-0">
@@ -325,17 +365,21 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
       })}
 
       {/* Show listening indicator when recording and has transcripts */}
-      {!isStopping && isRecording && !isPaused && !isProcessing && transcripts.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          className="flex items-center gap-2 mt-4 text-muted-foreground"
-        >
-          <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-          <span className="text-sm">Listening...</span>
-        </motion.div>
-      )}
+      {!isStopping &&
+        isRecording &&
+        !isPaused &&
+        !isProcessing &&
+        transcripts.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="flex items-center gap-2 mt-4 text-muted-foreground"
+          >
+            <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+            <span className="text-sm">Listening...</span>
+          </motion.div>
+        )}
 
       {/* Empty state when no transcripts */}
       {transcripts.length === 0 && (
@@ -347,21 +391,25 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({ transcripts, isR
           {isRecording ? (
             <>
               <div className="flex items-center justify-center mb-3">
-                <div className={`w-3 h-3 rounded-full ${isPaused ? 'bg-orange-500' : 'bg-blue-500 animate-pulse'}`}></div>
+                <div
+                  className={`w-3 h-3 rounded-full ${isPaused ? "bg-orange-500" : "bg-blue-500 animate-pulse"}`}
+                ></div>
               </div>
               <p className="text-sm text-muted-foreground">
-                {isPaused ? 'Recording paused' : 'Listening for speech...'}
+                {isPaused ? "Recording paused" : "Listening for speech..."}
               </p>
               <p className="text-xs mt-1 text-muted-foreground/70">
                 {isPaused
-                  ? 'Click resume to continue recording'
-                  : 'Speak to see live transcription'}
+                  ? "Click resume to continue recording"
+                  : "Speak to see live transcription"}
               </p>
             </>
           ) : (
             <>
               <p className="text-lg font-semibold">Welcome to meetily!</p>
-              <p className="text-xs mt-1">Start recording to see live transcription</p>
+              <p className="text-xs mt-1">
+                Start recording to see live transcription
+              </p>
             </>
           )}
         </motion.div>

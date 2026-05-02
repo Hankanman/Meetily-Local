@@ -1,26 +1,26 @@
 //! Modern audio system based on new architecture
-//! 
+//!
 //! This module provides a professional-grade audio processing system that replaces
 //! the legacy audio system while maintaining full backward compatibility.
 
-pub mod stream;
+pub mod compatibility;
+pub mod limiter;
 pub mod mixer;
 pub mod normalizer;
-pub mod resampler;
 pub mod recorder;
-pub mod compatibility;
+pub mod resampler;
+pub mod stream;
 pub mod sync;
-pub mod limiter;
 
 // Re-export main types for easy access
-pub use stream::{ModernAudioStream, ModernAudioStreamManager, ProcessedAudio, UnifiedAudioStream};
-pub use mixer::{AudioMixer, MixingMode, AudioLevelStats};
-pub use normalizer::AudioNormalizer;
-pub use resampler::DynamicResampler;
-pub use recorder::ModernRecorder;
-pub use compatibility::{LegacyBridge, AudioMode, AudioQualityMetrics};
-pub use sync::{AudioSynchronizer, SynchronizedChunk};
+pub use compatibility::{AudioMode, AudioQualityMetrics, LegacyBridge};
 pub use limiter::TruePeakLimiter;
+pub use mixer::{AudioLevelStats, AudioMixer, MixingMode};
+pub use normalizer::AudioNormalizer;
+pub use recorder::ModernRecorder;
+pub use resampler::DynamicResampler;
+pub use stream::{ModernAudioStream, ModernAudioStreamManager, ProcessedAudio, UnifiedAudioStream};
+pub use sync::{AudioSynchronizer, SynchronizedChunk};
 
 use anyhow::Result;
 use std::sync::Arc;
@@ -56,7 +56,7 @@ impl Default for AudioConfig {
         Self {
             target_sample_rate: 48000,
             normalization_target_lufs: -23.0, // EBU R128 standard for speech
-            sync_tolerance_ms: 1, // 1ms tolerance for perfect sync
+            sync_tolerance_ms: 1,             // 1ms tolerance for perfect sync
             enable_true_peak_limiting: true,
             mixing_mode: MixingMode::Professional,
         }

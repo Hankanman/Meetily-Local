@@ -21,7 +21,13 @@ interface TiptapSummaryViewProps {
   /** Called on save; we always emit markdown — no editor-specific JSON. */
   onSave?: (data: { markdown: string }) => void;
   onSummaryChange?: (summary: Summary) => void;
-  status?: "idle" | "processing" | "summarizing" | "regenerating" | "completed" | "error";
+  status?:
+    | "idle"
+    | "processing"
+    | "summarizing"
+    | "regenerating"
+    | "completed"
+    | "error";
   error?: string | null;
   onRegenerateSummary?: () => void;
   meeting?: {
@@ -39,8 +45,12 @@ export interface TiptapSummaryViewRef {
 }
 
 // Format detection — markdown-first since we no longer store editor-specific JSON.
-function detectSummaryFormat(data: unknown): { format: SummaryFormat; data: any } {
-  if (!data || typeof data !== "object") return { format: "legacy", data: null };
+function detectSummaryFormat(data: unknown): {
+  format: SummaryFormat;
+  data: any;
+} {
+  if (!data || typeof data !== "object")
+    return { format: "legacy", data: null };
   const d = data as Record<string, unknown>;
 
   // Markdown is the canonical storage format going forward. Older saves
@@ -62,7 +72,10 @@ function detectSummaryFormat(data: unknown): { format: SummaryFormat; data: any 
   return { format: "legacy", data: null };
 }
 
-export const TiptapSummaryView = forwardRef<TiptapSummaryViewRef, TiptapSummaryViewProps>(
+export const TiptapSummaryView = forwardRef<
+  TiptapSummaryViewRef,
+  TiptapSummaryViewProps
+>(
   (
     {
       summaryData,
@@ -125,7 +138,9 @@ export const TiptapSummaryView = forwardRef<TiptapSummaryViewRef, TiptapSummaryV
           // entries that have no markdown stored.
           if (editorRef.current) {
             const md = (
-              editorRef.current.storage as { markdown?: { getMarkdown(): string } }
+              editorRef.current.storage as {
+                markdown?: { getMarkdown(): string };
+              }
             ).markdown?.getMarkdown();
             if (typeof md === "string") return md;
           }

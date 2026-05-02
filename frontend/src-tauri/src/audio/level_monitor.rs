@@ -1,13 +1,13 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::Mutex;
-use tokio::time::{interval, Duration};
-use tauri::{AppHandle, Emitter, Runtime};
 use anyhow::Result;
-use log::{debug, error, info, warn};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Sample, SampleFormat, SampleRate, StreamConfig};
+use log::{debug, error, info, warn};
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Runtime};
+use tokio::sync::Mutex;
+use tokio::time::{interval, Duration};
 
 use super::audio_processing::audio_to_mono;
 
@@ -47,9 +47,9 @@ fn pick_linux_48k_input_config(device: &cpal::Device) -> Option<cpal::SupportedS
 pub struct AudioLevelData {
     pub device_name: String,
     pub device_type: String, // "input" or "output"
-    pub rms_level: f32,     // RMS level (0.0 to 1.0)
-    pub peak_level: f32,    // Peak level (0.0 to 1.0)
-    pub is_active: bool,    // Whether audio is being detected
+    pub rms_level: f32,      // RMS level (0.0 to 1.0)
+    pub peak_level: f32,     // Peak level (0.0 to 1.0)
+    pub is_active: bool,     // Whether audio is being detected
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -82,7 +82,10 @@ impl AudioLevelMonitor {
             AUDIO_LEVEL_STATE_IS_MONITORING.store(false, Ordering::SeqCst);
         }
 
-        info!("Starting audio level monitoring for devices: {:?}", device_names);
+        info!(
+            "Starting audio level monitoring for devices: {:?}",
+            device_names
+        );
 
         AUDIO_LEVEL_STATE_IS_MONITORING.store(true, Ordering::SeqCst);
         *self.monitored_devices.lock().await = device_names.clone();
@@ -99,7 +102,10 @@ impl AudioLevelMonitor {
         // Create audio streams for each device
         for device_name in &device_names {
             if let Ok(device) = self.find_device_by_name(&host, device_name) {
-                if let Ok(stream) = self.create_level_stream(&device, device_name, level_data.clone()).await {
+                if let Ok(stream) = self
+                    .create_level_stream(&device, device_name, level_data.clone())
+                    .await
+                {
                     let mut streams = self.streams.lock().await;
                     streams.push(stream);
                 } else {
@@ -210,14 +216,17 @@ impl AudioLevelMonitor {
         // drags every other audio client into that quantum (audible fuzz on
         // concurrent Teams/Zoom/browser WebRTC calls).
         let (config, is_input) = {
-            let input_cfg = pick_linux_48k_input_config(device)
-                .or_else(|| device.default_input_config().ok());
+            let input_cfg =
+                pick_linux_48k_input_config(device).or_else(|| device.default_input_config().ok());
             if let Some(c) = input_cfg {
                 (c, true)
             } else if let Ok(output_config) = device.default_output_config() {
                 (output_config, false)
             } else {
-                return Err(anyhow::anyhow!("Failed to get any config for device: {}", device_name));
+                return Err(anyhow::anyhow!(
+                    "Failed to get any config for device: {}",
+                    device_name
+                ));
             }
         };
 
@@ -225,8 +234,10 @@ impl AudioLevelMonitor {
         let channels = config.channels();
         let sample_format = config.sample_format();
 
-        debug!("Creating audio level stream for {}: {}Hz, {} channels, {:?}, is_input: {}",
-               device_name, sample_rate, channels, sample_format, is_input);
+        debug!(
+            "Creating audio level stream for {}: {}Hz, {} channels, {:?}, is_input: {}",
+            device_name, sample_rate, channels, sample_format, is_input
+        );
 
         // Determine device type
         let device_type = if is_input { "input" } else { "output" };
@@ -262,7 +273,10 @@ impl AudioLevelMonitor {
                 } else {
                     // For output devices, we can't easily monitor levels in real-time
                     // This is a limitation of most audio systems - output monitoring requires loopback
-                    return Err(anyhow::anyhow!("Output device monitoring not supported yet: {}", device_name));
+                    return Err(anyhow::anyhow!(
+                        "Output device monitoring not supported yet: {}",
+                        device_name
+                    ));
                 };
 
                 stream.play()?;
@@ -270,7 +284,10 @@ impl AudioLevelMonitor {
             }
             SampleFormat::I16 => {
                 if !is_input {
-                    return Err(anyhow::anyhow!("Output device monitoring not supported yet: {}", device_name));
+                    return Err(anyhow::anyhow!(
+                        "Output device monitoring not supported yet: {}",
+                        device_name
+                    ));
                 }
 
                 let stream = device.build_input_stream(
@@ -294,7 +311,10 @@ impl AudioLevelMonitor {
             }
             SampleFormat::U16 => {
                 if !is_input {
-                    return Err(anyhow::anyhow!("Output device monitoring not supported yet: {}", device_name));
+                    return Err(anyhow::anyhow!(
+                        "Output device monitoring not supported yet: {}",
+                        device_name
+                    ));
                 }
 
                 let stream = device.build_input_stream(
@@ -316,7 +336,10 @@ impl AudioLevelMonitor {
                 stream.play()?;
                 Ok(stream)
             }
-            _ => Err(anyhow::anyhow!("Unsupported sample format: {:?}", sample_format)),
+            _ => Err(anyhow::anyhow!(
+                "Unsupported sample format: {:?}",
+                sample_format
+            )),
         }
     }
 }

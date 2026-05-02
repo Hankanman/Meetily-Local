@@ -173,8 +173,7 @@ pub async fn generate_with_builtin(
     let model_path = get_cached_model_path(app_data_dir, model_name)?;
 
     // Apply model-specific chat template
-    let formatted_prompt =
-        models::format_prompt(&model_def.template, system_prompt, user_prompt)?;
+    let formatted_prompt = models::format_prompt(&model_def.template, system_prompt, user_prompt)?;
     // Get or initialize sidecar manager
     let manager = {
         let mut global_manager = SIDECAR_MANAGER.lock().await;

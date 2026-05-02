@@ -1,7 +1,7 @@
-import React from 'react';
-import { Download } from 'lucide-react';
-import { toast } from 'sonner';
-import { UpdateInfo } from '@/services/updateService';
+import React from "react";
+import { Download } from "lucide-react";
+import { toast } from "sonner";
+import { UpdateInfo } from "@/services/updateService";
 
 let globalShowDialogCallback: (() => void) | null = null;
 
@@ -9,7 +9,10 @@ export function setUpdateDialogCallback(callback: () => void) {
   globalShowDialogCallback = callback;
 }
 
-export function showUpdateNotification(updateInfo: UpdateInfo, onUpdateClick?: () => void) {
+export function showUpdateNotification(
+  updateInfo: UpdateInfo,
+  onUpdateClick?: () => void,
+) {
   const handleClick = () => {
     if (onUpdateClick) {
       onUpdateClick();
@@ -41,7 +44,7 @@ export function showUpdateNotification(updateInfo: UpdateInfo, onUpdateClick?: (
     </div>,
     {
       duration: 10000,
-      position: 'bottom-center',
-    }
+      position: "bottom-center",
+    },
   );
 }

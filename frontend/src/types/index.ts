@@ -14,8 +14,8 @@ export interface Transcript {
   confidence?: number;
   // NEW: Recording-relative timestamps for playback sync
   audio_start_time?: number; // Seconds from recording start (e.g., 125.3)
-  audio_end_time?: number;   // Seconds from recording start (e.g., 128.6)
-  duration?: number;          // Segment duration in seconds (e.g., 3.3)
+  audio_end_time?: number; // Seconds from recording start (e.g., 128.6)
+  duration?: number; // Segment duration in seconds (e.g., 3.3)
 }
 
 export interface TranscriptUpdate {
@@ -28,8 +28,8 @@ export interface TranscriptUpdate {
   confidence: number;
   // NEW: Recording-relative timestamps for playback sync
   audio_start_time: number; // Seconds from recording start
-  audio_end_time: number;   // Seconds from recording start
-  duration: number;          // Segment duration in seconds
+  audio_end_time: number; // Seconds from recording start
+  duration: number; // Segment duration in seconds
 }
 
 export interface Block {
@@ -68,7 +68,7 @@ export interface SummaryResponse {
 // Summary storage formats. `blocknote` is retained as a value so existing
 // stored payloads with `summary_json` aren't treated as parse errors;
 // going forward the only live format is `markdown`.
-export type SummaryFormat = 'legacy' | 'markdown' | 'blocknote';
+export type SummaryFormat = "legacy" | "markdown" | "blocknote";
 
 export interface SummaryDataResponse {
   markdown?: string;

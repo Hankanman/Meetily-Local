@@ -1,15 +1,15 @@
-import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
-import { PermissionWarning } from '@/components/PermissionWarning';
-import { Button } from '@/components/ui/button';
-import { ButtonGroup } from '@/components/ui/button-group';
-import { Copy, GlobeIcon } from 'lucide-react';
-import { useTranscripts } from '@/contexts/TranscriptContext';
-import { useConfig } from '@/contexts/ConfigContext';
-import { useRecordingState } from '@/contexts/RecordingStateContext';
-import { usePermissionCheck } from '@/hooks/usePermissionCheck';
-import { ModalType } from '@/hooks/useModalState';
-import { useIsLinux } from '@/hooks/usePlatform';
-import { useMemo } from 'react';
+import { VirtualizedTranscriptView } from "@/components/VirtualizedTranscriptView";
+import { PermissionWarning } from "@/components/PermissionWarning";
+import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
+import { Copy, GlobeIcon } from "lucide-react";
+import { useTranscripts } from "@/contexts/TranscriptContext";
+import { useConfig } from "@/contexts/ConfigContext";
+import { useRecordingState } from "@/contexts/RecordingStateContext";
+import { usePermissionCheck } from "@/hooks/usePermissionCheck";
+import { ModalType } from "@/hooks/useModalState";
+import { useIsLinux } from "@/hooks/usePlatform";
+import { useMemo } from "react";
 
 /**
  * TranscriptPanel Component
@@ -28,29 +28,35 @@ interface TranscriptPanelProps {
 export function TranscriptPanel({
   isProcessingStop,
   isStopping,
-  showModal
+  showModal,
 }: TranscriptPanelProps) {
   // Contexts
-  const { transcripts, transcriptContainerRef, copyTranscript } = useTranscripts();
+  const { transcripts, transcriptContainerRef, copyTranscript } =
+    useTranscripts();
   const { transcriptModelConfig } = useConfig();
   const { isRecording, isPaused } = useRecordingState();
-  const { checkPermissions, isChecking, hasSystemAudio, hasMicrophone } = usePermissionCheck();
+  const { checkPermissions, isChecking, hasSystemAudio, hasMicrophone } =
+    usePermissionCheck();
   const isLinux = useIsLinux();
 
   // Convert transcripts to segments for virtualized view
-  const segments = useMemo(() =>
-    transcripts.map(t => ({
-      id: t.id,
-      timestamp: t.audio_start_time ?? 0,
-      endTime: t.audio_end_time,
-      text: t.text,
-      confidence: t.confidence,
-    })),
-    [transcripts]
+  const segments = useMemo(
+    () =>
+      transcripts.map((t) => ({
+        id: t.id,
+        timestamp: t.audio_start_time ?? 0,
+        endTime: t.audio_end_time,
+        text: t.text,
+        confidence: t.confidence,
+      })),
+    [transcripts],
   );
 
   return (
-    <div ref={transcriptContainerRef} className="w-full border-r border-border bg-background flex flex-col overflow-y-auto">
+    <div
+      ref={transcriptContainerRef}
+      className="w-full border-r border-border bg-background flex flex-col overflow-y-auto"
+    >
       {/* Title area - Sticky header */}
       <div className="sticky top-0 z-10 bg-background p-4 border-border">
         <div className="flex flex-col space-y-3">
@@ -65,24 +71,20 @@ export function TranscriptPanel({
                     title="Copy Transcript"
                   >
                     <Copy />
-                    <span className='hidden md:inline'>
-                      Copy
-                    </span>
+                    <span className="hidden md:inline">Copy</span>
                   </Button>
                 )}
-                {transcriptModelConfig.provider === "localWhisper" &&
+                {transcriptModelConfig.provider === "localWhisper" && (
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => showModal('languageSettings')}
+                    onClick={() => showModal("languageSettings")}
                     title="Language"
                   >
                     <GlobeIcon />
-                    <span className='hidden md:inline'>
-                      Language
-                    </span>
+                    <span className="hidden md:inline">Language</span>
                   </Button>
-                }
+                )}
               </ButtonGroup>
             </div>
           </div>

@@ -1,1 +1,1 @@
-export { TranscriptRecovery } from './TranscriptRecovery';
+export { TranscriptRecovery } from "./TranscriptRecovery";

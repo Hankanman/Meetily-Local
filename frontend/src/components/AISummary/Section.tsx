@@ -1,27 +1,45 @@
-'use client';
+"use client";
 
-import { Section as SectionType, Block } from '@/types';
-import { BlockComponent } from './Block';
-import { EditableTitle } from '../EditableTitle';
-import { useState, useRef } from 'react';
-import { motion } from 'framer-motion';
+import { Section as SectionType, Block } from "@/types";
+import { BlockComponent } from "./Block";
+import { EditableTitle } from "../EditableTitle";
+import { useState, useRef } from "react";
+import { motion } from "framer-motion";
 
 interface SectionProps {
   section: SectionType;
   sectionKey: string;
   selectedBlocks: string[];
-  onBlockTypeChange: (blockId: string, type: Block['type']) => void;
+  onBlockTypeChange: (blockId: string, type: Block["type"]) => void;
   onBlockChange: (blockId: string, content: string) => void;
-  onBlockMouseDown: (blockId: string, e: React.MouseEvent<HTMLDivElement>) => void;
+  onBlockMouseDown: (
+    blockId: string,
+    e: React.MouseEvent<HTMLDivElement>,
+  ) => void;
   onBlockMouseEnter: (blockId: string) => void;
-  onBlockMouseUp: (blockId: string, e: React.MouseEvent<HTMLDivElement>) => void;
-  onKeyDown: (e: React.KeyboardEvent, blockId: string, newBlockContent?: string) => void;
+  onBlockMouseUp: (
+    blockId: string,
+    e: React.MouseEvent<HTMLDivElement>,
+  ) => void;
+  onKeyDown: (
+    e: React.KeyboardEvent,
+    blockId: string,
+    newBlockContent?: string,
+  ) => void;
   onTitleChange?: (sectionKey: string, title: string) => void;
   onSectionDelete?: (sectionKey: string) => void;
   onBlockDelete: (blockId: string, mergeContent?: string) => void;
   onContextMenu: (e: React.MouseEvent) => void;
-  onBlockNavigate?: (blockId: string, direction: 'up' | 'down', cursorPosition: number) => void;
-  onCreateNewBlock?: (blockId: string, newBlockContent: string, blockType: Block['type']) => void;
+  onBlockNavigate?: (
+    blockId: string,
+    direction: "up" | "down",
+    cursorPosition: number,
+  ) => void;
+  onCreateNewBlock?: (
+    blockId: string,
+    newBlockContent: string,
+    blockType: Block["type"],
+  ) => void;
 }
 
 export const Section: React.FC<SectionProps> = ({
@@ -51,7 +69,7 @@ export const Section: React.FC<SectionProps> = ({
   };
 
   const handleTitleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       setIsEditingTitle(false);
     }
   };
@@ -70,7 +88,9 @@ export const Section: React.FC<SectionProps> = ({
           onStartEditing={() => setIsEditingTitle(true)}
           onFinishEditing={() => setIsEditingTitle(false)}
           onChange={handleTitleChange}
-          onDelete={onSectionDelete ? () => onSectionDelete(sectionKey) : undefined}
+          onDelete={
+            onSectionDelete ? () => onSectionDelete(sectionKey) : undefined
+          }
         />
         {onSectionDelete && (
           <button
@@ -102,18 +122,24 @@ export const Section: React.FC<SectionProps> = ({
               onMouseEnter={() => onBlockMouseEnter(block.id)}
               onMouseUp={(e) => onBlockMouseUp(block.id, e)}
               onKeyDown={(e) => {
-                const newBlockContent = (e.currentTarget as HTMLTextAreaElement).dataset.newBlockContent;
+                const newBlockContent = (e.currentTarget as HTMLTextAreaElement)
+                  .dataset.newBlockContent;
                 onKeyDown(e, block.id, newBlockContent);
               }}
               onDelete={() => {
-                const textarea = document.querySelector(`[data-block-id="${block.id}"]`) as HTMLTextAreaElement;
+                const textarea = document.querySelector(
+                  `[data-block-id="${block.id}"]`,
+                ) as HTMLTextAreaElement;
                 const mergeContent = textarea?.dataset.mergeContent;
                 onBlockDelete(block.id, mergeContent);
               }}
               onContextMenu={onContextMenu}
-              onNavigate={onBlockNavigate ? 
-                (direction, cursorPosition) => onBlockNavigate(block.id, direction, cursorPosition)
-                : undefined}
+              onNavigate={
+                onBlockNavigate
+                  ? (direction, cursorPosition) =>
+                      onBlockNavigate(block.id, direction, cursorPosition)
+                  : undefined
+              }
               onCreateNewBlock={onCreateNewBlock}
             />
           </motion.div>

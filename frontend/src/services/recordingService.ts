@@ -5,8 +5,8 @@
  * Pure 1-to-1 wrapper - no error handling changes, exact same behavior as direct invoke/listen calls.
  */
 
-import { invoke } from '@tauri-apps/api/core';
-import { listen, UnlistenFn } from '@tauri-apps/api/event';
+import { invoke } from "@tauri-apps/api/core";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
 export interface RecordingState {
   is_recording: boolean;
@@ -32,7 +32,7 @@ export class RecordingService {
    * @returns Promise<boolean>
    */
   async isRecording(): Promise<boolean> {
-    return invoke<boolean>('is_recording');
+    return invoke<boolean>("is_recording");
   }
 
   /**
@@ -40,7 +40,7 @@ export class RecordingService {
    * @returns Promise with full recording state
    */
   async getRecordingState(): Promise<RecordingState> {
-    return invoke<RecordingState>('get_recording_state');
+    return invoke<RecordingState>("get_recording_state");
   }
 
   /**
@@ -48,7 +48,7 @@ export class RecordingService {
    * @returns Promise<string | null>
    */
   async getRecordingMeetingName(): Promise<string | null> {
-    return invoke<string | null>('get_recording_meeting_name');
+    return invoke<string | null>("get_recording_meeting_name");
   }
 
   /**
@@ -56,7 +56,7 @@ export class RecordingService {
    * @returns Promise<void>
    */
   async startRecording(): Promise<void> {
-    return invoke('start_recording');
+    return invoke("start_recording");
   }
 
   /**
@@ -69,12 +69,12 @@ export class RecordingService {
   async startRecordingWithDevices(
     micDeviceName: string | null,
     systemDeviceName: string | null,
-    meetingName: string
+    meetingName: string,
   ): Promise<void> {
-    return invoke('start_recording_with_devices_and_meeting', {
+    return invoke("start_recording_with_devices_and_meeting", {
       mic_device_name: micDeviceName,
       system_device_name: systemDeviceName,
-      meeting_name: meetingName
+      meeting_name: meetingName,
     });
   }
 
@@ -84,8 +84,8 @@ export class RecordingService {
    * @returns Promise<void>
    */
   async stopRecording(savePath: string): Promise<void> {
-    return invoke('stop_recording', {
-      args: { save_path: savePath }
+    return invoke("stop_recording", {
+      args: { save_path: savePath },
     });
   }
 
@@ -94,7 +94,7 @@ export class RecordingService {
    * @returns Promise<void>
    */
   async pauseRecording(): Promise<void> {
-    return invoke('pause_recording');
+    return invoke("pause_recording");
   }
 
   /**
@@ -102,7 +102,7 @@ export class RecordingService {
    * @returns Promise<void>
    */
   async resumeRecording(): Promise<void> {
-    return invoke('resume_recording');
+    return invoke("resume_recording");
   }
 
   // Event Listeners
@@ -113,7 +113,7 @@ export class RecordingService {
    * @returns Promise that resolves to unlisten function
    */
   async onRecordingStarted(callback: () => void): Promise<UnlistenFn> {
-    return listen('recording-started', callback);
+    return listen("recording-started", callback);
   }
 
   /**
@@ -121,8 +121,10 @@ export class RecordingService {
    * @param callback - Function to call when recording stops
    * @returns Promise that resolves to unlisten function
    */
-  async onRecordingStopped(callback: (payload: RecordingStoppedPayload) => void): Promise<UnlistenFn> {
-    return listen<RecordingStoppedPayload>('recording-stopped', (event) => {
+  async onRecordingStopped(
+    callback: (payload: RecordingStoppedPayload) => void,
+  ): Promise<UnlistenFn> {
+    return listen<RecordingStoppedPayload>("recording-stopped", (event) => {
       callback(event.payload);
     });
   }
@@ -133,7 +135,7 @@ export class RecordingService {
    * @returns Promise that resolves to unlisten function
    */
   async onRecordingPaused(callback: () => void): Promise<UnlistenFn> {
-    return listen('recording-paused', callback);
+    return listen("recording-paused", callback);
   }
 
   /**
@@ -142,7 +144,7 @@ export class RecordingService {
    * @returns Promise that resolves to unlisten function
    */
   async onRecordingResumed(callback: () => void): Promise<UnlistenFn> {
-    return listen('recording-resumed', callback);
+    return listen("recording-resumed", callback);
   }
 
   /**
@@ -150,8 +152,10 @@ export class RecordingService {
    * @param callback - Function to call when chunks are dropped
    * @returns Promise that resolves to unlisten function
    */
-  async onChunkDropWarning(callback: (warning: string) => void): Promise<UnlistenFn> {
-    return listen<string>('chunk-drop-warning', (event) => {
+  async onChunkDropWarning(
+    callback: (warning: string) => void,
+  ): Promise<UnlistenFn> {
+    return listen<string>("chunk-drop-warning", (event) => {
       callback(event.payload);
     });
   }
@@ -162,7 +166,7 @@ export class RecordingService {
    * @returns Promise that resolves to unlisten function
    */
   async onSpeechDetected(callback: () => void): Promise<UnlistenFn> {
-    return listen('speech-detected', callback);
+    return listen("speech-detected", callback);
   }
 }
 

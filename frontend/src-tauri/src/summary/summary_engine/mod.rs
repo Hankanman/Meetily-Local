@@ -8,7 +8,9 @@ pub mod models;
 pub mod sidecar;
 
 // Re-export commonly used types
-pub use client::{generate_with_builtin, is_sidecar_healthy, shutdown_sidecar_gracefully, force_shutdown_sidecar};
+pub use client::{
+    force_shutdown_sidecar, generate_with_builtin, is_sidecar_healthy, shutdown_sidecar_gracefully,
+};
 // Re-export non-command items only; Tauri commands stay at
 // summary::summary_engine::commands::* and are referenced that way in
 // generate_handler!.

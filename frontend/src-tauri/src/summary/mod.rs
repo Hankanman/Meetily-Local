@@ -6,7 +6,6 @@
 /// - Service layer for orchestrating summary generation
 /// - Templates for structured meeting summary generation
 /// - Tauri commands for frontend integration
-
 use serde::{Deserialize, Serialize};
 
 /// Custom OpenAI-compatible endpoint configuration

@@ -1,20 +1,20 @@
 //! Async stream-based audio handling
-//! 
+//!
 //! This module provides the foundation for the modern audio system using
 //! async streams instead of callbacks and static buffers.
 
 use anyhow::Result;
-use futures_util::Stream;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::sync::Arc;
-use tokio::sync::mpsc;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{Device, Stream, SupportedStreamConfig};
+use futures_util::Stream;
 use log::{error, info, warn};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use tokio::sync::mpsc;
 
-use crate::audio::core::{AudioDevice, get_device_and_config};
-use crate::audio::recording_state::{RecordingState, DeviceType};
+use crate::audio::core::{get_device_and_config, AudioDevice};
+use crate::audio::recording_state::{DeviceType, RecordingState};
 
 /// Processed audio data from the stream
 #[derive(Debug, Clone)]
@@ -42,14 +42,21 @@ impl ModernAudioStream {
         device: Arc<AudioDevice>,
         device_type: DeviceType,
     ) -> Result<(Self, mpsc::UnboundedSender<ProcessedAudio>)> {
-        info!("Creating modern async audio stream for device: {}", device.name);
+        info!(
+            "Creating modern async audio stream for device: {}",
+            device.name
+        );
 
         // Get the underlying cpal device and config
         let (cpal_device, config) = get_device_and_config(&device).await?;
         let sample_rate = config.sample_rate().0;
 
-        info!("Modern audio config - Sample rate: {}, Channels: {}, Format: {:?}",
-              sample_rate, config.channels(), config.sample_format());
+        info!(
+            "Modern audio config - Sample rate: {}, Channels: {}, Format: {:?}",
+            sample_rate,
+            config.channels(),
+            config.sample_format()
+        );
 
         // Create channel for processed audio
         let (sender, receiver) = mpsc::unbounded_channel::<ProcessedAudio>();
@@ -67,7 +74,10 @@ impl ModernAudioStream {
 
         // Start the stream
         stream.play()?;
-        info!("Modern async audio stream started for device: {}", device.name);
+        info!(
+            "Modern async audio stream started for device: {}",
+            device.name
+        );
 
         Ok((
             Self {
@@ -108,7 +118,8 @@ impl ModernAudioStream {
                 device.build_input_stream(
                     &config_copy.into(),
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        let f32_data: Vec<f32> = data.iter()
+                        let f32_data: Vec<f32> = data
+                            .iter()
                             .map(|&sample| sample as f32 / i16::MAX as f32)
                             .collect();
                         processor.process_audio_data(&f32_data);
@@ -124,7 +135,8 @@ impl ModernAudioStream {
                 device.build_input_stream(
                     &config_copy.into(),
                     move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                        let f32_data: Vec<f32> = data.iter()
+                        let f32_data: Vec<f32> = data
+                            .iter()
                             .map(|&sample| sample as f32 / i32::MAX as f32)
                             .collect();
                         processor.process_audio_data(&f32_data);
@@ -140,7 +152,8 @@ impl ModernAudioStream {
                 device.build_input_stream(
                     &config_copy.into(),
                     move |data: &[i8], _: &cpal::InputCallbackInfo| {
-                        let f32_data: Vec<f32> = data.iter()
+                        let f32_data: Vec<f32> = data
+                            .iter()
                             .map(|&sample| sample as f32 / i8::MAX as f32)
                             .collect();
                         processor.process_audio_data(&f32_data);
@@ -152,7 +165,10 @@ impl ModernAudioStream {
                 )?
             }
             _ => {
-                return Err(anyhow::anyhow!("Unsupported sample format: {:?}", config.sample_format()));
+                return Err(anyhow::anyhow!(
+                    "Unsupported sample format: {:?}",
+                    config.sample_format()
+                ));
             }
         };
 
@@ -176,7 +192,10 @@ impl ModernAudioStream {
 
     /// Stop the stream
     pub fn stop(self) -> Result<()> {
-        info!("Stopping modern async audio stream for device: {}", self.device.name);
+        info!(
+            "Stopping modern async audio stream for device: {}",
+            self.device.name
+        );
         drop(self.stream);
         Ok(())
     }
@@ -217,8 +236,10 @@ impl AudioProcessor {
     }
 
     fn process_audio_data(&self, data: &[f32]) {
-        let chunk_id = self.chunk_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        
+        let chunk_id = self
+            .chunk_counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
         // Create timestamp based on chunk ID and sample rate
         let timestamp = chunk_id as f64 * data.len() as f64 / self.sample_rate as f64;
 
@@ -332,7 +353,10 @@ impl ModernAudioStreamManager {
         self.system_sender = None;
 
         if !errors.is_empty() {
-            Err(anyhow::anyhow!("Failed to stop some modern streams: {:?}", errors))
+            Err(anyhow::anyhow!(
+                "Failed to stop some modern streams: {:?}",
+                errors
+            ))
         } else {
             info!("All modern async audio streams stopped successfully");
             Ok(())

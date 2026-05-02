@@ -1,5 +1,5 @@
 //! Dynamic resampling
-//! 
+//!
 //! This module provides dynamic resampling capabilities that handle sample
 //! rate changes gracefully, similar to new approach.
 

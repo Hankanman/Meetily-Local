@@ -1,8 +1,8 @@
-import React from 'react';
-import { AlertTriangle, Mic, Speaker, RefreshCw } from 'lucide-react';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { invoke } from '@tauri-apps/api/core';
-import { useIsLinux } from '@/hooks/usePlatform';
+import React from "react";
+import { AlertTriangle, Mic, Speaker, RefreshCw } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { invoke } from "@tauri-apps/api/core";
+import { useIsLinux } from "@/hooks/usePlatform";
 
 interface PermissionWarningProps {
   hasMicrophone: boolean;
@@ -15,7 +15,7 @@ export function PermissionWarning({
   hasMicrophone,
   hasSystemAudio,
   onRecheck,
-  isRechecking = false
+  isRechecking = false,
 }: PermissionWarningProps) {
   const isLinux = useIsLinux();
 
@@ -29,14 +29,16 @@ export function PermissionWarning({
     return null;
   }
 
-  const isMacOS = navigator.userAgent.includes('Mac');
+  const isMacOS = navigator.userAgent.includes("Mac");
 
   const openMicrophoneSettings = async () => {
     if (isMacOS) {
       try {
-        await invoke('open_system_settings', { preferencePane: 'Privacy_Microphone' });
+        await invoke("open_system_settings", {
+          preferencePane: "Privacy_Microphone",
+        });
       } catch (error) {
-        console.error('Failed to open microphone settings:', error);
+        console.error("Failed to open microphone settings:", error);
       }
     }
   };
@@ -44,9 +46,11 @@ export function PermissionWarning({
   const openScreenRecordingSettings = async () => {
     if (isMacOS) {
       try {
-        await invoke('open_system_settings', { preferencePane: 'Privacy_ScreenCapture' });
+        await invoke("open_system_settings", {
+          preferencePane: "Privacy_ScreenCapture",
+        });
       } catch (error) {
-        console.error('Failed to open screen recording settings:', error);
+        console.error("Failed to open screen recording settings:", error);
       }
     }
   };
@@ -61,7 +65,11 @@ export function PermissionWarning({
             <div className="flex items-center gap-2">
               {!hasMicrophone && <Mic className="h-4 w-4" />}
               {!hasSystemAudio && <Speaker className="h-4 w-4" />}
-              {!hasMicrophone && !hasSystemAudio ? 'Permissions Required' : !hasMicrophone ? 'Microphone Permission Required' : 'System Audio Permission Required'}
+              {!hasMicrophone && !hasSystemAudio
+                ? "Permissions Required"
+                : !hasMicrophone
+                  ? "Microphone Permission Required"
+                  : "System Audio Permission Required"}
             </div>
           </AlertTitle>
           {/* Action Buttons */}
@@ -89,7 +97,9 @@ export function PermissionWarning({
               disabled={isRechecking}
               className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 rounded-md transition-colors disabled:opacity-50"
             >
-              <RefreshCw className={`h-4 w-4 ${isRechecking ? 'animate-spin' : ''}`} />
+              <RefreshCw
+                className={`h-4 w-4 ${isRechecking ? "animate-spin" : ""}`}
+              />
               Recheck
             </button>
           </div>
@@ -98,7 +108,8 @@ export function PermissionWarning({
             {!hasMicrophone && (
               <>
                 <p className="mb-3">
-                  Meetily needs access to your microphone to record meetings. No microphone devices were detected.
+                  Meetily needs access to your microphone to record meetings. No
+                  microphone devices were detected.
                 </p>
                 <div className="space-y-2 text-sm mb-4">
                   <p className="font-medium">Please check:</p>
@@ -116,14 +127,18 @@ export function PermissionWarning({
               <>
                 <p className="mb-3">
                   {hasMicrophone
-                    ? 'System audio capture is not available. You can still record with your microphone, but computer audio won\'t be captured.'
-                    : 'System audio capture is also not available.'}
+                    ? "System audio capture is not available. You can still record with your microphone, but computer audio won't be captured."
+                    : "System audio capture is also not available."}
                 </p>
                 {isMacOS && (
                   <div className="space-y-2 text-sm mb-4">
-                    <p className="font-medium">To enable system audio on macOS:</p>
+                    <p className="font-medium">
+                      To enable system audio on macOS:
+                    </p>
                     <ul className="list-disc list-inside ml-2 space-y-1">
-                      <li>Install a virtual audio device (e.g., BlackHole 2ch)</li>
+                      <li>
+                        Install a virtual audio device (e.g., BlackHole 2ch)
+                      </li>
                       <li>Grant Screen Recording permission to Meetily</li>
                       <li>Configure your audio routing in Audio MIDI Setup</li>
                     </ul>
@@ -131,8 +146,6 @@ export function PermissionWarning({
                 )}
               </>
             )}
-
-
           </AlertDescription>
         </Alert>
       )}

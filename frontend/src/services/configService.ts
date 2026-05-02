@@ -5,11 +5,18 @@
  * Pure 1-to-1 wrapper - no error handling changes, exact same behavior as direct invoke calls.
  */
 
-import { invoke } from '@tauri-apps/api/core';
-import { TranscriptModelProps } from '@/components/TranscriptSettings';
+import { invoke } from "@tauri-apps/api/core";
+import { TranscriptModelProps } from "@/components/TranscriptSettings";
 
 export interface ModelConfig {
-  provider: 'ollama' | 'groq' | 'claude' | 'openrouter' | 'openai' | 'builtin-ai' | 'custom-openai';
+  provider:
+    | "ollama"
+    | "groq"
+    | "claude"
+    | "openrouter"
+    | "openai"
+    | "builtin-ai"
+    | "custom-openai";
   model: string;
   whisperModel: string;
   /**
@@ -51,7 +58,7 @@ export class ConfigService {
    * @returns Promise with { provider, model, apiKey }
    */
   async getTranscriptConfig(): Promise<TranscriptModelProps> {
-    return invoke<TranscriptModelProps>('api_get_transcript_config');
+    return invoke<TranscriptModelProps>("api_get_transcript_config");
   }
 
   /**
@@ -59,7 +66,7 @@ export class ConfigService {
    * @returns Promise with { provider, model, whisperModel }
    */
   async getModelConfig(): Promise<ModelConfig> {
-    return invoke<ModelConfig>('api_get_model_config');
+    return invoke<ModelConfig>("api_get_model_config");
   }
 
   /**
@@ -67,7 +74,7 @@ export class ConfigService {
    * @returns Promise with { preferred_mic_device, preferred_system_device }
    */
   async getRecordingPreferences(): Promise<RecordingPreferences> {
-    return invoke<RecordingPreferences>('get_recording_preferences');
+    return invoke<RecordingPreferences>("get_recording_preferences");
   }
 
   /**
@@ -75,7 +82,7 @@ export class ConfigService {
    * @returns Promise with CustomOpenAIConfig or null if not configured
    */
   async getCustomOpenAIConfig(): Promise<CustomOpenAIConfig | null> {
-    return invoke<CustomOpenAIConfig | null>('api_get_custom_openai_config');
+    return invoke<CustomOpenAIConfig | null>("api_get_custom_openai_config");
   }
 
   /**
@@ -83,15 +90,20 @@ export class ConfigService {
    * @param config - CustomOpenAIConfig to save
    * @returns Promise with result status
    */
-  async saveCustomOpenAIConfig(config: CustomOpenAIConfig): Promise<{ status: string; message: string }> {
-    return invoke<{ status: string; message: string }>('api_save_custom_openai_config', {
-      endpoint: config.endpoint,
-      apiKey: config.apiKey,
-      model: config.model,
-      maxTokens: config.maxTokens,
-      temperature: config.temperature,
-      topP: config.topP,
-    });
+  async saveCustomOpenAIConfig(
+    config: CustomOpenAIConfig,
+  ): Promise<{ status: string; message: string }> {
+    return invoke<{ status: string; message: string }>(
+      "api_save_custom_openai_config",
+      {
+        endpoint: config.endpoint,
+        apiKey: config.apiKey,
+        model: config.model,
+        maxTokens: config.maxTokens,
+        temperature: config.temperature,
+        topP: config.topP,
+      },
+    );
   }
 
   /**
@@ -104,13 +116,16 @@ export class ConfigService {
   async testCustomOpenAIConnection(
     endpoint: string,
     apiKey: string | null,
-    model: string
+    model: string,
   ): Promise<{ status: string; message: string; http_status?: number }> {
-    return invoke<{ status: string; message: string; http_status?: number }>('api_test_custom_openai_connection', {
-      endpoint,
-      apiKey,
-      model,
-    });
+    return invoke<{ status: string; message: string; http_status?: number }>(
+      "api_test_custom_openai_connection",
+      {
+        endpoint,
+        apiKey,
+        model,
+      },
+    );
   }
 }
 

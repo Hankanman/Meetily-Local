@@ -257,18 +257,30 @@ pub async fn api_cancel_summary<R: Runtime>(
     if cancelled {
         // Update database status to cancelled
         let pool = state.db_manager.pool();
-        if let Err(e) = SummaryProcessesRepository::update_process_cancelled(pool, &meeting_id).await {
-            log_error!("Failed to update DB status to cancelled for {}: {}", meeting_id, e);
+        if let Err(e) =
+            SummaryProcessesRepository::update_process_cancelled(pool, &meeting_id).await
+        {
+            log_error!(
+                "Failed to update DB status to cancelled for {}: {}",
+                meeting_id,
+                e
+            );
             return Err(format!("Failed to update cancellation status: {}", e));
         }
 
-        log_info!("Successfully cancelled summary generation for meeting_id: {}", meeting_id);
+        log_info!(
+            "Successfully cancelled summary generation for meeting_id: {}",
+            meeting_id
+        );
         Ok(serde_json::json!({
             "message": "Summary generation cancelled successfully",
             "meeting_id": meeting_id,
         }))
     } else {
-        log_warn!("No active summary generation found for meeting_id: {}", meeting_id);
+        log_warn!(
+            "No active summary generation found for meeting_id: {}",
+            meeting_id
+        );
         Ok(serde_json::json!({
             "message": "No active summary generation to cancel",
             "meeting_id": meeting_id,

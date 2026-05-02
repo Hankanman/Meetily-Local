@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect } from "react";
 
-export type Platform = 'macos' | 'windows' | 'linux' | 'unknown';
+export type Platform = "macos" | "windows" | "linux" | "unknown";
 
 // Extend Window type to include Tauri internals
 declare global {
@@ -13,17 +13,17 @@ declare global {
  * Detect platform from user agent (fallback method)
  */
 function detectPlatformFromUserAgent(): Platform {
-  if (typeof navigator === 'undefined') return 'unknown';
+  if (typeof navigator === "undefined") return "unknown";
 
   const userAgent = navigator.userAgent.toLowerCase();
-  if (userAgent.includes('mac')) {
-    return 'macos';
-  } else if (userAgent.includes('win')) {
-    return 'windows';
-  } else if (userAgent.includes('linux')) {
-    return 'linux';
+  if (userAgent.includes("mac")) {
+    return "macos";
+  } else if (userAgent.includes("win")) {
+    return "windows";
+  } else if (userAgent.includes("linux")) {
+    return "linux";
   }
-  return 'unknown';
+  return "unknown";
 }
 
 /**
@@ -32,12 +32,14 @@ function detectPlatformFromUserAgent(): Platform {
  * @returns The current platform
  */
 export function usePlatform(): Platform {
-  const [currentPlatform, setCurrentPlatform] = useState<Platform>(() => detectPlatformFromUserAgent());
+  const [currentPlatform, setCurrentPlatform] = useState<Platform>(() =>
+    detectPlatformFromUserAgent(),
+  );
 
   useEffect(() => {
     async function detectPlatform() {
       // Check if Tauri is available
-      if (typeof window === 'undefined' || !window.__TAURI_INTERNALS__) {
+      if (typeof window === "undefined" || !window.__TAURI_INTERNALS__) {
         // Not in Tauri environment, use user agent
         setCurrentPlatform(detectPlatformFromUserAgent());
         return;
@@ -45,27 +47,30 @@ export function usePlatform(): Platform {
 
       try {
         // Dynamically import to avoid SSR issues
-        const { platform } = await import('@tauri-apps/plugin-os');
+        const { platform } = await import("@tauri-apps/plugin-os");
         const platformName = await platform();
 
         // Map Tauri's platform names to our simplified types
         switch (platformName) {
-          case 'macos':
-          case 'ios':
-            setCurrentPlatform('macos');
+          case "macos":
+          case "ios":
+            setCurrentPlatform("macos");
             break;
-          case 'windows':
-            setCurrentPlatform('windows');
+          case "windows":
+            setCurrentPlatform("windows");
             break;
-          case 'linux':
-          case 'android':
-            setCurrentPlatform('linux');
+          case "linux":
+          case "android":
+            setCurrentPlatform("linux");
             break;
           default:
-            setCurrentPlatform('unknown');
+            setCurrentPlatform("unknown");
         }
       } catch (error) {
-        console.warn('[usePlatform] Tauri platform detection failed, using user agent:', error);
+        console.warn(
+          "[usePlatform] Tauri platform detection failed, using user agent:",
+          error,
+        );
         setCurrentPlatform(detectPlatformFromUserAgent());
       }
     }
@@ -82,5 +87,5 @@ export function usePlatform(): Platform {
  */
 export function useIsLinux(): boolean {
   const currentPlatform = usePlatform();
-  return currentPlatform === 'linux';
+  return currentPlatform === "linux";
 }

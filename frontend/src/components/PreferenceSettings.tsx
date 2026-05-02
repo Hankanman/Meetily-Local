@@ -1,12 +1,12 @@
-"use client"
+"use client";
 
-import { useEffect, useState, useRef } from "react"
-import { Switch } from "./ui/switch"
-import { FolderOpen } from "lucide-react"
-import { invoke } from "@tauri-apps/api/core"
-import Analytics from "@/lib/analytics"
-import AnalyticsConsentSwitch from "./AnalyticsConsentSwitch"
-import { useConfig, NotificationSettings } from "@/contexts/ConfigContext"
+import { useEffect, useState, useRef } from "react";
+import { Switch } from "./ui/switch";
+import { FolderOpen } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import Analytics from "@/lib/analytics";
+import AnalyticsConsentSwitch from "./AnalyticsConsentSwitch";
+import { useConfig, NotificationSettings } from "@/contexts/ConfigContext";
 
 export function PreferenceSettings() {
   const {
@@ -14,12 +14,15 @@ export function PreferenceSettings() {
     storageLocations,
     isLoadingPreferences,
     loadPreferences,
-    updateNotificationSettings
+    updateNotificationSettings,
   } = useConfig();
 
-  const [notificationsEnabled, setNotificationsEnabled] = useState<boolean | null>(null);
+  const [notificationsEnabled, setNotificationsEnabled] = useState<
+    boolean | null
+  >(null);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
-  const [previousNotificationsEnabled, setPreviousNotificationsEnabled] = useState<boolean | null>(null);
+  const [previousNotificationsEnabled, setPreviousNotificationsEnabled] =
+    useState<boolean | null>(null);
   const hasTrackedViewRef = useRef(false);
 
   // Lazy load preferences on mount (only loads if not already cached)
@@ -36,14 +39,17 @@ export function PreferenceSettings() {
     const trackPreferencesViewed = async () => {
       // Wait for notification settings to be available (either from cache or after loading)
       if (notificationSettings) {
-        await Analytics.track('preferences_viewed', {
-          notifications_enabled: notificationSettings.notification_preferences.show_recording_started ? 'true' : 'false'
+        await Analytics.track("preferences_viewed", {
+          notifications_enabled: notificationSettings.notification_preferences
+            .show_recording_started
+            ? "true"
+            : "false",
         });
         hasTrackedViewRef.current = true;
       } else if (!isLoadingPreferences) {
         // If not loading and no settings available, track with default value
-        await Analytics.track('preferences_viewed', {
-          notifications_enabled: 'false'
+        await Analytics.track("preferences_viewed", {
+          notifications_enabled: "false",
         });
         hasTrackedViewRef.current = true;
       }
@@ -72,11 +78,16 @@ export function PreferenceSettings() {
         setIsInitialLoad(false);
       }
     }
-  }, [notificationSettings, isLoadingPreferences, isInitialLoad])
+  }, [notificationSettings, isLoadingPreferences, isInitialLoad]);
 
   useEffect(() => {
     // Skip update on initial load or if value hasn't actually changed
-    if (isInitialLoad || notificationsEnabled === null || notificationsEnabled === previousNotificationsEnabled) return;
+    if (
+      isInitialLoad ||
+      notificationsEnabled === null ||
+      notificationsEnabled === previousNotificationsEnabled
+    )
+      return;
     if (!notificationSettings) return;
 
     const handleUpdateNotificationSettings = async () => {
@@ -90,43 +101,57 @@ export function PreferenceSettings() {
             ...notificationSettings.notification_preferences,
             show_recording_started: notificationsEnabled,
             show_recording_stopped: notificationsEnabled,
-          }
+          },
         };
 
-        console.log("Calling updateNotificationSettings with:", updatedSettings);
+        console.log(
+          "Calling updateNotificationSettings with:",
+          updatedSettings,
+        );
         await updateNotificationSettings(updatedSettings);
         setPreviousNotificationsEnabled(notificationsEnabled);
-        console.log("Successfully updated notification settings to:", notificationsEnabled);
+        console.log(
+          "Successfully updated notification settings to:",
+          notificationsEnabled,
+        );
 
         // Track notification preference change - only fires when user manually toggles
-        await Analytics.track('notification_settings_changed', {
-          notifications_enabled: notificationsEnabled.toString()
+        await Analytics.track("notification_settings_changed", {
+          notifications_enabled: notificationsEnabled.toString(),
         });
       } catch (error) {
-        console.error('Failed to update notification settings:', error);
+        console.error("Failed to update notification settings:", error);
       }
     };
 
     handleUpdateNotificationSettings();
-  }, [notificationsEnabled, notificationSettings, isInitialLoad, previousNotificationsEnabled, updateNotificationSettings])
+  }, [
+    notificationsEnabled,
+    notificationSettings,
+    isInitialLoad,
+    previousNotificationsEnabled,
+    updateNotificationSettings,
+  ]);
 
-  const handleOpenFolder = async (folderType: 'database' | 'models' | 'recordings') => {
+  const handleOpenFolder = async (
+    folderType: "database" | "models" | "recordings",
+  ) => {
     try {
       switch (folderType) {
-        case 'database':
-          await invoke('open_database_folder');
+        case "database":
+          await invoke("open_database_folder");
           break;
-        case 'models':
-          await invoke('open_models_folder');
+        case "models":
+          await invoke("open_models_folder");
           break;
-        case 'recordings':
-          await invoke('open_recordings_folder');
+        case "recordings":
+          await invoke("open_recordings_folder");
           break;
       }
 
       // Track storage folder access
-      await Analytics.track('storage_folder_opened', {
-        folder_type: folderType
+      await Analytics.track("storage_folder_opened", {
+        folder_type: folderType,
       });
     } catch (error) {
       console.error(`Failed to open ${folderType} folder:`, error);
@@ -135,12 +160,12 @@ export function PreferenceSettings() {
 
   // Show loading only if we're actually loading and don't have cached data
   if (isLoadingPreferences && !notificationSettings && !storageLocations) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
+    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>;
   }
 
   // Show loading if notificationsEnabled hasn't been determined yet
   if (notificationsEnabled === null && !isLoadingPreferences) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>
+    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>;
   }
 
   // Ensure we have a boolean value for the Switch component
@@ -152,16 +177,25 @@ export function PreferenceSettings() {
       <div className="bg-background rounded-lg border border-border p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-foreground mb-2">Notifications</h3>
-            <p className="text-sm text-muted-foreground">Enable or disable notifications of start and end of meeting</p>
+            <h3 className="text-lg font-semibold text-foreground mb-2">
+              Notifications
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              Enable or disable notifications of start and end of meeting
+            </p>
           </div>
-          <Switch checked={notificationsEnabledValue} onCheckedChange={setNotificationsEnabled} />
+          <Switch
+            checked={notificationsEnabledValue}
+            onCheckedChange={setNotificationsEnabled}
+          />
         </div>
       </div>
 
       {/* Data Storage Locations Section */}
       <div className="bg-background rounded-lg border border-border p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-foreground mb-4">Data Storage Locations</h3>
+        <h3 className="text-lg font-semibold text-foreground mb-4">
+          Data Storage Locations
+        </h3>
         <p className="text-sm text-muted-foreground mb-6">
           View and access where Meetily stores your data
         </p>
@@ -201,10 +235,10 @@ export function PreferenceSettings() {
           <div className="p-4 border rounded-lg bg-muted">
             <div className="font-medium mb-2">Meeting Recordings</div>
             <div className="text-sm text-muted-foreground mb-3 break-all font-mono text-xs">
-              {storageLocations?.recordings || 'Loading...'}
+              {storageLocations?.recordings || "Loading..."}
             </div>
             <button
-              onClick={() => handleOpenFolder('recordings')}
+              onClick={() => handleOpenFolder("recordings")}
               className="flex items-center gap-2 px-3 py-2 text-sm border border-border rounded-md hover:bg-muted transition-colors"
             >
               <FolderOpen className="w-4 h-4" />
@@ -215,7 +249,8 @@ export function PreferenceSettings() {
 
         <div className="mt-4 p-3 bg-blue-600/10 rounded-md">
           <p className="text-xs text-blue-800">
-            <strong>Note:</strong> Database and models are stored together in your application data directory for unified management.
+            <strong>Note:</strong> Database and models are stored together in
+            your application data directory for unified management.
           </p>
         </div>
       </div>
@@ -225,5 +260,5 @@ export function PreferenceSettings() {
         <AnalyticsConsentSwitch />
       </div>
     </div>
-  )
+  );
 }

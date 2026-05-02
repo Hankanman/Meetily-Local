@@ -1,19 +1,24 @@
-'use client';
+"use client";
 
-import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { Button } from '@/components/ui/button';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { cn } from '@/lib/utils';
-import { Download, RefreshCw, BadgeAlert, Trash2 } from 'lucide-react';
-import { toast } from 'sonner';
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { cn } from "@/lib/utils";
+import { Download, RefreshCw, BadgeAlert, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 interface ModelInfo {
   name: string;
   display_name: string;
   status: {
-    type: 'not_downloaded' | 'downloading' | 'available' | 'corrupted' | 'error';
+    type:
+      | "not_downloaded"
+      | "downloading"
+      | "available"
+      | "corrupted"
+      | "error";
     progress?: number;
   };
   size_mb: number;
@@ -33,30 +38,39 @@ interface BuiltInModelManagerProps {
   onModelSelect: (model: string) => void;
 }
 
-export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInModelManagerProps) {
+export function BuiltInModelManager({
+  selectedModel,
+  onModelSelect,
+}: BuiltInModelManagerProps) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [hasFetched, setHasFetched] = useState<boolean>(false);
-  const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
-  const [downloadProgressInfo, setDownloadProgressInfo] = useState<Record<string, DownloadProgressInfo>>({});
-  const [downloadingModels, setDownloadingModels] = useState<Set<string>>(new Set());
+  const [downloadProgress, setDownloadProgress] = useState<
+    Record<string, number>
+  >({});
+  const [downloadProgressInfo, setDownloadProgressInfo] = useState<
+    Record<string, DownloadProgressInfo>
+  >({});
+  const [downloadingModels, setDownloadingModels] = useState<Set<string>>(
+    new Set(),
+  );
 
   const fetchModels = async () => {
     try {
       setIsLoading(true);
-      const data = (await invoke('builtin_ai_list_models')) as ModelInfo[];
+      const data = (await invoke("builtin_ai_list_models")) as ModelInfo[];
       setModels(data);
 
       // Auto-select first available model if none selected
       if (data.length > 0 && !selectedModel) {
-        const firstAvailable = data.find((m) => m.status.type === 'available');
+        const firstAvailable = data.find((m) => m.status.type === "available");
         if (firstAvailable) {
           onModelSelect(firstAvailable.name);
         }
       }
     } catch (error) {
-      console.error('Failed to fetch built-in AI models:', error);
-      toast.error('Failed to load models');
+      console.error("Failed to fetch built-in AI models:", error);
+      toast.error("Failed to load models");
     } finally {
       setIsLoading(false);
       setHasFetched(true);
@@ -72,8 +86,9 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
     let unlisten: (() => void) | undefined;
 
     const setupListener = async () => {
-      unlisten = await listen('builtin-ai-download-progress', (event: any) => {
-        const { model, progress, downloaded_mb, total_mb, speed_mbps, status } = event.payload;
+      unlisten = await listen("builtin-ai-download-progress", (event: any) => {
+        const { model, progress, downloaded_mb, total_mb, speed_mbps, status } =
+          event.payload;
 
         // Update percentage progress
         setDownloadProgress((prev) => ({
@@ -92,7 +107,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
         }));
 
         // Handle downloading status - restore downloadingModels state on modal reopen
-        if (status === 'downloading') {
+        if (status === "downloading") {
           setDownloadingModels((prev) => {
             if (!prev.has(model)) {
               const newSet = new Set(prev);
@@ -104,7 +119,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
         }
 
         // Handle completed status
-        if (status === 'completed') {
+        if (status === "completed") {
           setDownloadingModels((prev) => {
             const newSet = new Set(prev);
             newSet.delete(model);
@@ -125,7 +140,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
         }
 
         // Handle cancelled status
-        if (status === 'cancelled') {
+        if (status === "cancelled") {
           setDownloadingModels((prev) => {
             const newSet = new Set(prev);
             newSet.delete(model);
@@ -145,7 +160,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
         }
 
         // Handle error status
-        if (status === 'error') {
+        if (status === "error") {
           setDownloadingModels((prev) => {
             const newSet = new Set(prev);
             newSet.delete(model);
@@ -169,12 +184,12 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                 ? {
                     ...m,
                     status: {
-                      type: 'error',
+                      type: "error",
                       progress: 0,
                     } as any,
                   }
-                : m
-            )
+                : m,
+            ),
           );
 
           // Don't show error toast here - DownloadProgressToast already handles it
@@ -197,13 +212,13 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
       // Optimistically add to downloadingModels for immediate UI feedback
       setDownloadingModels((prev) => new Set([...prev, modelName]));
 
-      await invoke('builtin_ai_download_model', { modelName });
+      await invoke("builtin_ai_download_model", { modelName });
     } catch (error) {
-      console.error('Failed to download model:', error);
+      console.error("Failed to download model:", error);
 
       // Check if this is a cancellation error (starts with "CANCELLED:")
       const errorMsg = String(error);
-      if (errorMsg.startsWith('CANCELLED:')) {
+      if (errorMsg.startsWith("CANCELLED:")) {
         // Cancel handler already removed from downloadingModels
         // Don't show error toast for cancellations - cancel function already shows info toast
         return;
@@ -225,7 +240,7 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
 
   const cancelDownload = async (modelName: string) => {
     try {
-      await invoke('builtin_ai_cancel_download', { modelName });
+      await invoke("builtin_ai_cancel_download", { modelName });
       toast.info(`Download of ${modelName} cancelled`);
       setDownloadingModels((prev) => {
         const newSet = new Set(prev);
@@ -233,17 +248,17 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
         return newSet;
       });
     } catch (error) {
-      console.error('Failed to cancel download:', error);
+      console.error("Failed to cancel download:", error);
     }
   };
 
   const deleteModel = async (modelName: string) => {
     try {
-      await invoke('builtin_ai_delete_model', { modelName });
+      await invoke("builtin_ai_delete_model", { modelName });
       toast.success(`Model ${modelName} deleted`);
       fetchModels();
     } catch (error) {
-      console.error('Failed to delete model:', error);
+      console.error("Failed to delete model:", error);
       toast.error(`Failed to delete ${modelName}`);
     }
   };
@@ -280,23 +295,21 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
           const progress = downloadProgress[model.name];
           const progressInfo = downloadProgressInfo[model.name];
           const modelIsDownloading = downloadingModels.has(model.name);
-          const isAvailable = model.status.type === 'available';
-          const isNotDownloaded = model.status.type === 'not_downloaded';
-          const isCorrupted = model.status.type === 'corrupted';
-          const isError = model.status.type === 'error';
+          const isAvailable = model.status.type === "available";
+          const isNotDownloaded = model.status.type === "not_downloaded";
+          const isCorrupted = model.status.type === "corrupted";
+          const isError = model.status.type === "error";
 
           return (
             <div
               key={model.name}
               className={cn(
-                'p-4 rounded-lg border transition-colors',
-                modelIsDownloading
-                  ? 'bg-background border-border'
-                  : 'bg-card',
+                "p-4 rounded-lg border transition-colors",
+                modelIsDownloading ? "bg-background border-border" : "bg-card",
                 selectedModel === model.name
-                  ? 'ring-2 ring-gray-800 border-gray-800'
-                  : 'border-border hover:border-border',
-                isAvailable && !modelIsDownloading && 'cursor-pointer'
+                  ? "ring-2 ring-gray-800 border-gray-800"
+                  : "border-border hover:border-border",
+                isAvailable && !modelIsDownloading && "cursor-pointer",
               )}
               onClick={() => {
                 if (isAvailable && !modelIsDownloading) {
@@ -307,7 +320,9 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
               <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-base font-bold text-foreground">{model.display_name || model.name}</span>
+                    <span className="text-base font-bold text-foreground">
+                      {model.display_name || model.name}
+                    </span>
                     {isAvailable && (
                       <>
                         <span className="text-xs text-green-600 font-medium flex items-center gap-1">
@@ -344,15 +359,19 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                     )}
                     {(isError || isCorrupted) && (
                       <p className="mb-1 text-xs text-red-600">
-                        {isError && typeof model.status === 'object' && 'Error' in model.status
+                        {isError &&
+                        typeof model.status === "object" &&
+                        "Error" in model.status
                           ? (model.status as any).Error
                           : isCorrupted
-                          ? 'File is corrupted. Retry download or delete.'
-                          : 'An error occurred'}
+                            ? "File is corrupted. Retry download or delete."
+                            : "An error occurred"}
                       </p>
                     )}
                     <div className="text-xs text-muted-foreground">
-                      <span>{model.size_mb}MB • {model.context_size} tokens</span>
+                      <span>
+                        {model.size_mb}MB • {model.context_size} tokens
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -434,18 +453,20 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                   )}
 
                   {/* Available - Show small trash icon (only if not currently selected) */}
-                  {isAvailable && !modelIsDownloading && selectedModel !== model.name && (
-                    <button
-                      className="p-2 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-red-600"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        deleteModel(model.name);
-                      }}
-                      title="Delete model"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  )}
+                  {isAvailable &&
+                    !modelIsDownloading &&
+                    selectedModel !== model.name && (
+                      <button
+                        className="p-2 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-red-600"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteModel(model.name);
+                        }}
+                        title="Delete model"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
                 </div>
               </div>
 
@@ -453,7 +474,9 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
               {modelIsDownloading && progress !== undefined && (
                 <div className="mt-3 pt-3 border-t border-border">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium text-foreground">Downloading...</span>
+                    <span className="text-sm font-medium text-foreground">
+                      Downloading...
+                    </span>
                     <span className="text-sm font-semibold text-foreground">
                       {Math.round(progress)}%
                     </span>
@@ -461,7 +484,8 @@ export function BuiltInModelManager({ selectedModel, onModelSelect }: BuiltInMod
                   <div className="text-sm text-muted-foreground mb-2">
                     {progressInfo?.totalMb > 0 ? (
                       <>
-                        {progressInfo.downloadedMb.toFixed(1)} MB / {progressInfo.totalMb.toFixed(1)} MB
+                        {progressInfo.downloadedMb.toFixed(1)} MB /{" "}
+                        {progressInfo.totalMb.toFixed(1)} MB
                         {progressInfo.speedMbps > 0 && (
                           <span className="ml-2 text-muted-foreground">
                             ({progressInfo.speedMbps.toFixed(1)} MB/s)

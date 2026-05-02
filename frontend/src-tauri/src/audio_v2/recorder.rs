@@ -1,17 +1,17 @@
 //! Stream-based recording
-//! 
+//!
 //! This module provides a modern recording system that uses async streams
 //! instead of static buffers and callbacks.
 
 use anyhow::Result;
-use tokio::sync::mpsc;
-use std::sync::Arc;
 use futures_util::StreamExt;
-use log::{info, warn, error};
+use log::{error, info, warn};
+use std::sync::Arc;
+use tokio::sync::mpsc;
 
-use super::stream::{ModernAudioStreamManager, ProcessedAudio};
 use super::mixer::{AudioMixer, MixingMode};
 use super::normalizer::AudioNormalizer;
+use super::stream::{ModernAudioStreamManager, ProcessedAudio};
 use super::sync::AudioSynchronizer;
 use crate::audio::core::AudioDevice;
 use crate::audio::recording_state::DeviceType;
@@ -52,7 +52,9 @@ impl ModernRecorder {
         info!("Starting modern recorder with async streams");
 
         // Start the audio streams
-        self.stream_manager.start_streams(microphone_device, system_device).await?;
+        self.stream_manager
+            .start_streams(microphone_device, system_device)
+            .await?;
 
         // Create channel for processed audio
         let (sender, mut receiver) = mpsc::unbounded_channel::<ProcessedAudio>();
@@ -85,7 +87,8 @@ impl ModernRecorder {
                         &mut synchronizer,
                         &mut mic_buffer,
                         &mut system_buffer,
-                    ).await;
+                    )
+                    .await;
                 }
             }
 
@@ -96,7 +99,8 @@ impl ModernRecorder {
                 &mut synchronizer,
                 &mut mic_buffer,
                 &mut system_buffer,
-            ).await;
+            )
+            .await;
 
             info!("Modern recording task completed");
         });
@@ -120,12 +124,14 @@ impl ModernRecorder {
         }
 
         // Extract audio samples
-        let mic_samples: Vec<f32> = mic_buffer.iter()
+        let mic_samples: Vec<f32> = mic_buffer
+            .iter()
             .flat_map(|audio| &audio.samples)
             .cloned()
             .collect();
 
-        let system_samples: Vec<f32> = system_buffer.iter()
+        let system_samples: Vec<f32> = system_buffer
+            .iter()
             .flat_map(|audio| &audio.samples)
             .cloned()
             .collect();
@@ -138,8 +144,12 @@ impl ModernRecorder {
 
         // TODO: Send to transcription system
         // For now, just log the processing
-        info!("Processed {} mic samples and {} system samples into {} mixed samples",
-              mic_samples.len(), system_samples.len(), normalized.len());
+        info!(
+            "Processed {} mic samples and {} system samples into {} mixed samples",
+            mic_samples.len(),
+            system_samples.len(),
+            normalized.len()
+        );
 
         // Clear buffers
         mic_buffer.clear();

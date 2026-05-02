@@ -1,10 +1,10 @@
 "use client";
 
-import { Transcript, TranscriptSegmentData } from '@/types';
-import { TranscriptView } from '@/components/TranscriptView';
-import { VirtualizedTranscriptView } from '@/components/VirtualizedTranscriptView';
-import { TranscriptButtonGroup } from './TranscriptButtonGroup';
-import { useMemo } from 'react';
+import { Transcript, TranscriptSegmentData } from "@/types";
+import { TranscriptView } from "@/components/TranscriptView";
+import { VirtualizedTranscriptView } from "@/components/VirtualizedTranscriptView";
+import { TranscriptButtonGroup } from "./TranscriptButtonGroup";
+import { useMemo } from "react";
 
 interface TranscriptPanelProps {
   transcripts: Transcript[];
@@ -55,7 +55,7 @@ export function TranscriptPanel({
       return segments;
     }
     // Convert transcripts to segments for virtualization
-    return transcripts.map(t => ({
+    return transcripts.map((t) => ({
       id: t.id,
       timestamp: t.audio_start_time ?? 0,
       endTime: t.audio_end_time,
@@ -69,7 +69,11 @@ export function TranscriptPanel({
       {/* Title area */}
       <div className="p-4 border-b border-border">
         <TranscriptButtonGroup
-          transcriptCount={usePagination ? (totalCount ?? convertedSegments.length) : (transcripts?.length || 0)}
+          transcriptCount={
+            usePagination
+              ? (totalCount ?? convertedSegments.length)
+              : transcripts?.length || 0
+          }
           onCopyTranscript={onCopyTranscript}
           onOpenMeetingFolder={onOpenMeetingFolder}
           meetingId={meetingId}

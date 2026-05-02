@@ -1,5 +1,5 @@
-import { toast } from 'sonner';
-import Analytics from '@/lib/analytics';
+import { toast } from "sonner";
+import Analytics from "@/lib/analytics";
 
 /**
  * Shows the recording notification toast with compliance message.
@@ -12,14 +12,15 @@ import Analytics from '@/lib/analytics';
  */
 export async function showRecordingNotification(): Promise<void> {
   try {
-    const { Store } = await import('@tauri-apps/plugin-store');
-    const store = await Store.load('preferences.json');
-    const showNotification = await store.get<boolean>('show_recording_notification') ?? true;
+    const { Store } = await import("@tauri-apps/plugin-store");
+    const store = await Store.load("preferences.json");
+    const showNotification =
+      (await store.get<boolean>("show_recording_notification")) ?? true;
 
     if (showNotification) {
       let dontShowAgain = false;
 
-      const toastId = toast.info('🔴 Recording Started', {
+      const toastId = toast.info("🔴 Recording Started", {
         description: (
           <div className="space-y-3 min-w-[280px]">
             <p className="text-sm font-medium text-foreground">
@@ -33,17 +34,22 @@ export async function showRecordingNotification(): Promise<void> {
                 }}
                 className="rounded border-border text-blue-600 focus:ring-blue-500 focus:ring-2"
               />
-              <span className="select-none text-foreground">Don't show this again</span>
+              <span className="select-none text-foreground">
+                Don't show this again
+              </span>
             </label>
             <button
               onClick={async () => {
                 if (dontShowAgain) {
-                  const { Store } = await import('@tauri-apps/plugin-store');
-                  const store = await Store.load('preferences.json');
-                  await store.set('show_recording_notification', false);
+                  const { Store } = await import("@tauri-apps/plugin-store");
+                  const store = await Store.load("preferences.json");
+                  await store.set("show_recording_notification", false);
                   await store.save();
                 }
-                Analytics.trackButtonClick('recording_notification_acknowledged', 'toast');
+                Analytics.trackButtonClick(
+                  "recording_notification_acknowledged",
+                  "toast",
+                );
                 toast.dismiss(toastId);
               }}
               className="w-full px-3 py-1.5 bg-gray-900 text-white text-xs rounded hover:bg-gray-800 transition-colors font-medium"
@@ -53,11 +59,11 @@ export async function showRecordingNotification(): Promise<void> {
           </div>
         ),
         duration: 10000,
-        position: 'bottom-right',
+        position: "bottom-right",
       });
     }
   } catch (notificationError) {
-    console.error('Failed to show recording notification:', notificationError);
+    console.error("Failed to show recording notification:", notificationError);
     // Don't fail the recording if notification fails
   }
 }

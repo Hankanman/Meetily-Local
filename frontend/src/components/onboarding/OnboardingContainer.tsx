@@ -1,9 +1,9 @@
-import React from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { ProgressIndicator } from './shared/ProgressIndicator';
-import { useOnboarding } from '@/contexts/OnboardingContext';
-import type { OnboardingContainerProps } from '@/types/onboarding';
+import React from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { ProgressIndicator } from "./shared/ProgressIndicator";
+import { useOnboarding } from "@/contexts/OnboardingContext";
+import type { OnboardingContainerProps } from "@/types/onboarding";
 
 export function OnboardingContainer({
   title,
@@ -44,7 +44,12 @@ export function OnboardingContainer({
 
   return (
     <div className="fixed inset-0 bg-muted flex items-center justify-center z-50 overflow-hidden">
-      <div className={cn('w-full max-w-2xl h-full max-h-screen flex flex-col px-6 py-6', className)}>
+      <div
+        className={cn(
+          "w-full max-w-2xl h-full max-h-screen flex flex-col px-6 py-6",
+          className,
+        )}
+      >
         {/* Progress Indicator with Navigation - Fixed */}
         {step && !hideProgress && (
           <div className="mb-2 relative flex-shrink-0">
@@ -55,10 +60,10 @@ export function OnboardingContainer({
                   onClick={handlePrevious}
                   disabled={!canGoPrevious || step === 1}
                   className={cn(
-                    'pointer-events-auto w-8 h-8 rounded-full bg-background border border-border shadow-sm flex items-center justify-center transition-all duration-200',
+                    "pointer-events-auto w-8 h-8 rounded-full bg-background border border-border shadow-sm flex items-center justify-center transition-all duration-200",
                     canGoPrevious && step !== 1
-                      ? 'hover:bg-muted hover:shadow-md hover:scale-110 text-foreground'
-                      : 'opacity-0 cursor-not-allowed'
+                      ? "hover:bg-muted hover:shadow-md hover:scale-110 text-foreground"
+                      : "opacity-0 cursor-not-allowed",
                   )}
                 >
                   <ChevronLeft className="w-4 h-4" />
@@ -68,10 +73,10 @@ export function OnboardingContainer({
                   onClick={handleNext}
                   disabled={!canGoNext || step === totalSteps}
                   className={cn(
-                    'pointer-events-auto w-8 h-8 rounded-full bg-background border border-border shadow-sm flex items-center justify-center transition-all duration-200',
+                    "pointer-events-auto w-8 h-8 rounded-full bg-background border border-border shadow-sm flex items-center justify-center transition-all duration-200",
                     canGoNext && step !== totalSteps
-                      ? 'hover:bg-muted hover:shadow-md hover:scale-110 text-foreground'
-                      : 'opacity-0 cursor-not-allowed'
+                      ? "hover:bg-muted hover:shadow-md hover:scale-110 text-foreground"
+                      : "opacity-0 cursor-not-allowed",
                   )}
                 >
                   <ChevronRight className="w-4 h-4" />
@@ -80,13 +85,19 @@ export function OnboardingContainer({
             )}
 
             {/* Progress Indicator */}
-            <ProgressIndicator current={step} total={totalSteps} onStepClick={handleStepClick} />
+            <ProgressIndicator
+              current={step}
+              total={totalSteps}
+              onStepClick={handleStepClick}
+            />
           </div>
         )}
 
         {/* Header - Fixed */}
         <div className="mb-4 text-center space-y-3 flex-shrink-0">
-          <h1 className="text-4xl font-semibold text-foreground animate-fade-in-up">{title}</h1>
+          <h1 className="text-4xl font-semibold text-foreground animate-fade-in-up">
+            {title}
+          </h1>
           {description && (
             <p className="text-base text-muted-foreground max-w-md mx-auto animate-fade-in-up delay-75">
               {description}

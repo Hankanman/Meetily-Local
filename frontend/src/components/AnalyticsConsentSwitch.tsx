@@ -1,19 +1,19 @@
-import React, { useContext, useState, useEffect } from 'react';
-import { Switch } from '@/components/ui/switch';
-import { Button } from '@/components/ui/button';
-import { Info, Loader2, Copy, Check } from 'lucide-react';
-import { AnalyticsContext } from './AnalyticsProvider';
-import { load } from '@tauri-apps/plugin-store';
-import { invoke } from '@tauri-apps/api/core';
-import { Analytics } from '@/lib/analytics';
-import AnalyticsDataModal from './AnalyticsDataModal';
-
+import React, { useContext, useState, useEffect } from "react";
+import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
+import { Info, Loader2, Copy, Check } from "lucide-react";
+import { AnalyticsContext } from "./AnalyticsProvider";
+import { load } from "@tauri-apps/plugin-store";
+import { invoke } from "@tauri-apps/api/core";
+import { Analytics } from "@/lib/analytics";
+import AnalyticsDataModal from "./AnalyticsDataModal";
 
 export default function AnalyticsConsentSwitch() {
-  const { setIsAnalyticsOptedIn, isAnalyticsOptedIn } = useContext(AnalyticsContext);
+  const { setIsAnalyticsOptedIn, isAnalyticsOptedIn } =
+    useContext(AnalyticsContext);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showModal, setShowModal] = useState(false);
-  const [userId, setUserId] = useState<string>('');
+  const [userId, setUserId] = useState<string>("");
   const [isCopied, setIsCopied] = useState(false);
 
   // Note: Store loading is handled by AnalyticsProvider to avoid race conditions
@@ -25,10 +25,10 @@ export default function AnalyticsConsentSwitch() {
           const id = await Analytics.getPersistentUserId();
           setUserId(id);
         } catch (error) {
-          console.error('Failed to load user ID:', error);
+          console.error("Failed to load user ID:", error);
         }
       } else {
-        setUserId('');
+        setUserId("");
       }
     };
     loadUserId();
@@ -43,11 +43,11 @@ export default function AnalyticsConsentSwitch() {
       setTimeout(() => setIsCopied(false), 2000);
 
       // Track that user copied their ID
-      await Analytics.track('user_id_copied', {
-        user_id: userId
+      await Analytics.track("user_id_copied", {
+        user_id: userId,
       });
     } catch (error) {
-      console.error('Failed to copy user ID:', error);
+      console.error("Failed to copy user ID:", error);
     }
   };
 
@@ -57,9 +57,9 @@ export default function AnalyticsConsentSwitch() {
       setShowModal(true);
       // Track that user viewed the transparency modal
       try {
-        await invoke('track_analytics_transparency_viewed');
+        await invoke("track_analytics_transparency_viewed");
       } catch (error) {
-        console.error('Failed to track transparency view:', error);
+        console.error("Failed to track transparency view:", error);
       }
       return; // Don't disable yet, wait for modal confirmation
     }
@@ -74,13 +74,13 @@ export default function AnalyticsConsentSwitch() {
     setIsProcessing(true);
 
     try {
-      const store = await load('analytics.json', {
+      const store = await load("analytics.json", {
         autoSave: false,
         defaults: {
-          analyticsOptedIn: true
-        }
+          analyticsOptedIn: true,
+        },
       });
-      await store.set('analyticsOptedIn', enabled);
+      await store.set("analyticsOptedIn", enabled);
       await store.save();
 
       if (enabled) {
@@ -92,8 +92,8 @@ export default function AnalyticsConsentSwitch() {
 
         // Identify user with enhanced properties immediately after init
         await Analytics.identify(userId, {
-          app_version: '0.3.0',
-          platform: 'tauri',
+          app_version: "0.3.0",
+          platform: "tauri",
           first_seen: new Date().toISOString(),
           os: navigator.platform,
           user_agent: navigator.userAgent,
@@ -107,25 +107,25 @@ export default function AnalyticsConsentSwitch() {
 
         // Track that user enabled analytics
         try {
-          await invoke('track_analytics_enabled');
+          await invoke("track_analytics_enabled");
         } catch (error) {
-          console.error('Failed to track analytics enabled:', error);
+          console.error("Failed to track analytics enabled:", error);
         }
 
-        console.log('Analytics re-enabled successfully');
+        console.log("Analytics re-enabled successfully");
       } else {
         // Track that user disabled analytics BEFORE disabling
         try {
-          await invoke('track_analytics_disabled');
+          await invoke("track_analytics_disabled");
         } catch (error) {
-          console.error('Failed to track analytics disabled:', error);
+          console.error("Failed to track analytics disabled:", error);
         }
 
         await Analytics.disable();
-        console.log('Analytics disabled successfully');
+        console.log("Analytics disabled successfully");
       }
     } catch (error) {
-      console.error('Failed to toggle analytics:', error);
+      console.error("Failed to toggle analytics:", error);
       // Revert the optimistic update on error
       setIsAnalyticsOptedIn(!enabled);
       // You could also show a toast notification here to inform the user
@@ -146,9 +146,11 @@ export default function AnalyticsConsentSwitch() {
 
   const handlePrivacyPolicyClick = async () => {
     try {
-      await invoke('open_external_url', { url: 'https://github.com/Zackriya-Solutions/meeting-minutes/blob/main/PRIVACY_POLICY.md' });
+      await invoke("open_external_url", {
+        url: "https://github.com/Zackriya-Solutions/meeting-minutes/blob/main/PRIVACY_POLICY.md",
+      });
     } catch (error) {
-      console.error('Failed to open privacy policy link:', error);
+      console.error("Failed to open privacy policy link:", error);
     }
   };
 
@@ -156,9 +158,12 @@ export default function AnalyticsConsentSwitch() {
     <>
       <div className="space-y-4">
         <div>
-          <h3 className="text-base font-semibold text-foreground mb-2">Usage Analytics</h3>
+          <h3 className="text-base font-semibold text-foreground mb-2">
+            Usage Analytics
+          </h3>
           <p className="text-sm text-muted-foreground mb-4">
-            Help us improve Meetily by sharing anonymous usage data. No personal content is collected—everything stays on your device.
+            Help us improve Meetily by sharing anonymous usage data. No personal
+            content is collected—everything stays on your device.
           </p>
         </div>
 
@@ -166,7 +171,7 @@ export default function AnalyticsConsentSwitch() {
           <div>
             <h4 className="font-semibold text-foreground">Enable Analytics</h4>
             <p className="text-sm text-muted-foreground">
-              {isProcessing ? 'Updating...' : 'Anonymous usage patterns only'}
+              {isProcessing ? "Updating..." : "Anonymous usage patterns only"}
             </p>
           </div>
           <div className="flex items-center gap-2 ml-4">
@@ -186,9 +191,12 @@ export default function AnalyticsConsentSwitch() {
           <div className="p-4 border rounded-lg bg-muted">
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-foreground mb-1">Your User ID</div>
+                <div className="font-medium text-foreground mb-1">
+                  Your User ID
+                </div>
                 <p className="text-xs text-muted-foreground mb-2">
-                  Share this ID when reporting issues to help us investigate your issue logs
+                  Share this ID when reporting issues to help us investigate
+                  your issue logs
                 </p>
                 <div className="flex items-center gap-2">
                   <code className="text-xs text-foreground bg-background px-2 py-1 rounded border border-border font-mono flex-1 truncate">
@@ -223,7 +231,8 @@ export default function AnalyticsConsentSwitch() {
           <Info className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
           <div className="text-xs text-blue-700">
             <p className="mb-1">
-              Your meetings, transcripts, and recordings remain completely private and local.
+              Your meetings, transcripts, and recordings remain completely
+              private and local.
             </p>
             <button
               onClick={handlePrivacyPolicyClick}

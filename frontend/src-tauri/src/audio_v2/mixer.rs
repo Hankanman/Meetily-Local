@@ -1,5 +1,5 @@
 //! Professional audio mixing
-//! 
+//!
 //! This module provides dynamic audio mixing capabilities based on real-time
 //! analysis, replacing the fixed 60%/40% mixing ratio.
 
@@ -55,7 +55,7 @@ impl AudioMixer {
         Self {
             rms_analyzer: RmsAnalyzer::new(1024), // 1024 sample window
             ducking_processor: DuckingProcessor::new(0.1, 0.01, 0.1), // 10% threshold, 10ms attack, 100ms release
-            crossfade_processor: CrossfadeProcessor::new(256), // 256 sample crossfade
+            crossfade_processor: CrossfadeProcessor::new(256),        // 256 sample crossfade
             mixing_mode,
             history_buffer: VecDeque::with_capacity(2048),
             history_size: 2048,
@@ -68,7 +68,10 @@ impl AudioMixer {
         let mut mixed = Vec::with_capacity(max_len);
 
         match self.mixing_mode {
-            MixingMode::Fixed { mic_ratio, system_ratio } => {
+            MixingMode::Fixed {
+                mic_ratio,
+                system_ratio,
+            } => {
                 // Fixed ratio mixing (legacy behavior)
                 for i in 0..max_len {
                     let mic_sample = if i < mic.len() { mic[i] } else { 0.0 };
@@ -80,9 +83,9 @@ impl AudioMixer {
                 // Dynamic mixing based on real-time analysis
                 let mic_rms = self.rms_analyzer.analyze(mic);
                 let system_rms = self.rms_analyzer.analyze(system);
-                
+
                 let (mic_ratio, system_ratio) = self.calculate_dynamic_ratios(mic_rms, system_rms);
-                
+
                 for i in 0..max_len {
                     let mic_sample = if i < mic.len() { mic[i] } else { 0.0 };
                     let system_sample = if i < system.len() { system[i] } else { 0.0 };
@@ -94,13 +97,13 @@ impl AudioMixer {
                 for i in 0..max_len {
                     let mic_sample = if i < mic.len() { mic[i] } else { 0.0 };
                     let system_sample = if i < system.len() { system[i] } else { 0.0 };
-                    
+
                     // Apply ducking
                     let ducked_mic = self.ducking_processor.process(mic_sample, system_sample);
-                    
+
                     // Apply crossfade
                     let crossfaded = self.crossfade_processor.process(ducked_mic, system_sample);
-                    
+
                     mixed.push(crossfaded);
                 }
             }
@@ -210,7 +213,7 @@ impl DuckingProcessor {
 
     fn process(&mut self, mic_sample: f32, system_sample: f32) -> f32 {
         let system_level = system_sample.abs();
-        
+
         // Calculate target gain based on system level
         if system_level > self.threshold {
             // Duck the mic when system audio is loud
@@ -247,11 +250,11 @@ impl CrossfadeProcessor {
         // Simple crossfade implementation
         // In a more sophisticated version, this would handle smooth transitions
         // between different audio sources
-        
+
         // For now, use a simple weighted average
         let mic_weight = 0.6;
         let system_weight = 0.4;
-        
+
         mic_sample * mic_weight + system_sample * system_weight
     }
 }

@@ -6,32 +6,32 @@
 
 // Database schema interfaces
 export interface MeetingMetadata {
-  meetingId: string;          // Primary key: "meeting-{timestamp}"
-  title: string;              // Meeting title
-  startTime: number;          // Unix timestamp (ms)
-  lastUpdated: number;        // Unix timestamp (ms)
-  transcriptCount: number;    // Number of transcript segments
-  savedToSQLite: boolean;     // Flag: saved to backend DB
-  folderPath?: string;        // Path to recording folder
+  meetingId: string; // Primary key: "meeting-{timestamp}"
+  title: string; // Meeting title
+  startTime: number; // Unix timestamp (ms)
+  lastUpdated: number; // Unix timestamp (ms)
+  transcriptCount: number; // Number of transcript segments
+  savedToSQLite: boolean; // Flag: saved to backend DB
+  folderPath?: string; // Path to recording folder
 }
 
 export interface StoredTranscript {
-  id?: number;                // Auto-increment primary key
-  meetingId: string;          // Foreign key to meetings store
-  text: string;               // Transcript text
-  timestamp: string;          // ISO 8601 timestamp
-  confidence: number;         // Whisper confidence score
-  sequenceId: number;         // Sequence number for ordering
-  storedAt: number;           // Unix timestamp when saved
-  audio_start_time?: number;  // Recording-relative start time in seconds
-  audio_end_time?: number;    // Recording-relative end time in seconds
-  duration?: number;          // Duration in seconds
-  [key: string]: any;         // Allow additional fields from TranscriptUpdate
+  id?: number; // Auto-increment primary key
+  meetingId: string; // Foreign key to meetings store
+  text: string; // Transcript text
+  timestamp: string; // ISO 8601 timestamp
+  confidence: number; // Whisper confidence score
+  sequenceId: number; // Sequence number for ordering
+  storedAt: number; // Unix timestamp when saved
+  audio_start_time?: number; // Recording-relative start time in seconds
+  audio_end_time?: number; // Recording-relative end time in seconds
+  duration?: number; // Duration in seconds
+  [key: string]: any; // Allow additional fields from TranscriptUpdate
 }
 
 class IndexedDBService {
   private db: IDBDatabase | null = null;
-  private readonly DB_NAME = 'MeetilyRecoveryDB';
+  private readonly DB_NAME = "MeetilyRecoveryDB";
   private readonly DB_VERSION = 1;
   private initPromise: Promise<void> | null = null;
 
@@ -54,7 +54,7 @@ class IndexedDBService {
         const request = indexedDB.open(this.DB_NAME, this.DB_VERSION);
 
         request.onerror = () => {
-          console.error('Failed to open IndexedDB:', request.error);
+          console.error("Failed to open IndexedDB:", request.error);
           reject(request.error);
         };
 
@@ -67,24 +67,34 @@ class IndexedDBService {
           const db = (event.target as IDBOpenDBRequest).result;
 
           // Create meetings store
-          if (!db.objectStoreNames.contains('meetings')) {
-            const meetingsStore = db.createObjectStore('meetings', { keyPath: 'meetingId' });
-            meetingsStore.createIndex('lastUpdated', 'lastUpdated', { unique: false });
-            meetingsStore.createIndex('savedToSQLite', 'savedToSQLite', { unique: false });
+          if (!db.objectStoreNames.contains("meetings")) {
+            const meetingsStore = db.createObjectStore("meetings", {
+              keyPath: "meetingId",
+            });
+            meetingsStore.createIndex("lastUpdated", "lastUpdated", {
+              unique: false,
+            });
+            meetingsStore.createIndex("savedToSQLite", "savedToSQLite", {
+              unique: false,
+            });
           }
 
           // Create transcripts store
-          if (!db.objectStoreNames.contains('transcripts')) {
-            const transcriptsStore = db.createObjectStore('transcripts', {
-              keyPath: 'id',
-              autoIncrement: true
+          if (!db.objectStoreNames.contains("transcripts")) {
+            const transcriptsStore = db.createObjectStore("transcripts", {
+              keyPath: "id",
+              autoIncrement: true,
             });
-            transcriptsStore.createIndex('meetingId', 'meetingId', { unique: false });
-            transcriptsStore.createIndex('storedAt', 'storedAt', { unique: false });
+            transcriptsStore.createIndex("meetingId", "meetingId", {
+              unique: false,
+            });
+            transcriptsStore.createIndex("storedAt", "storedAt", {
+              unique: false,
+            });
           }
         };
       } catch (error) {
-        console.error('Exception during IndexedDB initialization:', error);
+        console.error("Exception during IndexedDB initialization:", error);
         reject(error);
       }
     });
@@ -101,8 +111,8 @@ class IndexedDBService {
     try {
       if (!this.db) await this.init();
 
-      const transaction = this.db!.transaction(['meetings'], 'readwrite');
-      const store = transaction.objectStore('meetings');
+      const transaction = this.db!.transaction(["meetings"], "readwrite");
+      const store = transaction.objectStore("meetings");
 
       await new Promise<void>((resolve, reject) => {
         const request = store.put(metadata);
@@ -110,7 +120,7 @@ class IndexedDBService {
         request.onerror = () => reject(request.error);
       });
     } catch (error) {
-      console.warn('Failed to save meeting metadata to IndexedDB:', error);
+      console.warn("Failed to save meeting metadata to IndexedDB:", error);
       // Fail silently - don't interrupt recording
     }
   }
@@ -122,8 +132,8 @@ class IndexedDBService {
     try {
       if (!this.db) await this.init();
 
-      const transaction = this.db!.transaction(['meetings'], 'readonly');
-      const store = transaction.objectStore('meetings');
+      const transaction = this.db!.transaction(["meetings"], "readonly");
+      const store = transaction.objectStore("meetings");
 
       return new Promise((resolve, reject) => {
         const request = store.get(meetingId);
@@ -131,7 +141,7 @@ class IndexedDBService {
         request.onerror = () => reject(request.error);
       });
     } catch (error) {
-      console.error('Failed to get meeting metadata from IndexedDB:', error);
+      console.error("Failed to get meeting metadata from IndexedDB:", error);
       return null;
     }
   }
@@ -143,15 +153,17 @@ class IndexedDBService {
     try {
       if (!this.db) await this.init();
 
-      const transaction = this.db!.transaction(['meetings'], 'readonly');
-      const store = transaction.objectStore('meetings');
+      const transaction = this.db!.transaction(["meetings"], "readonly");
+      const store = transaction.objectStore("meetings");
 
       return new Promise((resolve, reject) => {
         const request = store.getAll();
         request.onsuccess = () => {
           const allMeetings = request.result as MeetingMetadata[];
           // Filter for unsaved meetings (savedToSQLite = false)
-          const unsavedMeetings = allMeetings.filter(m => m.savedToSQLite === false);
+          const unsavedMeetings = allMeetings.filter(
+            (m) => m.savedToSQLite === false,
+          );
 
           // Sort by most recent first
           unsavedMeetings.sort((a, b) => b.lastUpdated - a.lastUpdated);
@@ -160,7 +172,7 @@ class IndexedDBService {
         request.onerror = () => reject(request.error);
       });
     } catch (error) {
-      console.error('Failed to get meetings from IndexedDB:', error);
+      console.error("Failed to get meetings from IndexedDB:", error);
       return [];
     }
   }
@@ -172,8 +184,8 @@ class IndexedDBService {
     try {
       if (!this.db) await this.init();
 
-      const transaction = this.db!.transaction(['meetings'], 'readwrite');
-      const store = transaction.objectStore('meetings');
+      const transaction = this.db!.transaction(["meetings"], "readwrite");
+      const store = transaction.objectStore("meetings");
 
       return new Promise((resolve, reject) => {
         const getRequest = store.get(meetingId);
@@ -192,7 +204,7 @@ class IndexedDBService {
         getRequest.onerror = () => reject(getRequest.error);
       });
     } catch (error) {
-      console.warn('Failed to mark meeting as saved:', error);
+      console.warn("Failed to mark meeting as saved:", error);
     }
   }
 
@@ -203,12 +215,18 @@ class IndexedDBService {
     try {
       if (!this.db) await this.init();
 
-      const transaction = this.db!.transaction(['meetings', 'transcripts'], 'readwrite');
-      const meetingsStore = transaction.objectStore('meetings');
-      const transcriptsStore = transaction.objectStore('transcripts');
+      const transaction = this.db!.transaction(
+        ["meetings", "transcripts"],
+        "readwrite",
+      );
+      const meetingsStore = transaction.objectStore("meetings");
+      const transcriptsStore = transaction.objectStore("transcripts");
 
       // Delete transcripts
-      await this.deleteTranscriptsForMeetingInternal(transcriptsStore, meetingId);
+      await this.deleteTranscriptsForMeetingInternal(
+        transcriptsStore,
+        meetingId,
+      );
 
       // Delete meeting
       await new Promise<void>((resolve, reject) => {
@@ -217,7 +235,7 @@ class IndexedDBService {
         request.onerror = () => reject(request.error);
       });
     } catch (error) {
-      console.error('Failed to delete meeting from IndexedDB:', error);
+      console.error("Failed to delete meeting from IndexedDB:", error);
       throw error;
     }
   }
@@ -234,12 +252,15 @@ class IndexedDBService {
       const storedTranscript: StoredTranscript = {
         ...transcript,
         meetingId,
-        storedAt: Date.now()
+        storedAt: Date.now(),
       };
 
-      const transaction = this.db!.transaction(['transcripts', 'meetings'], 'readwrite');
-      const transcriptsStore = transaction.objectStore('transcripts');
-      const meetingsStore = transaction.objectStore('meetings');
+      const transaction = this.db!.transaction(
+        ["transcripts", "meetings"],
+        "readwrite",
+      );
+      const transcriptsStore = transaction.objectStore("transcripts");
+      const meetingsStore = transaction.objectStore("meetings");
 
       // Save transcript
       await new Promise<void>((resolve, reject) => {
@@ -249,11 +270,13 @@ class IndexedDBService {
       });
 
       // Update meeting metadata
-      const meeting = await new Promise<MeetingMetadata | null>((resolve, reject) => {
-        const request = meetingsStore.get(meetingId);
-        request.onsuccess = () => resolve(request.result || null);
-        request.onerror = () => reject(request.error);
-      });
+      const meeting = await new Promise<MeetingMetadata | null>(
+        (resolve, reject) => {
+          const request = meetingsStore.get(meetingId);
+          request.onsuccess = () => resolve(request.result || null);
+          request.onerror = () => reject(request.error);
+        },
+      );
 
       if (meeting) {
         meeting.lastUpdated = Date.now();
@@ -265,7 +288,7 @@ class IndexedDBService {
         });
       }
     } catch (error) {
-      console.warn('Failed to save transcript to IndexedDB:', error);
+      console.warn("Failed to save transcript to IndexedDB:", error);
       // Fail silently - don't interrupt recording
     }
   }
@@ -277,9 +300,9 @@ class IndexedDBService {
     try {
       if (!this.db) await this.init();
 
-      const transaction = this.db!.transaction(['transcripts'], 'readonly');
-      const store = transaction.objectStore('transcripts');
-      const index = store.index('meetingId');
+      const transaction = this.db!.transaction(["transcripts"], "readonly");
+      const store = transaction.objectStore("transcripts");
+      const index = store.index("meetingId");
 
       return new Promise((resolve, reject) => {
         const request = index.getAll(meetingId);
@@ -292,7 +315,7 @@ class IndexedDBService {
         request.onerror = () => reject(request.error);
       });
     } catch (error) {
-      console.error('Failed to get transcripts from IndexedDB:', error);
+      console.error("Failed to get transcripts from IndexedDB:", error);
       return [];
     }
   }
@@ -304,9 +327,9 @@ class IndexedDBService {
     try {
       if (!this.db) await this.init();
 
-      const transaction = this.db!.transaction(['transcripts'], 'readonly');
-      const store = transaction.objectStore('transcripts');
-      const index = store.index('meetingId');
+      const transaction = this.db!.transaction(["transcripts"], "readonly");
+      const store = transaction.objectStore("transcripts");
+      const index = store.index("meetingId");
 
       return new Promise((resolve, reject) => {
         const request = index.count(meetingId);
@@ -314,7 +337,7 @@ class IndexedDBService {
         request.onerror = () => reject(request.error);
       });
     } catch (error) {
-      console.error('Failed to get transcript count from IndexedDB:', error);
+      console.error("Failed to get transcript count from IndexedDB:", error);
       return 0;
     }
   }
@@ -330,24 +353,32 @@ class IndexedDBService {
     try {
       if (!this.db) await this.init();
 
-      const cutoffTime = Date.now() - (daysOld * 24 * 60 * 60 * 1000);
-      const transaction = this.db!.transaction(['meetings', 'transcripts'], 'readwrite');
-      const meetingsStore = transaction.objectStore('meetings');
-      const transcriptsStore = transaction.objectStore('transcripts');
+      const cutoffTime = Date.now() - daysOld * 24 * 60 * 60 * 1000;
+      const transaction = this.db!.transaction(
+        ["meetings", "transcripts"],
+        "readwrite",
+      );
+      const meetingsStore = transaction.objectStore("meetings");
+      const transcriptsStore = transaction.objectStore("transcripts");
 
       // Get all meetings
-      const allMeetings = await new Promise<MeetingMetadata[]>((resolve, reject) => {
-        const request = meetingsStore.getAll();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
+      const allMeetings = await new Promise<MeetingMetadata[]>(
+        (resolve, reject) => {
+          const request = meetingsStore.getAll();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        },
+      );
 
       let deletedCount = 0;
 
       for (const meeting of allMeetings) {
         if (meeting.lastUpdated < cutoffTime) {
           // Delete transcripts
-          await this.deleteTranscriptsForMeetingInternal(transcriptsStore, meeting.meetingId);
+          await this.deleteTranscriptsForMeetingInternal(
+            transcriptsStore,
+            meeting.meetingId,
+          );
 
           // Delete meeting
           await new Promise<void>((resolve, reject) => {
@@ -363,7 +394,7 @@ class IndexedDBService {
       console.log(`Cleaned up ${deletedCount} old meetings`);
       return deletedCount;
     } catch (error) {
-      console.error('Failed to delete old meetings:', error);
+      console.error("Failed to delete old meetings:", error);
       return 0;
     }
   }
@@ -377,27 +408,35 @@ class IndexedDBService {
     try {
       if (!this.db) await this.init();
 
-      const cutoffTime = Date.now() - (hoursOld * 60 * 60 * 1000);
-      const transaction = this.db!.transaction(['meetings', 'transcripts'], 'readwrite');
-      const meetingsStore = transaction.objectStore('meetings');
-      const transcriptsStore = transaction.objectStore('transcripts');
+      const cutoffTime = Date.now() - hoursOld * 60 * 60 * 1000;
+      const transaction = this.db!.transaction(
+        ["meetings", "transcripts"],
+        "readwrite",
+      );
+      const meetingsStore = transaction.objectStore("meetings");
+      const transcriptsStore = transaction.objectStore("transcripts");
 
       // Get all meetings and filter for saved ones
-      const allMeetings = await new Promise<MeetingMetadata[]>((resolve, reject) => {
-        const request = meetingsStore.getAll();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
+      const allMeetings = await new Promise<MeetingMetadata[]>(
+        (resolve, reject) => {
+          const request = meetingsStore.getAll();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        },
+      );
 
       // Filter for saved meetings (savedToSQLite = true)
-      const savedMeetings = allMeetings.filter(m => m.savedToSQLite === true);
+      const savedMeetings = allMeetings.filter((m) => m.savedToSQLite === true);
 
       let deletedCount = 0;
 
       for (const meeting of savedMeetings) {
         if (meeting.lastUpdated < cutoffTime) {
           // Delete transcripts
-          await this.deleteTranscriptsForMeetingInternal(transcriptsStore, meeting.meetingId);
+          await this.deleteTranscriptsForMeetingInternal(
+            transcriptsStore,
+            meeting.meetingId,
+          );
 
           // Delete meeting
           await new Promise<void>((resolve, reject) => {
@@ -413,7 +452,7 @@ class IndexedDBService {
       console.log(`Cleaned up ${deletedCount} saved meetings`);
       return deletedCount;
     } catch (error) {
-      console.error('Failed to delete saved meetings:', error);
+      console.error("Failed to delete saved meetings:", error);
       return 0;
     }
   }
@@ -423,9 +462,9 @@ class IndexedDBService {
    */
   private async deleteTranscriptsForMeetingInternal(
     transcriptsStore: IDBObjectStore,
-    meetingId: string
+    meetingId: string,
   ): Promise<void> {
-    const index = transcriptsStore.index('meetingId');
+    const index = transcriptsStore.index("meetingId");
 
     return new Promise((resolve, reject) => {
       const request = index.openCursor(IDBKeyRange.only(meetingId));

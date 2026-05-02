@@ -1,12 +1,12 @@
-import React from 'react';
+import React from "react";
 
 interface AudioLevelMeterProps {
-  rmsLevel: number;    // 0.0 to 1.0
-  peakLevel: number;   // 0.0 to 1.0
-  isActive: boolean;   // Whether audio is being detected
+  rmsLevel: number; // 0.0 to 1.0
+  peakLevel: number; // 0.0 to 1.0
+  isActive: boolean; // Whether audio is being detected
   deviceName: string;
   className?: string;
-  size?: 'small' | 'medium' | 'large';
+  size?: "small" | "medium" | "large";
 }
 
 export function AudioLevelMeter({
@@ -14,8 +14,8 @@ export function AudioLevelMeter({
   peakLevel,
   isActive,
   deviceName,
-  className = '',
-  size = 'medium'
+  className = "",
+  size = "medium",
 }: AudioLevelMeterProps) {
   // Normalize levels to 0-1 range and apply log scaling for better visual representation
   const normalizedRms = Math.max(0, Math.min(1, rmsLevel));
@@ -31,9 +31,9 @@ export function AudioLevelMeter({
 
   // Color coding based on level
   const getLevelColor = (level: number) => {
-    if (level < 0.3) return 'bg-green-500';
-    if (level < 0.7) return 'bg-yellow-500';
-    return 'bg-red-500';
+    if (level < 0.3) return "bg-green-500";
+    if (level < 0.7) return "bg-yellow-500";
+    return "bg-red-500";
   };
 
   const rmsColor = getLevelColor(logRms);
@@ -42,20 +42,20 @@ export function AudioLevelMeter({
   // Size variants
   const sizeClasses = {
     small: {
-      container: 'h-2',
-      text: 'text-xs',
-      meter: 'h-1.5'
+      container: "h-2",
+      text: "text-xs",
+      meter: "h-1.5",
     },
     medium: {
-      container: 'h-3',
-      text: 'text-sm',
-      meter: 'h-2'
+      container: "h-3",
+      text: "text-sm",
+      meter: "h-2",
     },
     large: {
-      container: 'h-4',
-      text: 'text-base',
-      meter: 'h-3'
-    }
+      container: "h-4",
+      text: "text-base",
+      meter: "h-3",
+    },
   };
 
   const sizes = sizeClasses[size];
@@ -63,9 +63,12 @@ export function AudioLevelMeter({
   return (
     <div className={`flex items-center space-x-2 ${className}`}>
       {/* Device activity indicator */}
-      <div className={`w-2 h-2 rounded-full ${
-        isActive ? 'bg-green-400 animate-pulse' : 'bg-muted'
-      }`} title={`${deviceName} - ${isActive ? 'Active' : 'Inactive'}`} />
+      <div
+        className={`w-2 h-2 rounded-full ${
+          isActive ? "bg-green-400 animate-pulse" : "bg-muted"
+        }`}
+        title={`${deviceName} - ${isActive ? "Active" : "Inactive"}`}
+      />
 
       {/* Level meter container */}
       <div className={`flex-1 ${sizes.container} relative`}>
@@ -89,16 +92,27 @@ export function AudioLevelMeter({
         {/* Level markers */}
         <div className="absolute inset-0 flex justify-between items-center px-1 pointer-events-none">
           {/* 25% marker */}
-          <div className="w-px h-full bg-muted opacity-30" style={{ marginLeft: '25%' }} />
+          <div
+            className="w-px h-full bg-muted opacity-30"
+            style={{ marginLeft: "25%" }}
+          />
           {/* 50% marker */}
-          <div className="w-px h-full bg-muted opacity-30" style={{ marginLeft: '50%' }} />
+          <div
+            className="w-px h-full bg-muted opacity-30"
+            style={{ marginLeft: "50%" }}
+          />
           {/* 75% marker */}
-          <div className="w-px h-full bg-muted opacity-30" style={{ marginLeft: '75%' }} />
+          <div
+            className="w-px h-full bg-muted opacity-30"
+            style={{ marginLeft: "75%" }}
+          />
         </div>
       </div>
 
       {/* Level percentage display */}
-      <div className={`${sizes.text} text-muted-foreground font-mono min-w-[3rem] text-right`}>
+      <div
+        className={`${sizes.text} text-muted-foreground font-mono min-w-[3rem] text-right`}
+      >
         {rmsPercent}%
       </div>
     </div>
@@ -117,24 +131,26 @@ export function CompactAudioLevelMeter({
   rmsLevel,
   peakLevel,
   isActive,
-  className = ''
+  className = "",
 }: CompactAudioLevelMeterProps) {
   const normalizedRms = Math.max(0, Math.min(1, rmsLevel));
   const logRms = normalizedRms > 0 ? Math.log10(normalizedRms * 9 + 1) : 0;
   const rmsPercent = Math.round(logRms * 100);
 
   const getLevelColor = (level: number) => {
-    if (level < 0.3) return 'bg-green-400';
-    if (level < 0.7) return 'bg-yellow-400';
-    return 'bg-red-400';
+    if (level < 0.3) return "bg-green-400";
+    if (level < 0.7) return "bg-yellow-400";
+    return "bg-red-400";
   };
 
   return (
     <div className={`flex items-center space-x-1 ${className}`}>
       {/* Activity dot */}
-      <div className={`w-1.5 h-1.5 rounded-full ${
-        isActive ? 'bg-green-400' : 'bg-muted'
-      }`} />
+      <div
+        className={`w-1.5 h-1.5 rounded-full ${
+          isActive ? "bg-green-400" : "bg-muted"
+        }`}
+      />
 
       {/* Mini meter */}
       <div className="w-8 h-1.5 bg-muted rounded-sm overflow-hidden">

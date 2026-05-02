@@ -1,8 +1,8 @@
-'use client';
+"use client";
 
-import React, { useEffect } from 'react';
-import { listen } from '@tauri-apps/api/event';
-import { useRecordingStop } from '@/hooks/useRecordingStop';
+import React, { useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { useRecordingStop } from "@/hooks/useRecordingStop";
 
 /**
  * RecordingPostProcessingProvider
@@ -17,15 +17,20 @@ import { useRecordingStop } from '@/hooks/useRecordingStop';
  * and triggers the full post-processing flow (save to database, navigate, analytics)
  * regardless of which page the user is currently on.
  */
-export function RecordingPostProcessingProvider({ children }: { children: React.ReactNode }) {
+export function RecordingPostProcessingProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   // No-op functions since the global RecordingStateContext already handles state updates
   // These are only needed for the hook's local component state management
-  const setIsRecording = () => { };
-  const setIsRecordingDisabled = () => { };
+  const setIsRecording = () => {};
+  const setIsRecordingDisabled = () => {};
 
-  const {
-    handleRecordingStop,
-  } = useRecordingStop(setIsRecording, setIsRecordingDisabled);
+  const { handleRecordingStop } = useRecordingStop(
+    setIsRecording,
+    setIsRecordingDisabled,
+  );
 
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;
@@ -33,17 +38,28 @@ export function RecordingPostProcessingProvider({ children }: { children: React.
     const setupListener = async () => {
       try {
         // Listen for recording-stop-complete event from Rust
-        unlistenFn = await listen<boolean>('recording-stop-complete', (event) => {
-          console.log('[RecordingPostProcessing] Received recording-stop-complete event:', event.payload);
+        unlistenFn = await listen<boolean>(
+          "recording-stop-complete",
+          (event) => {
+            console.log(
+              "[RecordingPostProcessing] Received recording-stop-complete event:",
+              event.payload,
+            );
 
-          // Call the post-processing handler
-          // event.payload is the callApi boolean (true for normal stops)
-          handleRecordingStop(event.payload);
-        });
+            // Call the post-processing handler
+            // event.payload is the callApi boolean (true for normal stops)
+            handleRecordingStop(event.payload);
+          },
+        );
 
-        console.log('[RecordingPostProcessing] Event listener set up successfully');
+        console.log(
+          "[RecordingPostProcessing] Event listener set up successfully",
+        );
       } catch (error) {
-        console.error('[RecordingPostProcessing] Failed to set up event listener:', error);
+        console.error(
+          "[RecordingPostProcessing] Failed to set up event listener:",
+          error,
+        );
       }
     };
 
@@ -51,7 +67,7 @@ export function RecordingPostProcessingProvider({ children }: { children: React.
 
     return () => {
       if (unlistenFn) {
-        console.log('[RecordingPostProcessing] Cleaning up event listener');
+        console.log("[RecordingPostProcessing] Cleaning up event listener");
         unlistenFn();
       }
     };

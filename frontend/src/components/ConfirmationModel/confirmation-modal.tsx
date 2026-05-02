@@ -1,4 +1,4 @@
-import React from 'react';
+import React from "react";
 
 interface ConfirmationModalProps {
   onConfirm: () => void;
@@ -7,7 +7,12 @@ interface ConfirmationModalProps {
   isOpen: boolean;
 }
 
-export function ConfirmationModal({ onConfirm, onCancel, text, isOpen }: ConfirmationModalProps) {
+export function ConfirmationModal({
+  onConfirm,
+  onCancel,
+  text,
+  isOpen,
+}: ConfirmationModalProps) {
   if (!isOpen) return null;
 
   return (

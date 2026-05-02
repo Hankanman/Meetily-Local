@@ -1,8 +1,8 @@
-import React from 'react';
-import { Lock, Sparkles, Cpu } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { OnboardingContainer } from '../OnboardingContainer';
-import { useOnboarding } from '@/contexts/OnboardingContext';
+import React from "react";
+import { Lock, Sparkles, Cpu } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { OnboardingContainer } from "../OnboardingContainer";
+import { useOnboarding } from "@/contexts/OnboardingContext";
 
 export function WelcomeStep() {
   const { goNext } = useOnboarding();
@@ -10,15 +10,15 @@ export function WelcomeStep() {
   const features = [
     {
       icon: Lock,
-      title: 'Your data never leaves your device',
+      title: "Your data never leaves your device",
     },
     {
       icon: Sparkles,
-      title: 'Intelligent summaries & insights',
+      title: "Intelligent summaries & insights",
     },
     {
       icon: Cpu,
-      title: 'Works offline, no cloud required',
+      title: "Works offline, no cloud required",
     },
   ];
 
@@ -44,7 +44,9 @@ export function WelcomeStep() {
                     <Icon className="w-3 h-3 text-foreground" />
                   </div>
                 </div>
-                <p className="text-sm text-foreground leading-relaxed">{feature.title}</p>
+                <p className="text-sm text-foreground leading-relaxed">
+                  {feature.title}
+                </p>
               </div>
             );
           })}
@@ -58,7 +60,9 @@ export function WelcomeStep() {
           >
             Get Started
           </Button>
-          <p className="text-xs text-center text-muted-foreground">Takes less than 3 minutes</p>
+          <p className="text-xs text-center text-muted-foreground">
+            Takes less than 3 minutes
+          </p>
         </div>
       </div>
     </OnboardingContainer>

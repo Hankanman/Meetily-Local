@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { TranscriptSegmentData } from '@/types';
+import { useState, useEffect, useRef } from "react";
+import { TranscriptSegmentData } from "@/types";
 
 const INTERVAL_MS = 15; // Character reveal interval
 const DURATION_MS = 800; // Total streaming duration
@@ -18,9 +18,10 @@ interface StreamingSegment {
 export function useTranscriptStreaming(
   segments: TranscriptSegmentData[],
   isRecording: boolean,
-  enableStreaming: boolean
+  enableStreaming: boolean,
 ) {
-  const [streamingSegment, setStreamingSegment] = useState<StreamingSegment | null>(null);
+  const [streamingSegment, setStreamingSegment] =
+    useState<StreamingSegment | null>(null);
   const lastSegmentIdRef = useRef<string | null>(null);
   const streamingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -51,7 +52,10 @@ export function useTranscriptStreaming(
       const fullText = latestSegment.text;
 
       // Show first characters immediately
-      const initialText = fullText.substring(0, Math.min(INITIAL_CHARS, fullText.length));
+      const initialText = fullText.substring(
+        0,
+        Math.min(INITIAL_CHARS, fullText.length),
+      );
 
       setStreamingSegment({
         id: latestSegment.id,
@@ -89,10 +93,14 @@ export function useTranscriptStreaming(
           }
         } else {
           // Update visible text
-          setStreamingSegment(prev => prev ? {
-            ...prev,
-            visibleText: fullText.substring(0, charIndex),
-          } : null);
+          setStreamingSegment((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  visibleText: fullText.substring(0, charIndex),
+                }
+              : null,
+          );
         }
       }, INTERVAL_MS);
     }

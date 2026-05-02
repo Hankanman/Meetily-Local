@@ -1,17 +1,17 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { Mic, Sparkles, Check, Loader2, Download } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { OnboardingContainer } from '../OnboardingContainer';
-import { useOnboarding } from '@/contexts/OnboardingContext';
-import { toast } from 'sonner';
-import { motion, AnimatePresence } from 'framer-motion';
-import { getErrorMessage } from '@/lib/utils';
+import React, { useEffect, useState, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { Mic, Sparkles, Check, Loader2, Download } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { OnboardingContainer } from "../OnboardingContainer";
+import { useOnboarding } from "@/contexts/OnboardingContext";
+import { toast } from "sonner";
+import { motion, AnimatePresence } from "framer-motion";
+import { getErrorMessage } from "@/lib/utils";
 
-const PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3-int8';
+const PARAKEET_MODEL = "parakeet-tdt-0.6b-v3-int8";
 
-type DownloadStatus = 'waiting' | 'downloading' | 'completed' | 'error';
+type DownloadStatus = "waiting" | "downloading" | "completed" | "error";
 
 interface DownloadState {
   status: DownloadStatus;
@@ -35,11 +35,11 @@ export function DownloadProgressStep() {
     completeOnboarding,
   } = useOnboarding();
 
-  const [recommendedModel, setRecommendedModel] = useState<string>('gemma3:1b');
+  const [recommendedModel, setRecommendedModel] = useState<string>("gemma3:1b");
   const [isMac, setIsMac] = useState(false);
 
   const [parakeetState, setParakeetState] = useState<DownloadState>({
-    status: parakeetDownloaded ? 'completed' : 'waiting',
+    status: parakeetDownloaded ? "completed" : "waiting",
     progress: parakeetDownloaded ? 100 : 0,
     downloadedMb: 0,
     totalMb: 670,
@@ -47,7 +47,7 @@ export function DownloadProgressStep() {
   });
 
   const [gemmaState, setGemmaState] = useState<DownloadState>({
-    status: summaryModelDownloaded ? 'completed' : 'waiting',
+    status: summaryModelDownloaded ? "completed" : "waiting",
     progress: summaryModelDownloaded ? 100 : 0,
     downloadedMb: 0,
     totalMb: 806, // 1b model size
@@ -63,17 +63,17 @@ export function DownloadProgressStep() {
   const handleRetryDownload = async () => {
     // Prevent multiple simultaneous retries
     if (retryingRef.current) {
-      console.log('[DownloadProgressStep] Retry already in progress, ignoring');
+      console.log("[DownloadProgressStep] Retry already in progress, ignoring");
       return;
     }
 
-    console.log('[DownloadProgressStep] Retrying Parakeet download');
+    console.log("[DownloadProgressStep] Retrying Parakeet download");
     retryingRef.current = true;
 
     // Reset error state
     setParakeetState((prev) => ({
       ...prev,
-      status: 'waiting',
+      status: "waiting",
       error: undefined,
       progress: 0,
       downloadedMb: 0,
@@ -81,18 +81,18 @@ export function DownloadProgressStep() {
     }));
 
     try {
-      await invoke('parakeet_retry_download', { modelName: PARAKEET_MODEL });
+      await invoke("parakeet_retry_download", { modelName: PARAKEET_MODEL });
       // Progress events will update state
     } catch (error) {
-      console.error('[DownloadProgressStep] Retry failed:', error);
+      console.error("[DownloadProgressStep] Retry failed:", error);
       setParakeetState((prev) => ({
         ...prev,
-        status: 'error',
-        error: getErrorMessage(error, 'Retry failed'),
+        status: "error",
+        error: getErrorMessage(error, "Retry failed"),
       }));
 
-      toast.error('Download retry failed', {
-        description: 'Please check your connection and try again.',
+      toast.error("Download retry failed", {
+        description: "Please check your connection and try again.",
       });
     } finally {
       // Allow retry again after 2 seconds
@@ -106,17 +106,19 @@ export function DownloadProgressStep() {
   const handleRetrySummaryDownload = async () => {
     // Prevent multiple simultaneous retries
     if (retryingSummaryRef.current) {
-      console.log('[DownloadProgressStep] Summary retry already in progress, ignoring');
+      console.log(
+        "[DownloadProgressStep] Summary retry already in progress, ignoring",
+      );
       return;
     }
 
-    console.log('[DownloadProgressStep] Retrying summary model download');
+    console.log("[DownloadProgressStep] Retrying summary model download");
     retryingSummaryRef.current = true;
 
     // Reset error state
     setGemmaState((prev) => ({
       ...prev,
-      status: 'downloading',
+      status: "downloading",
       error: undefined,
       progress: 0,
       downloadedMb: 0,
@@ -125,17 +127,19 @@ export function DownloadProgressStep() {
 
     try {
       // Call download command directly (no retry command exists for built-in AI)
-      await invoke('builtin_ai_download_model', { modelName: selectedSummaryModel || recommendedModel });
+      await invoke("builtin_ai_download_model", {
+        modelName: selectedSummaryModel || recommendedModel,
+      });
     } catch (error) {
-      console.error('[DownloadProgressStep] Summary retry failed:', error);
+      console.error("[DownloadProgressStep] Summary retry failed:", error);
       setGemmaState((prev) => ({
         ...prev,
-        status: 'error',
-        error: getErrorMessage(error, 'Retry failed'),
+        status: "error",
+        error: getErrorMessage(error, "Retry failed"),
       }));
 
-      toast.error('Summary model download retry failed', {
-        description: 'Please check your connection and try again.',
+      toast.error("Summary model download retry failed", {
+        description: "Please check your connection and try again.",
       });
     } finally {
       // Allow retry again after 2 seconds
@@ -149,21 +153,21 @@ export function DownloadProgressStep() {
   useEffect(() => {
     const fetchRecommendation = async () => {
       try {
-        const model = await invoke<string>('builtin_ai_get_recommended_model');
+        const model = await invoke<string>("builtin_ai_get_recommended_model");
         setRecommendedModel(model);
-        setSelectedSummaryModel(model);  // Update context
+        setSelectedSummaryModel(model); // Update context
       } catch (error) {
-        console.error('Failed to get recommended model:', error);
+        console.error("Failed to get recommended model:", error);
         // Keep default gemma3:1b
       }
     };
 
     const checkPlatform = async () => {
       try {
-        const { platform } = await import('@tauri-apps/plugin-os');
-        setIsMac(platform() === 'macos');
+        const { platform } = await import("@tauri-apps/plugin-os");
+        setIsMac(platform() === "macos");
       } catch (e) {
-        setIsMac(navigator.userAgent.includes('Mac'));
+        setIsMac(navigator.userAgent.includes("Mac"));
       }
     };
 
@@ -188,45 +192,56 @@ export function DownloadProgressStep() {
       total_mb?: number;
       speed_mbps?: number;
       status?: string;
-    }>('parakeet-model-download-progress', (event) => {
-      const { modelName, progress, downloaded_mb, total_mb, speed_mbps, status } = event.payload;
+    }>("parakeet-model-download-progress", (event) => {
+      const {
+        modelName,
+        progress,
+        downloaded_mb,
+        total_mb,
+        speed_mbps,
+        status,
+      } = event.payload;
       if (modelName === PARAKEET_MODEL) {
         setParakeetState((prev) => ({
           ...prev,
-          status: status === 'completed' ? 'completed' : 'downloading',
+          status: status === "completed" ? "completed" : "downloading",
           progress,
           downloadedMb: downloaded_mb ?? prev.downloadedMb,
           totalMb: total_mb ?? prev.totalMb,
           speedMbps: speed_mbps ?? prev.speedMbps,
         }));
 
-        if (status === 'completed' || progress >= 100) {
+        if (status === "completed" || progress >= 100) {
           setParakeetDownloaded(true);
         }
       }
     });
 
     const unlistenComplete = listen<{ modelName: string }>(
-      'parakeet-model-download-complete',
-      (event) => {
-        if (event.payload.modelName === PARAKEET_MODEL) {
-          setParakeetState((prev) => ({ ...prev, status: 'completed', progress: 100 }));
-          setParakeetDownloaded(true);
-        }
-      }
-    );
-
-    const unlistenError = listen<{ modelName: string; error: string }>(
-      'parakeet-model-download-error',
+      "parakeet-model-download-complete",
       (event) => {
         if (event.payload.modelName === PARAKEET_MODEL) {
           setParakeetState((prev) => ({
             ...prev,
-            status: 'error',
+            status: "completed",
+            progress: 100,
+          }));
+          setParakeetDownloaded(true);
+        }
+      },
+    );
+
+    const unlistenError = listen<{ modelName: string; error: string }>(
+      "parakeet-model-download-error",
+      (event) => {
+        if (event.payload.modelName === PARAKEET_MODEL) {
+          setParakeetState((prev) => ({
+            ...prev,
+            status: "error",
             error: event.payload.error,
           }));
         }
-      }
+      },
     );
 
     return () => {
@@ -246,24 +261,37 @@ export function DownloadProgressStep() {
       speed_mbps?: number;
       status: string;
       error?: string;
-    }>('builtin-ai-download-progress', (event) => {
-      const { model, progress, downloaded_mb, total_mb, speed_mbps, status, error } = event.payload;
-      if (model === selectedSummaryModel || model === 'gemma3:1b' || model === 'gemma3:4b') {
+    }>("builtin-ai-download-progress", (event) => {
+      const {
+        model,
+        progress,
+        downloaded_mb,
+        total_mb,
+        speed_mbps,
+        status,
+        error,
+      } = event.payload;
+      if (
+        model === selectedSummaryModel ||
+        model === "gemma3:1b" ||
+        model === "gemma3:4b"
+      ) {
         setGemmaState((prev) => ({
           ...prev,
-          status: status === 'completed'
-            ? 'completed'
-            : status === 'error'
-            ? 'error'
-            : 'downloading',
+          status:
+            status === "completed"
+              ? "completed"
+              : status === "error"
+                ? "error"
+                : "downloading",
           progress,
           downloadedMb: downloaded_mb ?? prev.downloadedMb,
           totalMb: total_mb ?? prev.totalMb,
           speedMbps: speed_mbps ?? prev.speedMbps,
-          error: status === 'error' ? error : undefined,
+          error: status === "error" ? error : undefined,
         }));
 
-        if (status === 'completed' || progress >= 100) {
+        if (status === "completed" || progress >= 100) {
           setSummaryModelDownloaded(true);
         }
       }
@@ -279,16 +307,20 @@ export function DownloadProgressStep() {
     if (!parakeetDownloaded || !summaryModelDownloaded) {
       try {
         if (!parakeetDownloaded) {
-          setParakeetState((prev) => ({ ...prev, status: 'downloading' }));
+          setParakeetState((prev) => ({ ...prev, status: "downloading" }));
         }
         if (!summaryModelDownloaded) {
-          setGemmaState((prev) => ({ ...prev, status: 'downloading' }));
+          setGemmaState((prev) => ({ ...prev, status: "downloading" }));
         }
-        await startBackgroundDownloads(true);  // Always download both
+        await startBackgroundDownloads(true); // Always download both
       } catch (error) {
-        console.error('Failed to start downloads:', error);
+        console.error("Failed to start downloads:", error);
         if (!parakeetDownloaded) {
-          setParakeetState((prev) => ({ ...prev, status: 'error', error: String(error) }));
+          setParakeetState((prev) => ({
+            ...prev,
+            status: "error",
+            error: String(error),
+          }));
         }
       }
     }
@@ -297,35 +329,40 @@ export function DownloadProgressStep() {
   const handleContinue = async () => {
     // Verify actual model availability (catches state drift)
     try {
-      await invoke('parakeet_init');
-      const actuallyAvailable = await invoke<boolean>('parakeet_has_available_models');
+      await invoke("parakeet_init");
+      const actuallyAvailable = await invoke<boolean>(
+        "parakeet_has_available_models",
+      );
 
       if (actuallyAvailable && !parakeetDownloaded) {
-        console.log('[DownloadProgressStep] Model available but state not updated');
+        console.log(
+          "[DownloadProgressStep] Model available but state not updated",
+        );
         setParakeetDownloaded(true);
         setParakeetState((prev) => ({
           ...prev,
-          status: 'completed',
+          status: "completed",
           progress: 100,
         }));
-      } else if (!actuallyAvailable && parakeetState.status === 'error') {
-        toast.error('Transcription engine required', {
-          description: 'Please retry the download before continuing.',
+      } else if (!actuallyAvailable && parakeetState.status === "error") {
+        toast.error("Transcription engine required", {
+          description: "Please retry the download before continuing.",
         });
         return;
       }
     } catch (error) {
-      console.warn('[DownloadProgressStep] Failed to verify model:', error);
+      console.warn("[DownloadProgressStep] Failed to verify model:", error);
     }
 
     // Check if downloads are complete for toast notification
-    const downloadsComplete = parakeetState.status === 'completed' &&
-      gemmaState.status === 'completed';
+    const downloadsComplete =
+      parakeetState.status === "completed" && gemmaState.status === "completed";
 
     // Show toast if downloads still in progress
     if (!downloadsComplete) {
-      toast.info('Downloads will continue in the background', {
-        description: 'You can start using the app. Recording will be available once speech recognition is ready.',
+      toast.info("Downloads will continue in the background", {
+        description:
+          "You can start using the app. Recording will be available once speech recognition is ready.",
         duration: 5000,
       });
     }
@@ -340,13 +377,13 @@ export function DownloadProgressStep() {
         await completeOnboarding();
 
         // Small delay to ensure state is saved before reload
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 100));
 
         window.location.reload();
       } catch (error) {
-        console.error('Failed to complete onboarding:', error);
-        toast.error('Failed to complete setup', {
-          description: 'Please try again.',
+        console.error("Failed to complete onboarding:", error);
+        toast.error("Failed to complete setup", {
+          description: "Please try again.",
         });
         setIsCompleting(false);
       }
@@ -357,7 +394,7 @@ export function DownloadProgressStep() {
     title: string,
     icon: React.ReactNode,
     state: DownloadState,
-    modelSize: string
+    modelSize: string,
   ) => (
     <div className="bg-background rounded-xl border border-border p-5">
       <div className="flex items-center justify-between mb-4">
@@ -371,29 +408,29 @@ export function DownloadProgressStep() {
           </div>
         </div>
         <div>
-          {state.status === 'waiting' && (
+          {state.status === "waiting" && (
             <span className="text-sm text-muted-foreground">Waiting...</span>
           )}
-          {state.status === 'downloading' && (
+          {state.status === "downloading" && (
             <Loader2 className="w-5 h-5 text-foreground animate-spin" />
           )}
-          {state.status === 'completed' && (
+          {state.status === "completed" && (
             <div className="w-6 h-6 rounded-full bg-green-100 flex items-center justify-center">
               <Check className="w-4 h-4 text-green-600" />
             </div>
           )}
-          {state.status === 'error' && (
+          {state.status === "error" && (
             <span className="text-sm text-red-500">Failed</span>
           )}
         </div>
       </div>
 
       {/* Progress Bar */}
-      {(state.status === 'downloading' || state.status === 'completed') && (
+      {(state.status === "downloading" || state.status === "completed") && (
         <div className="space-y-2">
           <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
             <div
-              className="h-full bg-gradient-to-r from-gray-700 to-gray-900 rounded-full transition-all duration-300"
+              className="h-full bg-linear-to-r from-gray-700 to-gray-900 rounded-full transition-all duration-300"
               style={{ width: `${state.progress}%` }}
             />
           </div>
@@ -415,18 +452,31 @@ export function DownloadProgressStep() {
         </div>
       )}
 
-      {state.status === 'error' && state.error && (
+      {state.status === "error" && state.error && (
         <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-md">
           <p className="text-sm text-red-600 font-medium">Download Error</p>
           <p className="text-xs text-red-500 mt-1">{state.error}</p>
-          {(title === 'Transcription Engine' || title === 'Summary Engine') && (
+          {(title === "Transcription Engine" || title === "Summary Engine") && (
             <button
-              onClick={title === 'Transcription Engine' ? handleRetryDownload : handleRetrySummaryDownload}
+              onClick={
+                title === "Transcription Engine"
+                  ? handleRetryDownload
+                  : handleRetrySummaryDownload
+              }
               className="mt-3 w-full h-9 px-4 bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium rounded-md transition-colors flex items-center justify-center gap-2"
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                />
               </svg>
               Try Again
             </button>
@@ -447,17 +497,17 @@ export function DownloadProgressStep() {
         {/* Download Cards */}
         <div className="w-full max-w-lg space-y-4">
           {renderDownloadCard(
-            'Transcription Engine',
+            "Transcription Engine",
             <Mic className="w-5 h-5 text-muted-foreground" />,
             parakeetState,
-            '~670 MB'
+            "~670 MB",
           )}
 
           {renderDownloadCard(
-            'Summary Engine',
+            "Summary Engine",
             <Sparkles className="w-5 h-5 text-muted-foreground" />,
             gemmaState,
-            recommendedModel === 'gemma3:4b' ? '~2.5 GB' : '~806 MB'
+            recommendedModel === "gemma3:4b" ? "~2.5 GB" : "~806 MB",
           )}
         </div>
 
@@ -468,13 +518,15 @@ export function DownloadProgressStep() {
               initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.3, ease: 'easeOut' }}
+              transition={{ duration: 0.3, ease: "easeOut" }}
               className="w-full max-w-lg bg-muted rounded-lg p-4 text-sm text-foreground"
             >
               <div className="flex items-start gap-3">
-                <Download className="w-5 h-5 text-muted-foreground flex-shrink-0 mt-0.5" />
+                <Download className="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" />
                 <div>
-                  <p className="font-medium">You can continue while this finishes</p>
+                  <p className="font-medium">
+                    You can continue while this finishes
+                  </p>
                   <p className="text-foreground mt-1">
                     Download will continue in the background.
                   </p>
@@ -491,10 +543,10 @@ export function DownloadProgressStep() {
             disabled={!parakeetDownloaded || isCompleting}
             className="w-full h-11 bg-gray-900 hover:bg-gray-800 text-white disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {(isCompleting || !parakeetDownloaded) ? (
+            {isCompleting || !parakeetDownloaded ? (
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
             ) : (
-              'Continue'
+              "Continue"
             )}
           </Button>
         </div>

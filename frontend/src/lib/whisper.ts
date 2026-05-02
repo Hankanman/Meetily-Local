@@ -9,12 +9,12 @@ export interface ModelInfo {
   description?: string;
 }
 
-export type ModelAccuracy = 'High' | 'Good' | 'Decent';
-export type ProcessingSpeed = 'Slow' | 'Medium' | 'Fast' | 'Very Fast';
+export type ModelAccuracy = "High" | "Good" | "Decent";
+export type ProcessingSpeed = "Slow" | "Medium" | "Fast" | "Very Fast";
 
 export type ModelStatus =
-  | 'Available'
-  | 'Missing'
+  | "Available"
+  | "Missing"
   | { Downloading: number }
   | { Error: string }
   | { Corrupted: { file_size: number; expected_min_size: number } };
@@ -51,100 +51,107 @@ export interface TranscribeAudioRequest {
 // Model configuration for different use cases
 export const MODEL_CONFIGS: Record<string, Partial<ModelInfo>> = {
   // Standard f16 models (full precision)
-  'large-v3': {
-    description: 'Highest accuracy, best for important meetings. Slower processing.',
+  "large-v3": {
+    description:
+      "Highest accuracy, best for important meetings. Slower processing.",
     size_mb: 2951,
-    accuracy: 'High',
-    speed: 'Slow'
+    accuracy: "High",
+    speed: "Slow",
   },
-  'large-v3-turbo': {
-    description: 'Best accuracy with improved speed.',
+  "large-v3-turbo": {
+    description: "Best accuracy with improved speed.",
     size_mb: 1549,
-    accuracy: 'High',
-    speed: 'Medium'
+    accuracy: "High",
+    speed: "Medium",
   },
-  'medium': {
-    description: 'Balanced accuracy and speed. Good for most use cases.',
+  medium: {
+    description: "Balanced accuracy and speed. Good for most use cases.",
     size_mb: 1463,
-    accuracy: 'High',
-    speed: 'Slow'
+    accuracy: "High",
+    speed: "Slow",
   },
-  'small': {
-    description: 'Fast processing with good quality. Great for quick transcription.',
+  small: {
+    description:
+      "Fast processing with good quality. Great for quick transcription.",
     size_mb: 466,
-    accuracy: 'Good',
-    speed: 'Medium'
+    accuracy: "Good",
+    speed: "Medium",
   },
-  'base': {
-    description: 'Good balance of speed and accuracy.',
+  base: {
+    description: "Good balance of speed and accuracy.",
     size_mb: 142,
-    accuracy: 'Good',
-    speed: 'Fast'
+    accuracy: "Good",
+    speed: "Fast",
   },
-  'tiny': {
-    description: 'Fastest processing, good for real-time use.',
+  tiny: {
+    description: "Fastest processing, good for real-time use.",
     size_mb: 39,
-    accuracy: 'Decent',
-    speed: 'Very Fast'
+    accuracy: "Decent",
+    speed: "Very Fast",
   },
 
   // Q5_1 quantized models (balanced speed/accuracy, slightly better quality than Q5_0)
-  'tiny-q5_1': {
-    description: 'Quantized tiny model, ~50% faster processing.',
+  "tiny-q5_1": {
+    description: "Quantized tiny model, ~50% faster processing.",
     size_mb: 31,
-    accuracy: 'Decent',
-    speed: 'Very Fast'
+    accuracy: "Decent",
+    speed: "Very Fast",
   },
-  'base-q5_1': {
-    description: 'Quantized base model, good speed/accuracy balance.',
+  "base-q5_1": {
+    description: "Quantized base model, good speed/accuracy balance.",
     size_mb: 57,
-    accuracy: 'Good',
-    speed: 'Fast'
+    accuracy: "Good",
+    speed: "Fast",
   },
-  'small-q5_1': {
-    description: 'Quantized small model, faster than f16 version.',
+  "small-q5_1": {
+    description: "Quantized small model, faster than f16 version.",
     size_mb: 181,
-    accuracy: 'Good',
-    speed: 'Fast'
+    accuracy: "Good",
+    speed: "Fast",
   },
 
   // Q5_0 quantized models (balanced speed/accuracy)
-  'medium-q5_0': {
-    description: 'Quantized medium model, professional quality with better speed.',
+  "medium-q5_0": {
+    description:
+      "Quantized medium model, professional quality with better speed.",
     size_mb: 514,
-    accuracy: 'High',
-    speed: 'Medium'
+    accuracy: "High",
+    speed: "Medium",
   },
-  'large-v3-turbo-q5_0': {
-    description: 'Quantized large turbo model, best balance.',
+  "large-v3-turbo-q5_0": {
+    description: "Quantized large turbo model, best balance.",
     size_mb: 547,
-    accuracy: 'High',
-    speed: 'Medium'
+    accuracy: "High",
+    speed: "Medium",
   },
-  'large-v3-q5_0': {
-    description: 'Quantized large model, best balance of speed and accuracy.',
+  "large-v3-q5_0": {
+    description: "Quantized large model, best balance of speed and accuracy.",
     size_mb: 1031,
-    accuracy: 'High',
-    speed: 'Slow'
-  }
+    accuracy: "High",
+    speed: "Slow",
+  },
 };
 
 // Helper functions
 export function getModelIcon(accuracy: ModelAccuracy): string {
   switch (accuracy) {
-    case 'High': return '🔥';
-    case 'Good': return '⚡';
-    case 'Decent': return '🚀';
-    default: return '📊';
+    case "High":
+      return "🔥";
+    case "Good":
+      return "⚡";
+    case "Decent":
+      return "🚀";
+    default:
+      return "📊";
   }
 }
 
 export function getStatusColor(status: ModelStatus): string {
-  if (status === 'Available') return 'green';
-  if (status === 'Missing') return 'gray';
-  if (typeof status === 'object' && 'Downloading' in status) return 'blue';
-  if (typeof status === 'object' && 'Error' in status) return 'red';
-  return 'gray';
+  if (status === "Available") return "green";
+  if (status === "Missing") return "gray";
+  if (typeof status === "object" && "Downloading" in status) return "blue";
+  if (typeof status === "object" && "Error" in status) return "red";
+  return "gray";
 }
 
 export function formatFileSize(sizeMb: number): string {
@@ -155,85 +162,95 @@ export function formatFileSize(sizeMb: number): string {
 }
 
 // Helper function to get model type (f16, q5_1, q5_0, q4_0)
-export function getModelType(modelName: string): 'f16' | 'q5_1' | 'q5_0' | 'q4_0' {
-  if (modelName.includes('-q5_1')) return 'q5_1';
-  if (modelName.includes('-q5_0')) return 'q5_0';
-  if (modelName.includes('-q4_0')) return 'q4_0';
-  return 'f16';
+export function getModelType(
+  modelName: string,
+): "f16" | "q5_1" | "q5_0" | "q4_0" {
+  if (modelName.includes("-q5_1")) return "q5_1";
+  if (modelName.includes("-q5_0")) return "q5_0";
+  if (modelName.includes("-q4_0")) return "q4_0";
+  return "f16";
 }
 
 // Helper function to get model base name (without quantization suffix)
 export function getModelBaseName(modelName: string): string {
-  return modelName.replace(/-q[45]_[01]$/, '');
+  return modelName.replace(/-q[45]_[01]$/, "");
 }
 
 // Helper function to check if model is quantized
 export function isQuantizedModel(modelName: string): boolean {
-  return modelName.includes('-q');
+  return modelName.includes("-q");
 }
 
 // Helper function to get model performance badge
-export function getModelPerformanceBadge(modelName: string): { label: string; color: string } {
+export function getModelPerformanceBadge(modelName: string): {
+  label: string;
+  color: string;
+} {
   const type = getModelType(modelName);
   switch (type) {
-    case 'f16':
-      return { label: 'Full Precision', color: 'blue' };
-    case 'q5_1':
-      return { label: 'Balanced+', color: 'green' };
-    case 'q5_0':
-      return { label: 'Balanced', color: 'green' };
-    case 'q4_0':
-      return { label: 'Fast', color: 'orange' };
+    case "f16":
+      return { label: "Full Precision", color: "blue" };
+    case "q5_1":
+      return { label: "Balanced+", color: "green" };
+    case "q5_0":
+      return { label: "Balanced", color: "green" };
+    case "q4_0":
+      return { label: "Fast", color: "orange" };
     default:
-      return { label: 'Standard', color: 'gray' };
+      return { label: "Standard", color: "gray" };
   }
 }
 
 // Helper function to get concise tagline for model (similar to Parakeet style)
-export function getModelTagline(modelName: string, speed: ProcessingSpeed, accuracy: ModelAccuracy): string {
+export function getModelTagline(
+  modelName: string,
+  speed: ProcessingSpeed,
+  accuracy: ModelAccuracy,
+): string {
   const isQuantized = isQuantizedModel(modelName);
   const baseName = getModelBaseName(modelName);
 
   // Speed prefix
-  let speedText = '';
+  let speedText = "";
   switch (speed) {
-    case 'Very Fast':
-      speedText = 'Real time';
+    case "Very Fast":
+      speedText = "Real time";
       break;
-    case 'Fast':
-      speedText = 'Fast processing';
+    case "Fast":
+      speedText = "Fast processing";
       break;
-    case 'Medium':
-      speedText = 'Moderate speed';
+    case "Medium":
+      speedText = "Moderate speed";
       break;
-    case 'Slow':
-      speedText = 'Slower processing';
+    case "Slow":
+      speedText = "Slower processing";
       break;
   }
 
   // Key feature based on model and accuracy
-  let featureText = '';
-  if (baseName === 'large-v3') {
-    featureText = 'Most accurate';
-  } else if (baseName === 'large-v3-turbo') {
-    featureText = 'Best accuracy with speed';
-  } else if (baseName === 'medium') {
-    featureText = accuracy === 'High' ? 'Professional quality' : 'Balanced quality';
-  } else if (baseName === 'small') {
-    featureText = 'Good accuracy';
-  } else if (baseName === 'base') {
-    featureText = 'Balanced quality';
-  } else if (baseName === 'tiny') {
-    featureText = 'Fastest option';
+  let featureText = "";
+  if (baseName === "large-v3") {
+    featureText = "Most accurate";
+  } else if (baseName === "large-v3-turbo") {
+    featureText = "Best accuracy with speed";
+  } else if (baseName === "medium") {
+    featureText =
+      accuracy === "High" ? "Professional quality" : "Balanced quality";
+  } else if (baseName === "small") {
+    featureText = "Good accuracy";
+  } else if (baseName === "base") {
+    featureText = "Balanced quality";
+  } else if (baseName === "tiny") {
+    featureText = "Fastest option";
   }
 
   // Add quantization note if applicable
   if (isQuantized) {
     const quantType = getModelType(modelName);
-    if (quantType === 'q5_0') {
-      featureText += ', optimized';
-    } else if (quantType === 'q4_0') {
-      featureText += ', ultra fast';
+    if (quantType === "q5_0") {
+      featureText += ", optimized";
+    } else if (quantType === "q4_0") {
+      featureText += ", ultra fast";
     }
   }
 
@@ -241,10 +258,12 @@ export function getModelTagline(modelName: string, speed: ProcessingSpeed, accur
 }
 
 // Group models by their base name for better UI organization
-export function groupModelsByBase(models: ModelInfo[]): Record<string, ModelInfo[]> {
+export function groupModelsByBase(
+  models: ModelInfo[],
+): Record<string, ModelInfo[]> {
   const grouped: Record<string, ModelInfo[]> = {};
 
-  models.forEach(model => {
+  models.forEach((model) => {
     const baseName = getModelBaseName(model.name);
     if (!grouped[baseName]) {
       grouped[baseName] = [];
@@ -253,11 +272,11 @@ export function groupModelsByBase(models: ModelInfo[]): Record<string, ModelInfo
   });
 
   // Sort each group: f16 first, then q5_1, then q5_0, then q4_0
-  Object.keys(grouped).forEach(baseName => {
+  Object.keys(grouped).forEach((baseName) => {
     grouped[baseName].sort((a, b) => {
       const aType = getModelType(a.name);
       const bType = getModelType(b.name);
-      const order = { 'f16': 0, 'q5_1': 1, 'q5_0': 2, 'q4_0': 3 };
+      const order = { f16: 0, q5_1: 1, q5_0: 2, q4_0: 3 };
       return order[aType] - order[bType];
     });
   });
@@ -265,70 +284,73 @@ export function groupModelsByBase(models: ModelInfo[]): Record<string, ModelInfo
   return grouped;
 }
 
-export function getRecommendedModel(systemSpecs?: { ram: number; cores: number }): string {
-  if (!systemSpecs) return 'medium-q5_0'; // Default to balanced quantized model
+export function getRecommendedModel(systemSpecs?: {
+  ram: number;
+  cores: number;
+}): string {
+  if (!systemSpecs) return "medium-q5_0"; // Default to balanced quantized model
 
   if (systemSpecs.ram >= 8000 && systemSpecs.cores >= 8) {
-    return 'large-v3'; // High-end system
+    return "large-v3"; // High-end system
   } else if (systemSpecs.ram >= 4000 && systemSpecs.cores >= 4) {
-    return 'medium'; // Mid-range system
+    return "medium"; // Mid-range system
   }
-  return 'small'; // Lower-spec system
+  return "small"; // Lower-spec system
 }
 
 // Tauri command wrappers for whisper-rs backend
-import { invoke } from '@tauri-apps/api/core';
+import { invoke } from "@tauri-apps/api/core";
 
 export class WhisperAPI {
   static async init(): Promise<void> {
-    await invoke('whisper_init');
+    await invoke("whisper_init");
   }
 
   static async getAvailableModels(): Promise<ModelInfo[]> {
-    return await invoke('whisper_get_available_models');
+    return await invoke("whisper_get_available_models");
   }
 
   static async loadModel(modelName: string): Promise<void> {
-    await invoke('whisper_load_model', { modelName });
+    await invoke("whisper_load_model", { modelName });
   }
 
   static async getCurrentModel(): Promise<string | null> {
-    return await invoke('whisper_get_current_model');
+    return await invoke("whisper_get_current_model");
   }
 
   static async isModelLoaded(): Promise<boolean> {
-    return await invoke('whisper_is_model_loaded');
+    return await invoke("whisper_is_model_loaded");
   }
 
   static async transcribeAudio(audioData: number[]): Promise<string> {
-    return await invoke('whisper_transcribe_audio', { audioData });
+    return await invoke("whisper_transcribe_audio", { audioData });
   }
 
   static async getModelsDirectory(): Promise<string> {
-    return await invoke('whisper_get_models_directory');
+    return await invoke("whisper_get_models_directory");
   }
 
   static async downloadModel(modelName: string): Promise<void> {
-    await invoke('whisper_download_model', { modelName });
+    await invoke("whisper_download_model", { modelName });
   }
 
   static async cancelDownload(modelName: string): Promise<void> {
-    await invoke('whisper_cancel_download', { modelName });
+    await invoke("whisper_cancel_download", { modelName });
   }
 
   static async deleteCorruptedModel(modelName: string): Promise<string> {
-    return await invoke('whisper_delete_corrupted_model', { modelName });
+    return await invoke("whisper_delete_corrupted_model", { modelName });
   }
 
   static async hasAvailableModels(): Promise<boolean> {
-    return await invoke('whisper_has_available_models');
+    return await invoke("whisper_has_available_models");
   }
 
   static async validateModelReady(): Promise<string> {
-    return await invoke('whisper_validate_model_ready');
+    return await invoke("whisper_validate_model_ready");
   }
 
   static async openModelsFolder(): Promise<void> {
-    await invoke('open_models_folder');
+    await invoke("open_models_folder");
   }
 }

@@ -21,11 +21,23 @@ pub fn is_user_facing_linux_device(name: &str) -> bool {
 
     // Raw ALSA PCM profile entries — hide.
     const RAW_ALSA_PREFIXES: &[&str] = &[
-        "front:", "rear:", "center_lfe:", "side:",
-        "surround21:", "surround40:", "surround41:",
-        "surround50:", "surround51:", "surround71:",
-        "iec958:", "hdmi:", "dmix:", "dsnoop:",
-        "hw:", "plughw:", "plug:",
+        "front:",
+        "rear:",
+        "center_lfe:",
+        "side:",
+        "surround21:",
+        "surround40:",
+        "surround41:",
+        "surround50:",
+        "surround51:",
+        "surround71:",
+        "iec958:",
+        "hdmi:",
+        "dmix:",
+        "dsnoop:",
+        "hw:",
+        "plughw:",
+        "plug:",
         "sysdefault:",
     ];
     if RAW_ALSA_PREFIXES.iter().any(|p| name.starts_with(p)) {

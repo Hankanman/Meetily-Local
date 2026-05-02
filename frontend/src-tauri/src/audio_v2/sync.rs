@@ -1,5 +1,5 @@
 //! Audio synchronization engine
-//! 
+//!
 //! This module provides timestamp-based synchronization to replace simple
 //! concatenation, ensuring perfect temporal alignment between streams.
 

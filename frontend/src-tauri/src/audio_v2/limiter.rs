@@ -1,5 +1,5 @@
 //! True peak limiting
-//! 
+//!
 //! This module provides lookahead limiting to prevent clipping, exactly
 //! like new implementation.
 

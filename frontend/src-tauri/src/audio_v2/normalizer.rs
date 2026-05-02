@@ -1,5 +1,5 @@
 //! EBU R128 normalization
-//! 
+//!
 //! This module provides professional audio normalization using the EBU R128
 //! standard, replacing the inconsistent normalization approaches.
 
@@ -15,7 +15,7 @@ pub struct AudioNormalizer {
 impl AudioNormalizer {
     /// Create a new audio normalizer
     pub fn new(target_lufs: f64) -> Self {
-        Self { 
+        Self {
             target_lufs,
             _placeholder: (),
         }
@@ -28,7 +28,10 @@ impl AudioNormalizer {
         let peak = audio.iter().map(|&x| x.abs()).fold(0.0f32, f32::max);
         if peak > 0.0 {
             let gain = 0.25 / peak; // Target -12dB peak
-            audio.iter().map(|&x| (x * gain).max(-1.0).min(1.0)).collect()
+            audio
+                .iter()
+                .map(|&x| (x * gain).max(-1.0).min(1.0))
+                .collect()
         } else {
             audio.to_vec()
         }

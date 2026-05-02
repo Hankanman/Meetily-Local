@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { recordingService } from '@/services/recordingService';
+import { useState, useEffect } from "react";
+import { recordingService } from "@/services/recordingService";
 
 interface UseRecordingStateSyncReturn {
   isBackendRecording: boolean;
@@ -18,7 +18,7 @@ interface UseRecordingStateSyncReturn {
 export function useRecordingStateSync(
   isRecording: boolean,
   setIsRecording: (value: boolean) => void,
-  setIsMeetingActive: (value: boolean) => void
+  setIsMeetingActive: (value: boolean) => void,
 ): UseRecordingStateSyncReturn {
   const [isRecordingDisabled, setIsRecordingDisabled] = useState(false);
 
@@ -34,11 +34,11 @@ export function useRecordingStateSync(
           setIsRecording(false);
         }
       } catch (error) {
-        console.error('Failed to check recording state:', error);
+        console.error("Failed to check recording state:", error);
       }
     };
 
-    if (typeof window !== 'undefined' && (window as any).__TAURI__) {
+    if (typeof window !== "undefined" && (window as any).__TAURI__) {
       checkRecordingState();
 
       const interval = setInterval(checkRecordingState, 1000);

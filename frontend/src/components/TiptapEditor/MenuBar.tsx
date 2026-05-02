@@ -51,7 +51,13 @@ interface ToolButtonProps {
   children: React.ReactNode;
 }
 
-function ToolButton({ label, onClick, active, disabled, children }: ToolButtonProps) {
+function ToolButton({
+  label,
+  onClick,
+  active,
+  disabled,
+  children,
+}: ToolButtonProps) {
   return (
     <button
       type="button"
@@ -132,42 +138,54 @@ export function MenuBar({ editor }: { editor: Editor | null }) {
         </ToolButton>
         <ToolButton
           label="Heading 1"
-          onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+          onClick={() =>
+            editor.chain().focus().toggleHeading({ level: 1 }).run()
+          }
           active={editorState.isHeading1}
         >
           <Heading1 size={ICON_SIZE} />
         </ToolButton>
         <ToolButton
           label="Heading 2"
-          onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+          onClick={() =>
+            editor.chain().focus().toggleHeading({ level: 2 }).run()
+          }
           active={editorState.isHeading2}
         >
           <Heading2 size={ICON_SIZE} />
         </ToolButton>
         <ToolButton
           label="Heading 3"
-          onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
+          onClick={() =>
+            editor.chain().focus().toggleHeading({ level: 3 }).run()
+          }
           active={editorState.isHeading3}
         >
           <Heading3 size={ICON_SIZE} />
         </ToolButton>
         <ToolButton
           label="Heading 4"
-          onClick={() => editor.chain().focus().toggleHeading({ level: 4 }).run()}
+          onClick={() =>
+            editor.chain().focus().toggleHeading({ level: 4 }).run()
+          }
           active={editorState.isHeading4}
         >
           <Heading4 size={ICON_SIZE} />
         </ToolButton>
         <ToolButton
           label="Heading 5"
-          onClick={() => editor.chain().focus().toggleHeading({ level: 5 }).run()}
+          onClick={() =>
+            editor.chain().focus().toggleHeading({ level: 5 }).run()
+          }
           active={editorState.isHeading5}
         >
           <Heading5 size={ICON_SIZE} />
         </ToolButton>
         <ToolButton
           label="Heading 6"
-          onClick={() => editor.chain().focus().toggleHeading({ level: 6 }).run()}
+          onClick={() =>
+            editor.chain().focus().toggleHeading({ level: 6 }).run()
+          }
           active={editorState.isHeading6}
         >
           <Heading6 size={ICON_SIZE} />

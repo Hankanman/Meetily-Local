@@ -1,6 +1,10 @@
 export type OnboardingStep = 1 | 2 | 3 | 4;
 
-export type PermissionStatus = 'checking' | 'not_determined' | 'authorized' | 'denied';
+export type PermissionStatus =
+  | "checking"
+  | "not_determined"
+  | "authorized"
+  | "denied";
 
 export interface OnboardingPermissions {
   microphone: PermissionStatus;
@@ -34,6 +38,6 @@ export interface PermissionRowProps {
 }
 
 export interface StatusIndicatorProps {
-  status: 'idle' | 'checking' | 'success' | 'error';
-  size?: 'sm' | 'md' | 'lg';
+  status: "idle" | "checking" | "success" | "error";
+  size?: "sm" | "md" | "lg";
 }

@@ -1,14 +1,14 @@
-'use client';
+"use client";
 
-import { motion } from 'framer-motion';
-import { FileQuestion, Sparkles } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { motion } from "framer-motion";
+import { FileQuestion, Sparkles } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from '@/components/ui/tooltip';
+} from "@/components/ui/tooltip";
 
 interface EmptyStateSummaryProps {
   onGenerate: () => void;
@@ -16,12 +16,16 @@ interface EmptyStateSummaryProps {
   isGenerating?: boolean;
 }
 
-export function EmptyStateSummary({ onGenerate, hasModel, isGenerating = false }: EmptyStateSummaryProps) {
+export function EmptyStateSummary({
+  onGenerate,
+  hasModel,
+  isGenerating = false,
+}: EmptyStateSummaryProps) {
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.3, ease: 'easeOut' }}
+      transition={{ duration: 0.3, ease: "easeOut" }}
       className="flex flex-col items-center justify-center h-full p-8 text-center"
     >
       <FileQuestion className="w-16 h-16 text-muted-foreground/70 mb-4" />
@@ -29,7 +33,8 @@ export function EmptyStateSummary({ onGenerate, hasModel, isGenerating = false }
         No Summary Generated Yet
       </h3>
       <p className="text-sm text-muted-foreground mb-6 max-w-md">
-        Generate an AI-powered summary of your meeting transcript to get key points, action items, and decisions.
+        Generate an AI-powered summary of your meeting transcript to get key
+        points, action items, and decisions.
       </p>
 
       <TooltipProvider>
@@ -42,7 +47,7 @@ export function EmptyStateSummary({ onGenerate, hasModel, isGenerating = false }
                 className="gap-2"
               >
                 <Sparkles className="w-4 h-4" />
-                {isGenerating ? 'Generating...' : 'Generate Summary'}
+                {isGenerating ? "Generating..." : "Generate Summary"}
               </Button>
             </div>
           </TooltipTrigger>

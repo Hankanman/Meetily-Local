@@ -1,5 +1,5 @@
 //! Compatibility layer between legacy and modern audio systems
-//! 
+//!
 //! This module provides a bridge that allows seamless switching between
 //! the old audio system and the new modern system.
 
@@ -7,7 +7,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use super::{ModernAudioSystem, AudioConfig};
+use super::{AudioConfig, ModernAudioSystem};
 use crate::audio::recording_saver::RecordingSaver;
 use crate::audio::recording_state::{AudioChunk, RecordingState};
 
@@ -151,7 +151,7 @@ impl LegacyBridge {
                 };
 
                 log::info!("Stopped recording with both systems");
-                
+
                 // For now, return the modern result if available, otherwise legacy
                 Ok(modern_result.or(legacy_result).flatten())
             }
@@ -165,7 +165,11 @@ impl LegacyBridge {
 
     /// Switch to a different mode
     pub async fn switch_mode(&mut self, new_mode: AudioMode) -> Result<()> {
-        log::info!("Switching audio mode from {:?} to {:?}", self.mode, new_mode);
+        log::info!(
+            "Switching audio mode from {:?} to {:?}",
+            self.mode,
+            new_mode
+        );
         self.mode = new_mode;
         self.initialize().await
     }

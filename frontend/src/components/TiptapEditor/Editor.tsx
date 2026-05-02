@@ -59,7 +59,9 @@ export default function Editor({
   useEffect(() => {
     if (!editor || !onChange) return;
     const handler = ({ editor: ed }: { editor: TiptapEditorInstance }) => {
-      const md = (ed.storage as { markdown?: { getMarkdown(): string } }).markdown?.getMarkdown();
+      const md = (
+        ed.storage as { markdown?: { getMarkdown(): string } }
+      ).markdown?.getMarkdown();
       if (typeof md === "string") onChange(md);
     };
     editor.on("update", handler);
