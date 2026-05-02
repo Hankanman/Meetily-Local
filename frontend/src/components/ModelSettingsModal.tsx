@@ -914,14 +914,14 @@ export function ModelSettingsModal({
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-4">
+      <div className="mb-4 flex items-center justify-between">
         <h3 className="text-lg font-semibold">Model Settings</h3>
       </div>
 
       <div className="space-y-4">
         <div>
           <Label>Summarization Model</Label>
-          <div className="flex space-x-2 mt-1">
+          <div className="mt-1 flex space-x-2">
             <Select
               value={modelConfig.provider}
               onValueChange={(value) => {
@@ -1022,12 +1022,14 @@ export function ModelSettingsModal({
                       variant="outline"
                       role="combobox"
                       aria-expanded={modelComboboxOpen}
-                      className="flex-1 max-w-50 justify-between font-normal"
+                      className="max-w-50 flex-1 justify-between font-normal"
                     >
                       <span className="truncate">
                         {modelConfig.model || "Select model..."}
                       </span>
-                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      <ChevronsUpDown className="
+                        ml-2 size-4 shrink-0 opacity-50
+                      " />
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-62.5 p-0" align="start">
@@ -1041,8 +1043,12 @@ export function ModelSettingsModal({
                         (modelConfig.provider === "claude" &&
                           isLoadingClaude) ||
                         (modelConfig.provider === "groq" && isLoadingGroq) ? (
-                          <div className="py-6 text-center text-sm text-muted-foreground">
-                            <RefreshCw className="mx-auto h-4 w-4 animate-spin mb-2" />
+                          <div className="
+                            py-6 text-center text-sm text-muted-foreground
+                          ">
+                            <RefreshCw className="
+                              mx-auto mb-2 size-4 animate-spin
+                            " />
                             Loading models...
                           </div>
                         ) : (
@@ -1064,7 +1070,7 @@ export function ModelSettingsModal({
                                   >
                                     <Check
                                       className={cn(
-                                        "mr-2 h-4 w-4",
+                                        "mr-2 size-4",
                                         modelConfig.model === model
                                           ? "opacity-100"
                                           : "opacity-0",
@@ -1097,7 +1103,7 @@ export function ModelSettingsModal({
                 placeholder="http://localhost:8000/v1"
                 className="mt-1"
               />
-              <p className="text-xs text-muted-foreground mt-1">
+              <p className="mt-1 text-xs text-muted-foreground">
                 Base URL of the OpenAI-compatible API
               </p>
             </div>
@@ -1111,7 +1117,7 @@ export function ModelSettingsModal({
                 placeholder="gpt-4, llama-3-70b, etc."
                 className="mt-1"
               />
-              <p className="text-xs text-muted-foreground mt-1">
+              <p className="mt-1 text-xs text-muted-foreground">
                 Model identifier to use for requests
               </p>
             </div>
@@ -1131,21 +1137,23 @@ export function ModelSettingsModal({
             {/* Advanced Options (Collapsible) */}
             <div>
               <div
-                className="flex items-center justify-between cursor-pointer py-2"
+                className="
+                  flex cursor-pointer items-center justify-between py-2
+                "
                 onClick={() =>
                   setIsCustomOpenAIAdvancedOpen(!isCustomOpenAIAdvancedOpen)
                 }
               >
                 <Label className="cursor-pointer">Advanced Options</Label>
                 {isCustomOpenAIAdvancedOpen ? (
-                  <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                  <ChevronUp className="size-4 text-muted-foreground" />
                 ) : (
-                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  <ChevronDown className="size-4 text-muted-foreground" />
                 )}
               </div>
 
               {isCustomOpenAIAdvancedOpen && (
-                <div className="space-y-3 pl-2 border-l-2 border-muted mt-2">
+                <div className="mt-2 space-y-3 border-l-2 border-muted pl-2">
                   <div>
                     <Label htmlFor="custom-max-tokens">Max Tokens</Label>
                     <Input
@@ -1206,12 +1214,12 @@ export function ModelSettingsModal({
             >
               {isTestingConnection ? (
                 <>
-                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  <RefreshCw className="mr-2 size-4 animate-spin" />
                   Testing Connection...
                 </>
               ) : (
                 <>
-                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                  <CheckCircle2 className="mr-2 size-4" />
                   Test Connection
                 </>
               )}
@@ -1234,10 +1242,15 @@ export function ModelSettingsModal({
               {isApiKeyLocked && apiKey?.trim() && (
                 <div
                   onClick={handleInputClick}
-                  className="absolute inset-0 flex items-center justify-center bg-muted/50 rounded-md cursor-not-allowed"
+                  className="
+                    absolute inset-0 flex cursor-not-allowed items-center
+                    justify-center rounded-md bg-muted/50
+                  "
                 />
               )}
-              <div className="absolute inset-y-0 right-0 pr-1 flex items-center space-x-1">
+              <div className="
+                absolute inset-y-0 right-0 flex items-center space-x-1 pr-1
+              ">
                 {apiKey?.trim() && (
                   <Button
                     type="button"
@@ -1274,7 +1287,7 @@ export function ModelSettingsModal({
         {modelConfig.provider === "ollama" && (
           <div>
             <div
-              className="flex items-center justify-between cursor-pointer py-2"
+              className="flex cursor-pointer items-center justify-between py-2"
               onClick={() =>
                 setIsEndpointSectionCollapsed(!isEndpointSectionCollapsed)
               }
@@ -1283,19 +1296,19 @@ export function ModelSettingsModal({
                 Custom Endpoint (optional)
               </Label>
               {isEndpointSectionCollapsed ? (
-                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                <ChevronDown className="size-4 text-muted-foreground" />
               ) : (
-                <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                <ChevronUp className="size-4 text-muted-foreground" />
               )}
             </div>
 
             {!isEndpointSectionCollapsed && (
               <>
-                <p className="text-sm text-muted-foreground mt-1 mb-2">
+                <p className="mt-1 mb-2 text-sm text-muted-foreground">
                   Leave empty or enter a custom endpoint (e.g.,
                   http://x.yy.zz:11434)
                 </p>
-                <div className="flex gap-2 mt-1">
+                <div className="mt-1 flex gap-2">
                   <div className="relative flex-1">
                     <Input
                       type="url"
@@ -1318,10 +1331,16 @@ export function ModelSettingsModal({
                       )}
                     />
                     {endpointValidationState === "valid" && (
-                      <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-green-500" />
+                      <CheckCircle2 className="
+                        absolute top-1/2 right-3 size-5 -translate-y-1/2
+                        text-green-500
+                      " />
                     )}
                     {endpointValidationState === "invalid" && (
-                      <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-red-500" />
+                      <XCircle className="
+                        absolute top-1/2 right-3 size-5 -translate-y-1/2
+                        text-red-500
+                      " />
                     )}
                   </div>
                   <Button
@@ -1334,12 +1353,12 @@ export function ModelSettingsModal({
                   >
                     {isLoadingOllama ? (
                       <>
-                        <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                        <RefreshCw className="mr-2 size-4 animate-spin" />
                         Fetching...
                       </>
                     ) : (
                       <>
-                        <RefreshCw className="mr-2 h-4 w-4" />
+                        <RefreshCw className="mr-2 size-4" />
                         Fetch Models
                       </>
                     )}
@@ -1360,12 +1379,12 @@ export function ModelSettingsModal({
 
         {modelConfig.provider === "ollama" && (
           <div>
-            <div className="flex items-center justify-between mb-4">
+            <div className="mb-4 flex items-center justify-between">
               <h4 className="text-sm font-bold">Available Ollama Models</h4>
               {lastFetchedEndpoint && models.length > 0 && (
                 <div className="flex items-center gap-2 text-sm">
                   <span className="text-muted-foreground">Using:</span>
-                  <code className="px-2 py-1 bg-muted rounded text-xs">
+                  <code className="rounded-sm bg-muted px-2 py-1 text-xs">
                     {lastFetchedEndpoint || "http://localhost:11434"}
                   </code>
                 </div>
@@ -1382,8 +1401,8 @@ export function ModelSettingsModal({
               </div>
             )}
             {isLoadingOllama ? (
-              <div className="text-center py-8 text-muted-foreground">
-                <RefreshCw className="mx-auto h-8 w-8 animate-spin mb-2" />
+              <div className="py-8 text-center text-muted-foreground">
+                <RefreshCw className="mx-auto mb-2 size-8 animate-spin" />
                 Loading models...
               </div>
             ) : models.length === 0 ? (
@@ -1405,12 +1424,15 @@ export function ModelSettingsModal({
                           url: "https://ollama.com/download",
                         })
                       }
-                      className="w-full bg-blue-600 hover:bg-blue-700"
+                      className="
+                        w-full bg-blue-600
+                        hover:bg-blue-700
+                      "
                     >
-                      <ExternalLink className="mr-2 h-4 w-4" />
+                      <ExternalLink className="mr-2 size-4" />
                       Download Ollama
                     </Button>
-                    <div className="text-sm text-muted-foreground text-center">
+                    <div className="text-center text-sm text-muted-foreground">
                       After installing Ollama, restart this application and
                       click "Fetch Models" to continue.
                     </div>
@@ -1436,12 +1458,12 @@ export function ModelSettingsModal({
                         >
                           {isDownloading("gemma3:1b") ? (
                             <>
-                              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                              <RefreshCw className="mr-2 size-4 animate-spin" />
                               Downloading gemma3:1b...
                             </>
                           ) : (
                             <>
-                              <Download className="mr-2 h-4 w-4" />
+                              <Download className="mr-2 size-4" />
                               Download gemma3:1b (Recommended, ~800MB)
                             </>
                           )}
@@ -1450,18 +1472,30 @@ export function ModelSettingsModal({
                         {/* Show progress for gemma3:1b download */}
                         {isDownloading("gemma3:1b") &&
                           getProgress("gemma3:1b") !== undefined && (
-                            <div className="bg-background rounded-md border p-3">
-                              <div className="flex items-center justify-between mb-2">
-                                <span className="text-sm font-medium text-blue-600">
+                            <div className="rounded-md border bg-background p-3">
+                              <div className="
+                                mb-2 flex items-center justify-between
+                              ">
+                                <span className="
+                                  text-sm font-medium text-blue-600
+                                ">
                                   Downloading gemma3:1b
                                 </span>
-                                <span className="text-sm font-semibold text-blue-600">
+                                <span className="
+                                  text-sm font-semibold text-blue-600
+                                ">
                                   {Math.round(getProgress("gemma3:1b")!)}%
                                 </span>
                               </div>
-                              <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                              <div className="
+                                h-2 w-full overflow-hidden rounded-full bg-muted
+                              ">
                                 <div
-                                  className="h-full bg-linear-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-300"
+                                  className="
+                                    h-full rounded-full bg-linear-to-r
+                                    from-blue-500 to-blue-600 transition-all
+                                    duration-300
+                                  "
                                   style={{
                                     width: `${getProgress("gemma3:1b")}%`,
                                   }}
@@ -1476,7 +1510,9 @@ export function ModelSettingsModal({
               </div>
             ) : (
               !ollamaEndpointChanged && (
-                <ScrollArea className="max-h-[calc(100vh-450px)] overflow-y-auto pr-4">
+                <ScrollArea className="
+                  max-h-[calc(100vh-450px)] overflow-y-auto pr-4
+                ">
                   {filteredModels.length === 0 ? (
                     <Alert>
                       <AlertDescription>
@@ -1494,9 +1530,15 @@ export function ModelSettingsModal({
                           <div
                             key={model.id}
                             className={cn(
-                              "bg-card p-2 m-0 rounded-md border transition-colors",
+                              `
+                                m-0 rounded-md border bg-card p-2
+                                transition-colors
+                              `,
                               modelConfig.model === model.name
-                                ? "ring-1 ring-blue-500 border-blue-500 background-blue-100"
+                                ? `
+                                  background-blue-100 border-blue-500 ring-1
+                                  ring-blue-500
+                                `
                                 : "hover:bg-muted/50",
                               !modelIsDownloading && "cursor-pointer",
                             )}
@@ -1514,25 +1556,38 @@ export function ModelSettingsModal({
                               <span className="text-muted-foreground">
                                 with a size of{" "}
                               </span>
-                              <span className="font-mono font-bold text-sm">
+                              <span className="font-mono text-sm font-bold">
                                 {model.size}
                               </span>
                             </div>
 
                             {/* Progress bar for downloading models */}
                             {modelIsDownloading && progress !== undefined && (
-                              <div className="mt-3 pt-3 border-t border-border">
-                                <div className="flex items-center justify-between mb-2">
-                                  <span className="text-sm font-medium text-blue-600">
+                              <div className="mt-3 border-t border-border pt-3">
+                                <div className="
+                                  mb-2 flex items-center justify-between
+                                ">
+                                  <span className="
+                                    text-sm font-medium text-blue-600
+                                  ">
                                     Downloading...
                                   </span>
-                                  <span className="text-sm font-semibold text-blue-600">
+                                  <span className="
+                                    text-sm font-semibold text-blue-600
+                                  ">
                                     {Math.round(progress)}%
                                   </span>
                                 </div>
-                                <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                                <div className="
+                                  h-2 w-full overflow-hidden rounded-full
+                                  bg-muted
+                                ">
                                   <div
-                                    className="h-full bg-linear-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-300"
+                                    className="
+                                      h-full rounded-full bg-linear-to-r
+                                      from-blue-500 to-blue-600 transition-all
+                                      duration-300
+                                    "
                                     style={{ width: `${progress}%` }}
                                   />
                                 </div>
@@ -1584,10 +1639,17 @@ export function ModelSettingsModal({
       <div className="mt-6 flex justify-end">
         <Button
           className={cn(
-            "px-4 text-sm font-medium text-white rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500",
+            `
+              rounded-md px-4 text-sm font-medium text-white
+              focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
+              focus:outline-none
+            `,
             isDoneDisabled
-              ? "bg-muted cursor-not-allowed"
-              : "bg-blue-600 hover:bg-blue-700",
+              ? "cursor-not-allowed bg-muted"
+              : `
+                bg-blue-600
+                hover:bg-blue-700
+              `,
           )}
           onClick={handleSave}
           disabled={isDoneDisabled}

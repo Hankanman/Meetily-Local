@@ -665,29 +665,34 @@ export const AISummary = ({
   };
 
   const renderErrorState = () => (
-    <div className="w-full p-4 bg-red-50 border border-red-200 rounded-lg">
-      <div className="flex items-center mb-2">
-        <ExclamationTriangleIcon className="h-5 w-5 text-red-500 mr-2" />
-        <h3 className="text-red-700 font-medium">Error Generating Summary</h3>
+    <div className="w-full rounded-lg border border-red-200 bg-red-50 p-4">
+      <div className="mb-2 flex items-center">
+        <ExclamationTriangleIcon className="mr-2 size-5 text-red-500" />
+        <h3 className="font-medium text-red-700">Error Generating Summary</h3>
       </div>
-      <p className="text-red-600 text-sm">{error}</p>
-      <p className="text-red-500 text-xs mt-2">
+      <p className="text-sm text-red-600">{error}</p>
+      <p className="mt-2 text-xs text-red-500">
         Please check your model configuration and API keys, or try again.
       </p>
     </div>
   );
 
   const renderLoadingState = () => (
-    <div className="w-full p-4 bg-blue-600/10 border border-blue-500/30 rounded-lg">
+    <div className="
+      w-full rounded-lg border border-blue-500/30 bg-blue-600/10 p-4
+    ">
       <div className="flex items-center space-x-3">
-        <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-500 border-t-transparent"></div>
+        <div className="
+          size-5 animate-spin rounded-full border-2 border-blue-500
+          border-t-transparent
+        "></div>
         <div>
-          <h3 className="text-blue-700 font-medium">
+          <h3 className="font-medium text-blue-700">
             {status === "processing"
               ? "Processing Transcript"
               : "Generating Summary"}
           </h3>
-          <p className="text-blue-600 text-sm">
+          <p className="text-sm text-blue-600">
             {status === "processing"
               ? "Analyzing your transcript..."
               : "Creating a detailed summary of your meeting..."}
@@ -717,9 +722,11 @@ export const AISummary = ({
 
   if (!hasContent && status === "completed") {
     return (
-      <div className="w-full p-4 bg-muted border border-border rounded-lg text-center">
+      <div className="
+        w-full rounded-lg border border-border bg-muted p-4 text-center
+      ">
         <p className="text-muted-foreground">No summary content available.</p>
-        <p className="text-muted-foreground text-sm mt-1">
+        <p className="mt-1 text-sm text-muted-foreground">
           Try generating a new summary.
         </p>
       </div>
@@ -741,8 +748,10 @@ export const AISummary = ({
       {/* Context Menu */}
       {contextMenu.visible && selectedBlocks.length > 0 && (
         <div
-          className="fixed z-50 bg-background shadow-lg rounded-lg py-1 min-w-[160px] border border-border
-                     animate-in fade-in zoom-in-95 duration-150"
+          className="
+            animate-in fade-in zoom-in-95 fixed z-50 min-w-40 rounded-lg
+            border border-border bg-background py-1 shadow-lg duration-150
+          "
           style={{
             left: contextMenu.x,
             top: contextMenu.y,
@@ -750,7 +759,10 @@ export const AISummary = ({
           onClick={(e) => e.stopPropagation()}
         >
           <button
-            className="w-full px-4 py-2 text-left hover:bg-muted flex items-center space-x-2"
+            className="
+              flex w-full items-center space-x-2 px-4 py-2 text-left
+              hover:bg-muted
+            "
             onClick={handleCopyBlocks}
           >
             <span className="text-muted-foreground">📋</span>
@@ -762,7 +774,11 @@ export const AISummary = ({
             </span>
           </button>
           <button
-            className="w-full px-4 py-2 text-left hover:bg-muted text-red-600 flex items-center space-x-2"
+            className="
+              flex w-full items-center space-x-2 px-4 py-2 text-left
+              text-red-600
+              hover:bg-muted
+            "
             onClick={handleDeleteBlocks}
           >
             <span>🗑️</span>

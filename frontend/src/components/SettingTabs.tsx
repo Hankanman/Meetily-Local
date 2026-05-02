@@ -34,7 +34,7 @@ export function SettingTabs({
   return (
     <Tabs
       defaultValue={defaultTab}
-      className="w-full max-h-[calc(100vh-10rem)] overflow-y-auto"
+      className="max-h-[calc(100vh-10rem)] w-full overflow-y-auto"
       onValueChange={handleTabChange}
     >
       <TabsList>

@@ -133,7 +133,7 @@ export function TranscriptRecovery({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl h-[80vh] flex flex-col p-0">
+      <DialogContent className="flex h-[80vh] max-w-4xl flex-col p-0">
         <DialogHeader className="px-6 pt-6">
           <DialogTitle className="text-2xl">
             Recover Interrupted Meetings
@@ -146,47 +146,60 @@ export function TranscriptRecovery({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 flex gap-4 px-6 pb-6 overflow-hidden">
+        <div className="flex flex-1 gap-4 overflow-hidden px-6 pb-6">
           {/* Meeting List */}
-          <div className="w-1/3 flex flex-col">
-            <h3 className="text-sm font-medium mb-2">Interrupted Meetings</h3>
-            <ScrollArea className="flex-1 border rounded-lg">
-              <div className="p-2 space-y-2">
+          <div className="flex w-1/3 flex-col">
+            <h3 className="mb-2 text-sm font-medium">Interrupted Meetings</h3>
+            <ScrollArea className="flex-1 rounded-lg border">
+              <div className="space-y-2 p-2">
                 {recoverableMeetings.map((meeting) => (
                   <button
                     key={meeting.meetingId}
                     onClick={() => handleMeetingSelect(meeting.meetingId)}
                     className={cn(
-                      "w-full text-left p-3 rounded-lg border transition-colors",
+                      "w-full rounded-lg border p-3 text-left transition-colors",
                       selectedMeetingId === meeting.meetingId
-                        ? "bg-primary/10 border-primary"
-                        : "hover:bg-muted border-transparent",
+                        ? "border-primary bg-primary/10"
+                        : `
+                          border-transparent
+                          hover:bg-muted
+                        `,
                     )}
                   >
                     <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-sm truncate">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">
                           {meeting.title}
                         </p>
-                        <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                          <Clock className="w-3 h-3" />
+                        <p className="
+                          mt-1 flex items-center gap-1 text-xs
+                          text-muted-foreground
+                        ">
+                          <Clock className="size-3" />
                           {formatDistanceToNow(new Date(meeting.lastUpdated), {
                             addSuffix: true,
                           })}
                         </p>
-                        <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                          <FileText className="w-3 h-3" />
+                        <p className="
+                          mt-1 flex items-center gap-1 text-xs
+                          text-muted-foreground
+                        ">
+                          <FileText className="size-3" />
                           {meeting.transcriptCount} transcript
                           {meeting.transcriptCount !== 1 ? "s" : ""}
                         </p>
                       </div>
                       {meeting.folderPath ? (
                         <span title="Audio available">
-                          <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
+                          <CheckCircle2 className="
+                            size-4 shrink-0 text-green-500
+                          " />
                         </span>
                       ) : (
                         <span title="No audio">
-                          <AlertCircle className="w-4 h-4 text-yellow-500 flex-shrink-0" />
+                          <AlertCircle className="
+                            size-4 shrink-0 text-yellow-500
+                          " />
                         </span>
                       )}
                     </div>
@@ -197,31 +210,35 @@ export function TranscriptRecovery({
           </div>
 
           {/* Preview Panel */}
-          <div className="flex-1 flex flex-col">
-            <h3 className="text-sm font-medium mb-2">Preview</h3>
-            <div className="flex-1 border rounded-lg overflow-hidden flex flex-col">
+          <div className="flex flex-1 flex-col">
+            <h3 className="mb-2 text-sm font-medium">Preview</h3>
+            <div className="
+              flex flex-1 flex-col overflow-hidden rounded-lg border
+            ">
               {selectedMeeting ? (
                 <>
                   {/* Meeting Info */}
-                  <div className="p-4 border-b bg-muted/50">
+                  <div className="border-b bg-muted/50 p-4">
                     <h4 className="font-semibold">{selectedMeeting.title}</h4>
-                    <p className="text-sm text-muted-foreground mt-1">
+                    <p className="mt-1 text-sm text-muted-foreground">
                       Started{" "}
                       {new Date(selectedMeeting.startTime).toLocaleString()}
                     </p>
-                    <div className="flex items-center gap-4 mt-2 text-sm">
+                    <div className="mt-2 flex items-center gap-4 text-sm">
                       <span className="flex items-center gap-1">
-                        <FileText className="w-4 h-4" />
+                        <FileText className="size-4" />
                         {selectedMeeting.transcriptCount} transcripts
                       </span>
                       {selectedMeeting.folderPath ? (
                         <span className="flex items-center gap-1 text-green-600">
-                          <CheckCircle2 className="w-4 h-4" />
+                          <CheckCircle2 className="size-4" />
                           Audio available
                         </span>
                       ) : (
-                        <span className="flex items-center gap-1 text-yellow-600">
-                          <AlertCircle className="w-4 h-4" />
+                        <span className="
+                          flex items-center gap-1 text-yellow-600
+                        ">
+                          <AlertCircle className="size-4" />
                           No audio
                         </span>
                       )}
@@ -231,7 +248,10 @@ export function TranscriptRecovery({
                   {/* Transcript Preview */}
                   <ScrollArea className="flex-1 p-4">
                     {isLoadingPreview ? (
-                      <div className="flex items-center justify-center h-full text-muted-foreground">
+                      <div className="
+                        flex h-full items-center justify-center
+                        text-muted-foreground
+                      ">
                         Loading preview...
                       </div>
                     ) : previewTranscripts.length > 0 ? (
@@ -287,14 +307,19 @@ export function TranscriptRecovery({
                         )}
                       </div>
                     ) : (
-                      <div className="flex items-center justify-center h-full text-muted-foreground">
+                      <div className="
+                        flex h-full items-center justify-center
+                        text-muted-foreground
+                      ">
                         No transcripts to preview
                       </div>
                     )}
                   </ScrollArea>
                 </>
               ) : (
-                <div className="flex items-center justify-center h-full text-muted-foreground">
+                <div className="
+                  flex h-full items-center justify-center text-muted-foreground
+                ">
                   Select a meeting to preview
                 </div>
               )}
@@ -317,12 +342,12 @@ export function TranscriptRecovery({
           >
             {isDeleting ? (
               <>
-                <XCircle className="w-4 h-4 mr-2 animate-spin" />
+                <XCircle className="mr-2 size-4 animate-spin" />
                 Deleting...
               </>
             ) : (
               <>
-                <Trash2 className="w-4 h-4 mr-2" />
+                <Trash2 className="mr-2 size-4" />
                 Delete
               </>
             )}
@@ -333,12 +358,12 @@ export function TranscriptRecovery({
           >
             {isRecovering ? (
               <>
-                <CheckCircle2 className="w-4 h-4 mr-2 animate-spin" />
+                <CheckCircle2 className="mr-2 size-4 animate-spin" />
                 Recovering...
               </>
             ) : (
               <>
-                <CheckCircle2 className="w-4 h-4 mr-2" />
+                <CheckCircle2 className="mr-2 size-4" />
                 Recover
               </>
             )}

@@ -243,7 +243,10 @@ export default function RootLayout({
 
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${sourceSans3.variable} font-sans antialiased`}>
+      <body className={`
+        ${sourceSans3.variable}
+        font-sans antialiased
+      `}>
         {/*
           ThemeProvider toggles the shadcn `.dark` class on <html> based on
           the OS / GTK color-scheme preference. attribute="class" matches

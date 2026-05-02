@@ -308,7 +308,9 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
             <div className="flex items-start gap-2">
               <Tooltip>
                 <TooltipTrigger>
-                  <span className="text-xs text-muted-foreground/70 mt-1 flex-shrink-0 min-w-[50px]">
+                  <span className="
+                    mt-1 min-w-12.5 shrink-0 text-xs text-muted-foreground/70
+                  ">
                     {transcript.audio_start_time !== undefined
                       ? formatRecordingTime(transcript.audio_start_time)
                       : transcript.timestamp}
@@ -331,15 +333,19 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
               <div className="flex-1">
                 {isStreaming ? (
                   // Streaming transcript - show in bubble (full width)
-                  <div className="bg-muted border border-border rounded-lg px-3 py-2">
+                  <div className="
+                    rounded-lg border border-border bg-muted px-3 py-2
+                  ">
                     <div className="relative">
                       <p
-                        className="text-base text-foreground leading-relaxed"
+                        className="text-base/relaxed text-foreground"
                         style={{ visibility: "hidden" }}
                       >
                         {sizerText}
                       </p>
-                      <p className="text-base text-foreground leading-relaxed absolute top-0 left-0">
+                      <p className="
+                        absolute top-0 left-0 text-base/relaxed text-foreground
+                      ">
                         {displayText}
                       </p>
                     </div>
@@ -348,12 +354,14 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
                   // Regular transcript - simple text
                   <div className="relative">
                     <p
-                      className="text-base text-foreground leading-relaxed"
+                      className="text-base/relaxed text-foreground"
                       style={{ visibility: "hidden" }}
                     >
                       {sizerText}
                     </p>
-                    <p className="text-base text-foreground leading-relaxed absolute top-0 left-0">
+                    <p className="
+                      absolute top-0 left-0 text-base/relaxed text-foreground
+                    ">
                       {displayText}
                     </p>
                   </div>
@@ -374,9 +382,9 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="flex items-center gap-2 mt-4 text-muted-foreground"
+            className="mt-4 flex items-center gap-2 text-muted-foreground"
           >
-            <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+            <div className="size-2 animate-pulse rounded-full bg-blue-500"></div>
             <span className="text-sm">Listening...</span>
           </motion.div>
         )}
@@ -386,19 +394,22 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="text-center text-muted-foreground mt-8"
+          className="mt-8 text-center text-muted-foreground"
         >
           {isRecording ? (
             <>
-              <div className="flex items-center justify-center mb-3">
+              <div className="mb-3 flex items-center justify-center">
                 <div
-                  className={`w-3 h-3 rounded-full ${isPaused ? "bg-orange-500" : "bg-blue-500 animate-pulse"}`}
+                  className={`
+                    size-3 rounded-full
+                    ${isPaused ? "bg-orange-500" : `animate-pulse bg-blue-500`}
+                  `}
                 ></div>
               </div>
               <p className="text-sm text-muted-foreground">
                 {isPaused ? "Recording paused" : "Listening for speech..."}
               </p>
-              <p className="text-xs mt-1 text-muted-foreground/70">
+              <p className="mt-1 text-xs text-muted-foreground/70">
                 {isPaused
                   ? "Click resume to continue recording"
                   : "Speak to see live transcription"}
@@ -407,7 +418,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
           ) : (
             <>
               <p className="text-lg font-semibold">Welcome to meetily!</p>
-              <p className="text-xs mt-1">
+              <p className="mt-1 text-xs">
                 Start recording to see live transcription
               </p>
             </>

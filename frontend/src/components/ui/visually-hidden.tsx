@@ -8,7 +8,7 @@ const VisuallyHidden = React.forwardRef<
   <span
     ref={ref}
     className={cn(
-      "absolute w-px h-px p-0 -m-px overflow-hidden whitespace-nowrap border-0",
+      "absolute -m-px size-px overflow-hidden border-0 p-0 whitespace-nowrap",
       "clip-path-inset-50",
       className,
     )}

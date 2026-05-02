@@ -140,10 +140,12 @@ export function SummaryModelSettings({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="bg-background rounded-lg border border-border p-6 shadow-sm">
+      <div className="
+        rounded-lg border border-border bg-background p-6 shadow-sm
+      ">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-foreground mb-2">
+            <h3 className="mb-2 text-lg font-semibold text-foreground">
               Auto Summary
             </h3>
             <p className="text-sm text-muted-foreground">
@@ -157,11 +159,13 @@ export function SummaryModelSettings({
         </div>
       </div>
 
-      <div className="bg-background rounded-lg border border-border p-6 shadow-sm">
-        <h3 className="text-lg font-semibold mb-4">
+      <div className="
+        rounded-lg border border-border bg-background p-6 shadow-sm
+      ">
+        <h3 className="mb-4 text-lg font-semibold">
           Summary Model Configuration
         </h3>
-        <p className="text-sm text-muted-foreground mb-6">
+        <p className="mb-6 text-sm text-muted-foreground">
           Configure the AI model used for generating meeting summaries.
         </p>
 

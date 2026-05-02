@@ -158,25 +158,28 @@ export default function AnalyticsConsentSwitch() {
     <>
       <div className="space-y-4">
         <div>
-          <h3 className="text-base font-semibold text-foreground mb-2">
+          <h3 className="mb-2 text-base font-semibold text-foreground">
             Usage Analytics
           </h3>
-          <p className="text-sm text-muted-foreground mb-4">
+          <p className="mb-4 text-sm text-muted-foreground">
             Help us improve Meetily by sharing anonymous usage data. No personal
             content is collected—everything stays on your device.
           </p>
         </div>
 
-        <div className="flex items-center justify-between p-3 bg-muted rounded-lg border border-border">
+        <div className="
+          flex items-center justify-between rounded-lg border border-border
+          bg-muted p-3
+        ">
           <div>
             <h4 className="font-semibold text-foreground">Enable Analytics</h4>
             <p className="text-sm text-muted-foreground">
               {isProcessing ? "Updating..." : "Anonymous usage patterns only"}
             </p>
           </div>
-          <div className="flex items-center gap-2 ml-4">
+          <div className="ml-4 flex items-center gap-2">
             {isProcessing && (
-              <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              <Loader2 className="size-4 animate-spin text-muted-foreground" />
             )}
             <Switch
               checked={isAnalyticsOptedIn}
@@ -188,35 +191,38 @@ export default function AnalyticsConsentSwitch() {
 
         {/* User ID Display */}
         {isAnalyticsOptedIn && userId && (
-          <div className="p-4 border rounded-lg bg-muted">
+          <div className="rounded-lg border bg-muted p-4">
             <div className="flex items-start justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <div className="font-medium text-foreground mb-1">
+              <div className="min-w-0 flex-1">
+                <div className="mb-1 font-medium text-foreground">
                   Your User ID
                 </div>
-                <p className="text-xs text-muted-foreground mb-2">
+                <p className="mb-2 text-xs text-muted-foreground">
                   Share this ID when reporting issues to help us investigate
                   your issue logs
                 </p>
                 <div className="flex items-center gap-2">
-                  <code className="text-xs text-foreground bg-background px-2 py-1 rounded border border-border font-mono flex-1 truncate">
+                  <code className="
+                    flex-1 truncate rounded-sm border border-border
+                    bg-background px-2 py-1 font-mono text-xs text-foreground
+                  ">
                     {userId}
                   </code>
                   <Button
                     onClick={handleCopyUserId}
                     variant="outline"
                     size="sm"
-                    className="flex-shrink-0"
+                    className="shrink-0"
                     title="Copy User ID"
                   >
                     {isCopied ? (
                       <>
-                        <Check className="w-3.5 h-3.5 text-green-600" />
+                        <Check className="size-3.5 text-green-600" />
                         <span className="text-green-600">Copied!</span>
                       </>
                     ) : (
                       <>
-                        <Copy className="w-3.5 h-3.5" />
+                        <Copy className="size-3.5" />
                         <span>Copy</span>
                       </>
                     )}
@@ -227,8 +233,11 @@ export default function AnalyticsConsentSwitch() {
           </div>
         )}
 
-        <div className="flex items-start gap-2 p-2 bg-blue-600/10 rounded border border-blue-500/30">
-          <Info className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
+        <div className="
+          flex items-start gap-2 rounded-sm border border-blue-500/30
+          bg-blue-600/10 p-2
+        ">
+          <Info className="mt-0.5 size-4 shrink-0 text-blue-600" />
           <div className="text-xs text-blue-700">
             <p className="mb-1">
               Your meetings, transcripts, and recordings remain completely
@@ -236,7 +245,10 @@ export default function AnalyticsConsentSwitch() {
             </p>
             <button
               onClick={handlePrivacyPolicyClick}
-              className="text-blue-600 hover:text-blue-800 underline hover:no-underline"
+              className="
+                text-blue-600 underline
+                hover:text-blue-800 hover:no-underline
+              "
             >
               View Privacy Policy
             </button>

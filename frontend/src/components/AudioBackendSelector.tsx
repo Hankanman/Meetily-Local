@@ -79,8 +79,8 @@ export function AudioBackendSelector({
   if (loading) {
     return (
       <div className="animate-pulse">
-        <div className="h-4 bg-muted rounded w-32 mb-2"></div>
-        <div className="h-10 bg-muted rounded"></div>
+        <div className="mb-2 h-4 w-32 rounded-sm bg-muted"></div>
+        <div className="h-10 rounded-sm bg-muted"></div>
       </div>
     );
   }
@@ -101,13 +101,19 @@ export function AudioBackendSelector({
             type="button"
             onMouseEnter={() => setShowTooltip(true)}
             onMouseLeave={() => setShowTooltip(false)}
-            className="text-muted-foreground/70 hover:text-muted-foreground transition-colors"
+            className="
+              text-muted-foreground/70 transition-colors
+              hover:text-muted-foreground
+            "
           >
-            <Info className="h-4 w-4" />
+            <Info className="size-4" />
           </button>
           {showTooltip && (
-            <div className="absolute z-10 left-6 top-0 w-64 p-3 text-xs bg-gray-900 text-white rounded-lg shadow-lg">
-              <p className="font-semibold mb-1">Audio Capture Methods:</p>
+            <div className="
+              absolute top-0 left-6 z-10 w-64 rounded-lg bg-gray-900 p-3 text-xs
+              text-white shadow-lg
+            ">
+              <p className="mb-1 font-semibold">Audio Capture Methods:</p>
               <ul className="space-y-1">
                 {backends.map((backend) => (
                   <li key={backend.id}>
@@ -125,7 +131,9 @@ export function AudioBackendSelector({
       </div>
 
       {error && (
-        <div className="p-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-md">
+        <div className="
+          rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700
+        ">
           {error}
         </div>
       )}
@@ -139,11 +147,20 @@ export function AudioBackendSelector({
           return (
             <label
               key={backend.id}
-              className={`flex items-start p-3 border rounded-lg transition-all ${
+              className={`
+                flex items-start rounded-lg border p-3 transition-all
+                ${
                 currentBackend === backend.id
                   ? "border-blue-500 bg-blue-600/10"
-                  : "border-border hover:border-border bg-background"
-              } ${isDisabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                  : `
+                    border-border bg-background
+                    hover:border-border
+                  `
+              }
+                ${isDisabled ? "cursor-not-allowed opacity-50" : `
+                  cursor-pointer
+                `}
+              `}
             >
               <input
                 type="radio"
@@ -152,7 +169,10 @@ export function AudioBackendSelector({
                 checked={currentBackend === backend.id}
                 onChange={() => handleBackendChange(backend.id)}
                 disabled={isDisabled}
-                className="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500 border-border"
+                className="
+                  mt-1 size-4 border-border text-blue-600
+                  focus:ring-blue-500
+                "
               />
               <div className="ml-3 flex-1">
                 <div className="flex items-center justify-between">
@@ -160,12 +180,18 @@ export function AudioBackendSelector({
                     {backend.name}
                   </span>
                   {currentBackend === backend.id && (
-                    <span className="text-xs font-medium text-blue-600 bg-blue-600/15 px-2 py-0.5 rounded">
+                    <span className="
+                      rounded-sm bg-blue-600/15 px-2 py-0.5 text-xs font-medium
+                      text-blue-600
+                    ">
                       Active
                     </span>
                   )}
                   {isCoreAudio && (
-                    <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                    <span className="
+                      rounded-sm bg-muted px-2 py-0.5 text-xs font-medium
+                      text-muted-foreground
+                    ">
                       Disabled
                     </span>
                   )}
@@ -179,7 +205,7 @@ export function AudioBackendSelector({
         })}
       </div>
 
-      <div className="text-xs text-muted-foreground space-y-1">
+      <div className="space-y-1 text-xs text-muted-foreground">
         <p>• Backend selection only affects system audio capture</p>
         <p>• Microphone always uses the default method</p>
         <p>• Changes apply to new recording sessions</p>

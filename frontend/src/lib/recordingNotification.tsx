@@ -22,20 +22,29 @@ export async function showRecordingNotification(): Promise<void> {
 
       const toastId = toast.info("🔴 Recording Started", {
         description: (
-          <div className="space-y-3 min-w-[280px]">
+          <div className="min-w-70 space-y-3">
             <p className="text-sm font-medium text-foreground">
               Inform all participants this meeting is being recorded.
             </p>
-            <label className="flex items-center gap-2 text-xs cursor-pointer hover:bg-blue-600/15 p-2 rounded transition-colors">
+            <label
+              className="
+              flex cursor-pointer items-center gap-2 rounded-sm p-2 text-xs
+              transition-colors
+              hover:bg-blue-600/15
+            "
+            >
               <input
                 type="checkbox"
                 onChange={(e) => {
                   dontShowAgain = e.target.checked;
                 }}
-                className="rounded border-border text-blue-600 focus:ring-blue-500 focus:ring-2"
+                className="
+                  rounded-sm border-border text-blue-600
+                  focus:ring-2 focus:ring-blue-500
+                "
               />
-              <span className="select-none text-foreground">
-                Don't show this again
+              <span className="text-foreground select-none">
+                Don&apos;t show this again
               </span>
             </label>
             <button
@@ -52,9 +61,13 @@ export async function showRecordingNotification(): Promise<void> {
                 );
                 toast.dismiss(toastId);
               }}
-              className="w-full px-3 py-1.5 bg-gray-900 text-white text-xs rounded hover:bg-gray-800 transition-colors font-medium"
+              className="
+                w-full rounded-sm bg-gray-900 px-3 py-1.5 text-xs font-medium
+                text-white transition-colors
+                hover:bg-gray-800
+              "
             >
-              I've Notified Participants
+              I&apos;ve Notified Participants
             </button>
           </div>
         ),

@@ -16,7 +16,11 @@ const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(
           <DialogTrigger asChild>
             <button
               ref={ref}
-              className="flex items-center justify-start mb-2 cursor-pointer bg-transparent border-none p-0 hover:opacity-80 transition-opacity"
+              className="
+                mb-2 flex cursor-pointer items-center justify-start border-none
+                bg-transparent p-0 transition-opacity
+                hover:opacity-80
+              "
             >
               <Image
                 src="/logo-collapsed.png"
@@ -30,7 +34,12 @@ const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(
           </DialogTrigger>
         ) : (
           <DialogTrigger asChild>
-            <span className="text-lg text-center border rounded-full bg-blue-600/10 border-background font-semibold text-foreground mb-2 block items-center cursor-pointer hover:opacity-80 transition-opacity">
+            <span className="
+              mb-2 block cursor-pointer items-center rounded-full border
+              border-background bg-blue-600/10 text-center text-lg font-semibold
+              text-foreground transition-opacity
+              hover:opacity-80
+            ">
               <span>Meetily</span>
             </span>
           </DialogTrigger>

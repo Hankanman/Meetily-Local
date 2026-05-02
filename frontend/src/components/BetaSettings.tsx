@@ -18,8 +18,11 @@ export function BetaSettings() {
   return (
     <div className="space-y-6">
       {/* Yellow Warning Banner */}
-      <div className="flex items-start gap-3 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-        <AlertCircle className="h-5 w-5 text-yellow-600 flex-shrink-0 mt-0.5" />
+      <div className="
+        flex items-start gap-3 rounded-lg border border-yellow-200 bg-yellow-50
+        p-4
+      ">
+        <AlertCircle className="mt-0.5 size-5 shrink-0 text-yellow-600" />
         <div className="text-sm text-yellow-800">
           <p className="font-medium">Beta Features</p>
           <p className="mt-1">
@@ -33,16 +36,21 @@ export function BetaSettings() {
       {featureOrder.map((featureKey) => (
         <div
           key={featureKey}
-          className="bg-background rounded-lg border border-border p-6 shadow-sm"
+          className="
+            rounded-lg border border-border bg-background p-6 shadow-sm
+          "
         >
           <div className="flex items-center justify-between">
             <div className="flex-1">
-              <div className="flex items-center gap-2 mb-2">
-                <FlaskConical className="h-5 w-5 text-muted-foreground" />
+              <div className="mb-2 flex items-center gap-2">
+                <FlaskConical className="size-5 text-muted-foreground" />
                 <h3 className="text-lg font-semibold text-foreground">
                   {BETA_FEATURE_NAMES[featureKey]}
                 </h3>
-                <span className="px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">
+                <span className="
+                  rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium
+                  text-yellow-800
+                ">
                   BETA
                 </span>
               </div>
@@ -64,7 +72,7 @@ export function BetaSettings() {
       ))}
 
       {/* Info Box */}
-      <div className="p-4 bg-blue-600/10 border border-blue-500/30 rounded-lg">
+      <div className="rounded-lg border border-blue-500/30 bg-blue-600/10 p-4">
         <p className="text-sm text-blue-800">
           <strong>Note:</strong> When disabled, beta features will be hidden.
           Your existing meetings remain unaffected.

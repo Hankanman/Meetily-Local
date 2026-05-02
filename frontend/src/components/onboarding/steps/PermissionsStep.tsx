@@ -141,12 +141,12 @@ export function PermissionsStep() {
       showNavigation={allPermissionsGranted}
       canGoNext={allPermissionsGranted}
     >
-      <div className="max-w-lg mx-auto space-y-6">
+      <div className="mx-auto max-w-lg space-y-6">
         {/* Permission Rows */}
         <div className="space-y-4">
           {/* Microphone */}
           <PermissionRow
-            icon={<Mic className="w-5 h-5" />}
+            icon={<Mic className="size-5" />}
             title="Microphone"
             description="Required to capture your voice during meetings"
             status={permissions.microphone}
@@ -156,7 +156,7 @@ export function PermissionsStep() {
 
           {/* System Audio */}
           <PermissionRow
-            icon={<Volume2 className="w-5 h-5" />}
+            icon={<Volume2 className="size-5" />}
             title="System Audio"
             description="Click Enable to grant Audio Capture permission"
             status={permissions.systemAudio}
@@ -170,20 +170,23 @@ export function PermissionsStep() {
           <Button
             onClick={handleFinish}
             disabled={!allPermissionsGranted}
-            className="w-full h-11"
+            className="h-11 w-full"
           >
             Finish Setup
           </Button>
 
           <button
             onClick={handleSkip}
-            className="text-sm text-neutral-500 hover:text-neutral-700 transition-colors"
+            className="
+              text-sm text-neutral-500 transition-colors
+              hover:text-neutral-700
+            "
           >
             I'll do this later
           </button>
 
           {!allPermissionsGranted && (
-            <p className="text-xs text-center text-muted-foreground">
+            <p className="text-center text-xs text-muted-foreground">
               Recording won't work without permissions. You can grant them later
               in settings.
             </p>

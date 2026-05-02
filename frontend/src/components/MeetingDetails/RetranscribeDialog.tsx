@@ -298,7 +298,7 @@ export function RetranscribeDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="sm:max-w-[450px]"
+        className="sm:max-w-112.5"
         onEscapeKeyDown={handleEscapeKeyDown}
         onInteractOutside={handleInteractOutside}
       >
@@ -306,17 +306,17 @@ export function RetranscribeDialog({
           <DialogTitle className="flex items-center gap-2">
             {isProcessing ? (
               <>
-                <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+                <Loader2 className="size-5 animate-spin text-blue-600" />
                 Retranscribing...
               </>
             ) : error ? (
               <>
-                <AlertCircle className="h-5 w-5 text-red-600" />
+                <AlertCircle className="size-5 text-red-600" />
                 Retranscription Failed
               </>
             ) : (
               <>
-                <RefreshCw className="h-5 w-5 text-blue-600" />
+                <RefreshCw className="size-5 text-blue-600" />
                 Retranscribe Meeting
               </>
             )}
@@ -336,7 +336,7 @@ export function RetranscribeDialog({
             (!isParakeetModel ? (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Globe className="h-4 w-4 text-muted-foreground" />
+                  <Globe className="size-4 text-muted-foreground" />
                   <span className="text-sm font-medium">Language</span>
                 </div>
                 <Select value={selectedLang} onValueChange={setSelectedLang}>
@@ -359,12 +359,12 @@ export function RetranscribeDialog({
             ) : (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Globe className="h-4 w-4 text-muted-foreground" />
+                  <Globe className="size-4 text-muted-foreground" />
                   <span className="text-sm font-medium">Language</span>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Language selection isn't supported for Parakeet. It always
-                  uses automatic detection.
+                  Language selection isn&apos;t supported for Parakeet. It
+                  always uses automatic detection.
                 </p>
               </div>
             ))}
@@ -372,7 +372,7 @@ export function RetranscribeDialog({
           {!isProcessing && !error && availableModels.length > 0 && (
             <div className="space-y-3">
               <div className="flex items-center gap-2">
-                <Cpu className="h-4 w-4 text-muted-foreground" />
+                <Cpu className="size-4 text-muted-foreground" />
                 <span className="text-sm font-medium">Model</span>
               </div>
               <Select
@@ -407,27 +407,34 @@ export function RetranscribeDialog({
           {isProcessing && progress && (
             <div className="space-y-2">
               <div className="relative">
-                <div className="w-full bg-muted rounded-full h-3">
+                <div className="h-3 w-full rounded-full bg-muted">
                   <div
-                    className="bg-blue-600 h-3 rounded-full transition-all duration-300 ease-out"
+                    className="
+                      h-3 rounded-full bg-blue-600 transition-all duration-300
+                      ease-out
+                    "
                     style={{
                       width: `${Math.min(progress.progress_percentage, 100)}%`,
                     }}
                   />
                 </div>
-                <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                <div
+                  className="
+                  mt-1 flex justify-between text-xs text-muted-foreground
+                "
+                >
                   <span>{progress.stage}</span>
                   <span>{Math.round(progress.progress_percentage)}%</span>
                 </div>
               </div>
-              <p className="text-sm text-muted-foreground text-center">
+              <p className="text-center text-sm text-muted-foreground">
                 {progress.message}
               </p>
             </div>
           )}
 
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3">
               <p className="text-sm text-red-800">{error}</p>
             </div>
           )}
@@ -441,17 +448,20 @@ export function RetranscribeDialog({
               </Button>
               <Button
                 onClick={handleStartRetranscription}
-                className="bg-blue-600 hover:bg-blue-700"
+                className="
+                  bg-blue-600
+                  hover:bg-blue-700
+                "
                 disabled={!meetingFolderPath}
               >
-                <RefreshCw className="h-4 w-4 mr-2" />
+                <RefreshCw className="mr-2 size-4" />
                 Start Retranscription
               </Button>
             </>
           )}
           {isProcessing && (
             <Button variant="outline" onClick={handleCancel}>
-              <X className="h-4 w-4 mr-2" />
+              <X className="mr-2 size-4" />
               Cancel
             </Button>
           )}

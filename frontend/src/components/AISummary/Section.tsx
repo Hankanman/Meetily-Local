@@ -81,7 +81,7 @@ export const Section: React.FC<SectionProps> = ({
       transition={{ duration: 0.5 }}
       className="mb-8"
     >
-      <div className="flex items-center justify-between mb-4">
+      <div className="mb-4 flex items-center justify-between">
         <EditableTitle
           title={section.title}
           isEditing={isEditingTitle}
@@ -95,7 +95,10 @@ export const Section: React.FC<SectionProps> = ({
         {onSectionDelete && (
           <button
             onClick={() => onSectionDelete(sectionKey)}
-            className="text-muted-foreground/70 hover:text-muted-foreground"
+            className="
+              text-muted-foreground/70
+              hover:text-muted-foreground
+            "
           >
             Delete
           </button>

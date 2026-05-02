@@ -403,10 +403,15 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   return (
     <TooltipProvider>
       <div className="flex flex-col space-y-2">
-        <div className="flex items-center space-x-2 bg-background rounded-full shadow-lg px-4 py-2">
+        <div className="
+          flex items-center space-x-2 rounded-full bg-background px-4 py-2
+          shadow-lg
+        ">
           {isProcessing && !isParentProcessing ? (
             <div className="flex items-center space-x-2">
-              <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-gray-900"></div>
+              <div className="
+                size-5 animate-spin rounded-full border-b-2 border-gray-900
+              "></div>
               <span className="text-sm text-muted-foreground">
                 Processing recording...
               </span>
@@ -417,30 +422,37 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                 <>
                   <button
                     onClick={handleStartRecording}
-                    className="w-10 h-10 flex items-center justify-center bg-red-500 rounded-full text-white hover:bg-red-600 transition-colors"
+                    className="
+                      flex size-10 items-center justify-center rounded-full
+                      bg-red-500 text-white transition-colors
+                      hover:bg-red-600
+                    "
                   >
                     <Mic size={16} />
                   </button>
 
-                  <div className="w-px h-6 bg-muted mx-1" />
+                  <div className="mx-1 h-6 w-px bg-muted" />
 
-                  <div className="flex items-center space-x-1 mx-2">
-                    <div className="text-sm text-muted-foreground min-w-[40px]">
+                  <div className="mx-2 flex items-center space-x-1">
+                    <div className="min-w-10 text-sm text-muted-foreground">
                       {formatTime(currentTime)}
                     </div>
-                    <div className="relative w-24 h-1 bg-muted rounded-full">
+                    <div className="relative h-1 w-24 rounded-full bg-muted">
                       <div
-                        className="absolute h-full bg-blue-500 rounded-full"
+                        className="absolute h-full rounded-full bg-blue-500"
                         style={{ width: `${progress}%` }}
                       />
                     </div>
-                    <div className="text-sm text-muted-foreground min-w-[40px]">
+                    <div className="min-w-10 text-sm text-muted-foreground">
                       {formatTime(duration)}
                     </div>
                   </div>
 
                   <button
-                    className="w-10 h-10 flex items-center justify-center bg-muted rounded-full text-white cursor-not-allowed"
+                    className="
+                      flex size-10 cursor-not-allowed items-center
+                      justify-center rounded-full bg-muted text-white
+                    "
                     disabled
                   >
                     <Play size={16} />
@@ -466,14 +478,24 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             isRecordingDisabled ||
                             isValidatingModel
                           }
-                          className={`w-12 h-12 flex items-center justify-center ${
+                          className={`
+                            flex size-12 items-center justify-center
+                            ${
                             isStarting || isProcessing || isValidatingModel
                               ? "bg-muted"
-                              : "bg-red-500 hover:bg-red-600"
-                          } rounded-full text-white transition-colors relative`}
+                              : `
+                                bg-red-500
+                                hover:bg-red-600
+                              `
+                          }
+                            relative rounded-full text-white transition-colors
+                          `}
                         >
                           {isValidatingModel ? (
-                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-background"></div>
+                            <div className="
+                              size-5 animate-spin rounded-full border-b-2
+                              border-background
+                            "></div>
                           ) : (
                             <Mic size={20} />
                           )}
@@ -505,11 +527,22 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                               }
                             }}
                             disabled={isPausing || isResuming || isStopping}
-                            className={`w-10 h-10 flex items-center justify-center ${
+                            className={`
+                              flex size-10 items-center justify-center
+                              ${
                               isPausing || isResuming || isStopping
-                                ? "bg-muted border-2 border-border text-muted-foreground/70"
-                                : "bg-background border-2 border-border text-muted-foreground hover:border-border hover:bg-muted"
-                            } rounded-full transition-colors relative`}
+                                ? `
+                                  border-2 border-border bg-muted
+                                  text-muted-foreground/70
+                                `
+                                : `
+                                  border-2 border-border bg-background
+                                  text-muted-foreground
+                                  hover:border-border hover:bg-muted
+                                `
+                            }
+                              relative rounded-full transition-colors
+                            `}
                           >
                             {isPaused ? (
                               <Play size={16} />
@@ -517,7 +550,10 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                               <Pause size={16} />
                             )}
                             {(isPausing || isResuming) && (
-                              <div className="absolute -top-8 text-muted-foreground font-medium text-xs">
+                              <div className="
+                                absolute -top-8 text-xs font-medium
+                                text-muted-foreground
+                              ">
                                 {isPausing ? "Pausing..." : "Resuming..."}
                               </div>
                             )}
@@ -541,15 +577,25 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                               handleStopRecording();
                             }}
                             disabled={isStopping || isPausing || isResuming}
-                            className={`w-10 h-10 flex items-center justify-center ${
+                            className={`
+                              flex size-10 items-center justify-center
+                              ${
                               isStopping || isPausing || isResuming
                                 ? "bg-muted"
-                                : "bg-red-500 hover:bg-red-600"
-                            } rounded-full text-white transition-colors relative`}
+                                : `
+                                  bg-red-500
+                                  hover:bg-red-600
+                                `
+                            }
+                              relative rounded-full text-white transition-colors
+                            `}
                           >
                             <Square size={16} />
                             {isStopping && (
-                              <div className="absolute -top-8 text-muted-foreground font-medium text-xs">
+                              <div className="
+                                absolute -top-8 text-xs font-medium
+                                text-muted-foreground
+                              ">
                                 Stopping...
                               </div>
                             )}
@@ -562,13 +608,16 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                     </>
                   )}
 
-                  <div className="flex items-center space-x-1 mx-4">
+                  <div className="mx-4 flex items-center space-x-1">
                     {barHeights.map((height, index) => (
                       <div
                         key={index}
-                        className={`w-1 rounded-full transition-all duration-200 ${
+                        className={`
+                          w-1 rounded-full transition-all duration-200
+                          ${
                           isPaused ? "bg-orange-500" : "bg-red-500"
-                        }`}
+                        }
+                        `}
                         style={{
                           height: isRecording && !isPaused ? height : "4px",
                           opacity: isPaused ? 0.6 : 1,
@@ -584,7 +633,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
 
         {/* Show validation status only */}
         {isValidatingModel && (
-          <div className="text-xs text-muted-foreground text-center mt-2">
+          <div className="mt-2 text-center text-xs text-muted-foreground">
             Validating speech recognition...
           </div>
         )}
@@ -595,15 +644,18 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
             variant="destructive"
             className="mt-4 border-red-300 bg-red-50"
           >
-            <AlertCircle className="h-5 w-5 text-red-600" />
+            <AlertCircle className="size-5 text-red-600" />
             <button
               onClick={() => setDeviceError(null)}
-              className="absolute right-3 top-3 text-red-600 hover:text-red-800 transition-colors"
+              className="
+                absolute top-3 right-3 text-red-600 transition-colors
+                hover:text-red-800
+              "
               aria-label="Close alert"
             >
-              <X className="h-4 w-4" />
+              <X className="size-4" />
             </button>
-            <AlertTitle className="text-red-800 font-semibold mb-2">
+            <AlertTitle className="mb-2 font-semibold text-red-800">
               {deviceError.title}
             </AlertTitle>
             <AlertDescription className="text-red-700">

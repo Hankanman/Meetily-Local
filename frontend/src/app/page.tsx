@@ -117,9 +117,17 @@ export default function Home() {
           console.warn("⚠️ Failed to clean up saved meetings:", error);
         }
 
-        // 3. Always check for recoverable meetings on startup
-        // Don't skip based on sessionStorage - we need to check every time
-        await checkForRecoverableTranscripts();
+        // 3. Always check for recoverable meetings on startup. Open the
+        // dialog once per session at the data-load callsite — keeping this
+        // off a derived effect so we don't trip react-hooks/set-state-in-effect.
+        const meetings = await checkForRecoverableTranscripts();
+        if (
+          meetings.length > 0 &&
+          !sessionStorage.getItem("recovery_dialog_shown")
+        ) {
+          setShowRecoveryDialog(true);
+          sessionStorage.setItem("recovery_dialog_shown", "true");
+        }
       } catch (error) {
         console.error("Failed to perform startup checks:", error);
       }
@@ -127,18 +135,6 @@ export default function Home() {
 
     performStartupChecks();
   }, [checkForRecoverableTranscripts, recordingState.isRecording, status]);
-
-  // Watch for recoverable meetings changes and show dialog once per session
-  useEffect(() => {
-    // Only show dialog if we have meetings and haven't shown it yet this session
-    if (recoverableMeetings.length > 0) {
-      const shownThisSession = sessionStorage.getItem("recovery_dialog_shown");
-      if (!shownThisSession) {
-        setShowRecoveryDialog(true);
-        sessionStorage.setItem("recovery_dialog_shown", "true");
-      }
-    }
-  }, [recoverableMeetings]);
 
   // Handle recovery with toast notifications and navigation
   const handleRecovery = async (meetingId: string) => {
@@ -220,7 +216,7 @@ export default function Home() {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, ease: "easeOut" }}
-      className="flex flex-col h-screen bg-muted"
+      className="flex h-screen flex-col bg-muted"
     >
       {/* All Modals supported*/}
       <SettingsModals modals={modals} messages={messages} onClose={hideModal} />
@@ -245,15 +241,19 @@ export default function Home() {
         {(hasMicrophone || isRecording) &&
           status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
           status !== RecordingStatus.SAVING && (
-            <div className="fixed bottom-12 left-0 right-0 z-10">
+            <div className="fixed inset-x-0 bottom-12 z-10">
               <div
-                className="flex justify-center pl-8 transition-[margin] duration-300"
+                className="
+                  flex justify-center pl-8 transition-[margin] duration-300
+                "
                 style={{
                   marginLeft: sidebarCollapsed ? "4rem" : "16rem",
                 }}
               >
-                <div className="w-2/3 max-w-[750px] flex justify-center">
-                  <div className="bg-background rounded-full shadow-lg flex items-center">
+                <div className="flex w-2/3 max-w-187.5 justify-center">
+                  <div className="
+                    flex items-center rounded-full bg-background shadow-lg
+                  ">
                     <RecordingControls
                       isRecording={recordingState.isRecording}
                       onRecordingStop={(callApi = true) =>

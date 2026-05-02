@@ -49,16 +49,24 @@ export const EditableTitle: React.FC<EditableTitleProps> = ({
             onFinishEditing();
           }
         }}
-        className="text-2xl font-bold bg-muted border border-border focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-3 py-1 w-full resize-none overflow-hidden"
+        className="
+          w-full resize-none overflow-hidden rounded-sm border border-border
+          bg-muted px-3 py-1 text-2xl font-bold
+          focus:ring-2 focus:ring-blue-500 focus:outline-none
+        "
         style={{ minWidth: "300px", minHeight: "40px" }}
         autoFocus
         rows={1}
       />
     </div>
   ) : (
-    <div className="group flex items-center space-x-2 flex-1">
+    <div className="group flex flex-1 items-center space-x-2">
       <h1
-        className="text-2xl font-bold cursor-pointer hover:bg-muted rounded px-1 flex-1 whitespace-pre-wrap"
+        className="
+          flex-1 cursor-pointer rounded-sm px-1 text-2xl font-bold
+          whitespace-pre-wrap
+          hover:bg-muted
+        "
         onClick={onStartEditing}
       >
         {title}
@@ -66,7 +74,11 @@ export const EditableTitle: React.FC<EditableTitleProps> = ({
       <div className="flex space-x-1">
         <button
           onClick={onStartEditing}
-          className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 p-1 hover:bg-muted rounded"
+          className="
+            rounded-sm p-1 opacity-0 transition-opacity duration-200
+            group-hover:opacity-100
+            hover:bg-muted
+          "
           title="Edit section title"
         >
           <svg
@@ -86,7 +98,12 @@ export const EditableTitle: React.FC<EditableTitleProps> = ({
         {onDelete && (
           <button
             onClick={onDelete}
-            className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 p-1 hover:bg-muted rounded text-red-600"
+            className="
+              rounded-sm p-1 text-red-600 opacity-0 transition-opacity
+              duration-200
+              group-hover:opacity-100
+              hover:bg-muted
+            "
             title="Delete section"
           >
             <svg

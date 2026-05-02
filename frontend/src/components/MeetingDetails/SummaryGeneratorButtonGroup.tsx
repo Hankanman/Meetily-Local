@@ -268,7 +268,11 @@ export function SummaryGeneratorButtonGroup({
         <Button
           variant="outline"
           size="sm"
-          className="bg-gradient-to-r from-red-50 to-orange-50 hover:from-red-100 hover:to-orange-100 border-red-200 xl:px-4"
+          className="
+            border-red-200 bg-linear-to-r from-red-50 to-orange-50
+            hover:from-red-100 hover:to-orange-100
+            xl:px-4
+          "
           onClick={() => {
             Analytics.trackButtonClick(
               "stop_summary_generation",
@@ -279,13 +283,21 @@ export function SummaryGeneratorButtonGroup({
           title="Stop summary generation"
         >
           <Square className="xl:mr-2" size={18} fill="currentColor" />
-          <span className="hidden lg:inline xl:inline">Stop</span>
+          <span className="
+            hidden
+            lg:inline
+            xl:inline
+          ">Stop</span>
         </Button>
       ) : (
         <Button
           variant="outline"
           size="sm"
-          className="bg-gradient-to-r from-blue-600/10 to-purple-600/10 hover:from-blue-600/20 hover:to-purple-600/20 border-blue-500/30 xl:px-4"
+          className="
+            border-blue-500/30 bg-linear-to-r from-blue-600/10 to-purple-600/10
+            hover:from-blue-600/20 hover:to-purple-600/20
+            xl:px-4
+          "
           onClick={() => {
             Analytics.trackButtonClick("generate_summary", "meeting_details");
             checkOllamaModelsAndGenerate();
@@ -301,13 +313,23 @@ export function SummaryGeneratorButtonGroup({
         >
           {isCheckingModels || isModelConfigLoading ? (
             <>
-              <Loader2 className="animate-spin xl:mr-2" size={18} />
-              <span className="hidden xl:inline">Processing...</span>
+              <Loader2 className="
+                animate-spin
+                xl:mr-2
+              " size={18} />
+              <span className="
+                hidden
+                xl:inline
+              ">Processing...</span>
             </>
           ) : (
             <>
               <Sparkles className="xl:mr-2" size={18} />
-              <span className="hidden lg:inline xl:inline">
+              <span className="
+                hidden
+                lg:inline
+                xl:inline
+              ">
                 Generate Summary
               </span>
             </>
@@ -320,7 +342,10 @@ export function SummaryGeneratorButtonGroup({
         <DialogTrigger asChild>
           <Button variant="outline" size="sm" title="Summary Settings">
             <Settings />
-            <span className="hidden lg:inline">AI Model</span>
+            <span className="
+              hidden
+              lg:inline
+            ">AI Model</span>
           </Button>
         </DialogTrigger>
         <DialogContent aria-describedby={undefined}>
@@ -345,7 +370,10 @@ export function SummaryGeneratorButtonGroup({
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" title="Select summary template">
               <FileText />
-              <span className="hidden lg:inline">Template</span>
+              <span className="
+                hidden
+                lg:inline
+              ">Template</span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -358,7 +386,7 @@ export function SummaryGeneratorButtonGroup({
               >
                 <span>{template.name}</span>
                 {selectedTemplate === template.id && (
-                  <Check className="h-4 w-4 text-green-600" />
+                  <Check className="size-4 text-green-600" />
                 )}
               </DropdownMenuItem>
             ))}

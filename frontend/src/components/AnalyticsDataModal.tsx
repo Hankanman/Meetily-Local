@@ -17,32 +17,43 @@ export default function AnalyticsDataModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-foreground bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-background rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+    <div className="
+      bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center
+      bg-foreground
+    ">
+      <div className="
+        mx-4 max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg
+        bg-background shadow-xl
+      ">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-border">
+        <div className="
+          flex items-center justify-between border-b border-border p-6
+        ">
           <div className="flex items-center gap-3">
-            <Shield className="w-6 h-6 text-blue-600" />
+            <Shield className="size-6 text-blue-600" />
             <h2 className="text-xl font-semibold text-foreground">
               What We Collect
             </h2>
           </div>
           <button
             onClick={onClose}
-            className="text-muted-foreground/70 hover:text-muted-foreground transition-colors"
+            className="
+              text-muted-foreground/70 transition-colors
+              hover:text-muted-foreground
+            "
           >
-            <X className="w-5 h-5" />
+            <X className="size-5" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-6">
+        <div className="space-y-6 p-6">
           {/* Privacy Notice */}
-          <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+          <div className="rounded-lg border border-green-200 bg-green-50 p-4">
             <div className="flex items-start gap-3">
-              <Info className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" />
+              <Info className="mt-0.5 size-5 shrink-0 text-green-600" />
               <div className="text-sm text-green-800">
-                <p className="font-semibold mb-1">Your Privacy is Protected</p>
+                <p className="mb-1 font-semibold">Your Privacy is Protected</p>
                 <p>
                   We collect <strong>anonymous usage data only</strong>. No
                   meeting content, names, or personal information is ever
@@ -59,11 +70,11 @@ export default function AnalyticsDataModal({
             </h3>
 
             {/* Model Preferences */}
-            <div className="border border-border rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-2">
+            <div className="rounded-lg border border-border p-4">
+              <h4 className="mb-2 font-semibold text-foreground">
                 1. Model Preferences
               </h4>
-              <ul className="text-sm text-foreground space-y-1 ml-4">
+              <ul className="ml-4 space-y-1 text-sm text-foreground">
                 <li>
                   • Transcription model (e.g., "Whisper large-v3", "Parakeet")
                 </li>
@@ -72,81 +83,81 @@ export default function AnalyticsDataModal({
                   • Model provider (e.g., "Local", "Ollama", "OpenRouter")
                 </li>
               </ul>
-              <p className="text-xs text-muted-foreground mt-2 italic">
+              <p className="mt-2 text-xs text-muted-foreground italic">
                 Helps us understand which models users prefer
               </p>
             </div>
 
             {/* Meeting Metrics */}
-            <div className="border border-border rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-2">
+            <div className="rounded-lg border border-border p-4">
+              <h4 className="mb-2 font-semibold text-foreground">
                 2. Anonymous Meeting Metrics
               </h4>
-              <ul className="text-sm text-foreground space-y-1 ml-4">
+              <ul className="ml-4 space-y-1 text-sm text-foreground">
                 <li>• Recording duration (e.g., "125 seconds")</li>
                 <li>• Pause duration (e.g., "5 seconds")</li>
                 <li>• Number of transcript segments</li>
                 <li>• Number of audio chunks processed</li>
               </ul>
-              <p className="text-xs text-muted-foreground mt-2 italic">
+              <p className="mt-2 text-xs text-muted-foreground italic">
                 Helps us optimize performance and understand usage patterns
               </p>
             </div>
 
             {/* Device Types */}
-            <div className="border border-border rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-2">
+            <div className="rounded-lg border border-border p-4">
+              <h4 className="mb-2 font-semibold text-foreground">
                 3. Device Types (Not Names)
               </h4>
-              <ul className="text-sm text-foreground space-y-1 ml-4">
+              <ul className="ml-4 space-y-1 text-sm text-foreground">
                 <li>• Microphone type: "Bluetooth" or "Wired" or "Unknown"</li>
                 <li>
                   • System audio type: "Bluetooth" or "Wired" or "Unknown"
                 </li>
               </ul>
-              <p className="text-xs text-muted-foreground mt-2 italic">
+              <p className="mt-2 text-xs text-muted-foreground italic">
                 Helps us improve compatibility, NOT the actual device names
               </p>
             </div>
 
             {/* Usage Patterns */}
-            <div className="border border-border rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-2">
+            <div className="rounded-lg border border-border p-4">
+              <h4 className="mb-2 font-semibold text-foreground">
                 4. App Usage Patterns
               </h4>
-              <ul className="text-sm text-foreground space-y-1 ml-4">
+              <ul className="ml-4 space-y-1 text-sm text-foreground">
                 <li>• App started/stopped events</li>
                 <li>• Session duration</li>
                 <li>• Feature usage (e.g., "settings changed")</li>
                 <li>• Error occurrences (helps us fix bugs)</li>
               </ul>
-              <p className="text-xs text-muted-foreground mt-2 italic">
+              <p className="mt-2 text-xs text-muted-foreground italic">
                 Helps us improve user experience
               </p>
             </div>
 
             {/* Platform Info */}
-            <div className="border border-border rounded-lg p-4">
-              <h4 className="font-semibold text-foreground mb-2">
+            <div className="rounded-lg border border-border p-4">
+              <h4 className="mb-2 font-semibold text-foreground">
                 5. Platform Information
               </h4>
-              <ul className="text-sm text-foreground space-y-1 ml-4">
+              <ul className="ml-4 space-y-1 text-sm text-foreground">
                 <li>• Operating system (e.g., "macOS", "Windows")</li>
                 <li>• App version (automatically included in all events)</li>
                 <li>• Architecture (e.g., "x86_64", "aarch64")</li>
               </ul>
-              <p className="text-xs text-muted-foreground mt-2 italic">
+              <p className="mt-2 text-xs text-muted-foreground italic">
                 Helps us prioritize platform support
               </p>
             </div>
           </div>
 
           {/* What We DON'T Collect */}
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-            <h4 className="font-semibold text-red-900 mb-2">
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4">
+            <h4 className="mb-2 font-semibold text-red-900">
               What We DON'T Collect:
             </h4>
-            <ul className="text-sm text-red-800 space-y-1 ml-4">
+            <ul className="ml-4 space-y-1 text-sm text-red-800">
               <li>• ❌ Meeting names or titles</li>
               <li>• ❌ Meeting transcripts or content</li>
               <li>• ❌ Audio recordings</li>
@@ -157,11 +168,11 @@ export default function AnalyticsDataModal({
           </div>
 
           {/* Example Event */}
-          <div className="bg-muted border border-border rounded-lg p-4">
-            <h4 className="font-semibold text-foreground mb-2">
+          <div className="rounded-lg border border-border bg-muted p-4">
+            <h4 className="mb-2 font-semibold text-foreground">
               Example Event:
             </h4>
-            <pre className="text-xs text-foreground overflow-x-auto">
+            <pre className="overflow-x-auto text-xs text-foreground">
               {`{
   "event": "meeting_ended",
   "app_version": "0.3.0",
@@ -180,16 +191,26 @@ export default function AnalyticsDataModal({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between gap-4 p-6 border-t border-border bg-muted">
+        <div className="
+          flex items-center justify-between gap-4 border-t border-border
+          bg-muted p-6
+        ">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-foreground bg-background border border-border rounded-md hover:bg-muted transition-colors"
+            className="
+              rounded-md border border-border bg-background px-4 py-2
+              text-foreground transition-colors
+              hover:bg-muted
+            "
           >
             Keep Analytics Enabled
           </button>
           <button
             onClick={onConfirmDisable}
-            className="px-4 py-2 text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors"
+            className="
+              rounded-md bg-red-600 px-4 py-2 text-white transition-colors
+              hover:bg-red-700
+            "
           >
             Confirm: Disable Analytics
           </button>

@@ -364,12 +364,15 @@ function MeetingDetailsContent() {
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-screen">
+      <div className="flex h-screen items-center justify-center">
         <div className="text-center">
-          <p className="text-red-500 mb-4">{error}</p>
+          <p className="mb-4 text-red-500">{error}</p>
           <button
             onClick={() => router.push("/")}
-            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+            className="
+              rounded-sm bg-blue-500 px-4 py-2 text-white
+              hover:bg-blue-600
+            "
           >
             Go Back
           </button>
@@ -381,8 +384,8 @@ function MeetingDetailsContent() {
   // Show loading spinner while initial data loads
   if (isLoading || isLoadingTranscripts || !meetingDetails) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <LoaderIcon className="animate-spin size-6 " />
+      <div className="flex h-screen items-center justify-center">
+        <LoaderIcon className="size-6 animate-spin" />
       </div>
     );
   }
@@ -415,8 +418,8 @@ export default function MeetingDetails() {
   return (
     <Suspense
       fallback={
-        <div className="flex items-center justify-center h-screen">
-          <LoaderIcon className="animate-spin size-6" />
+        <div className="flex h-screen items-center justify-center">
+          <LoaderIcon className="size-6 animate-spin" />
         </div>
       }
     >

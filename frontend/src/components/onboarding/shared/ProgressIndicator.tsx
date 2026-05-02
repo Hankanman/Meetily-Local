@@ -42,23 +42,34 @@ export function ProgressIndicator({
               <button
                 onClick={() => isClickable && onStepClick(step)}
                 disabled={!isClickable}
-                className={`relative flex items-center justify-center transition-all duration-300 ${
+                className={`
+                  relative flex items-center justify-center transition-all
+                  duration-300
+                  ${
                   isCompleted
-                    ? "w-7 h-7 bg-green-600 rounded-full"
+                    ? "size-7 rounded-full bg-green-600"
                     : isActive
-                      ? "w-8 h-8 bg-gray-900 rounded-full"
-                      : "w-6 h-6 bg-muted rounded-full"
-                } ${isClickable ? "cursor-pointer hover:scale-110 hover:shadow-md" : "cursor-default"}`}
+                      ? "size-8 rounded-full bg-gray-900"
+                      : "size-6 rounded-full bg-muted"
+                }
+                  ${isClickable ? `
+                    cursor-pointer
+                    hover:scale-110 hover:shadow-md
+                  ` : `cursor-default`}
+                `}
               >
                 {isCompleted ? (
-                  <Check className="w-4 h-4 text-white" />
+                  <Check className="size-4 text-white" />
                 ) : (
                   <StepIcon
-                    className={`transition-all duration-300 ${
+                    className={`
+                      transition-all duration-300
+                      ${
                       isActive
-                        ? "w-4 h-4 text-white"
-                        : "w-3 h-3 text-muted-foreground"
-                    }`}
+                        ? "size-4 text-white"
+                        : "size-3 text-muted-foreground"
+                    }
+                    `}
                   />
                 )}
               </button>
@@ -66,9 +77,12 @@ export function ProgressIndicator({
               {/* Connector Line */}
               {index < visibleSteps.length - 1 && (
                 <div
-                  className={`h-0.5 w-6 transition-all duration-300 ${
+                  className={`
+                    h-0.5 w-6 transition-all duration-300
+                    ${
                     isCompleted ? "bg-green-600" : "bg-muted"
-                  }`}
+                  }
+                  `}
                 />
               )}
             </React.Fragment>

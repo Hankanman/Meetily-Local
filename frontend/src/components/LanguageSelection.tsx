@@ -186,7 +186,7 @@ export function LanguageSelection({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Globe className="h-4 w-4 text-muted-foreground" />
+          <Globe className="size-4 text-muted-foreground" />
           <h4 className="text-sm font-medium text-foreground">
             Transcription Language
           </h4>
@@ -198,7 +198,13 @@ export function LanguageSelection({
           value={selectedLanguage}
           onChange={(e) => handleLanguageChange(e.target.value)}
           disabled={disabled || saving}
-          className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:bg-muted disabled:text-muted-foreground"
+          className="
+            w-full rounded-md border border-border bg-background px-3 py-2
+            text-sm shadow-sm
+            focus:border-blue-500 focus:ring-1 focus:ring-blue-500
+            focus:outline-none
+            disabled:bg-muted disabled:text-muted-foreground
+          "
         >
           {availableLanguages.map((language) => (
             <option key={language.code} value={language.code}>
@@ -212,7 +218,9 @@ export function LanguageSelection({
 
         {/* Parakeet language limitation warning */}
         {isParakeet && (
-          <div className="p-2 bg-amber-50 border border-amber-200 rounded text-amber-800">
+          <div className="
+            rounded-sm border border-amber-200 bg-amber-50 p-2 text-amber-800
+          ">
             <p className="font-medium">ℹ️ Parakeet Language Support</p>
             <p className="mt-1 text-xs">
               Parakeet currently only supports automatic language detection.
@@ -223,12 +231,15 @@ export function LanguageSelection({
         )}
 
         {/* Info text */}
-        <div className="text-xs space-y-2 pt-2">
+        <div className="space-y-2 pt-2 text-xs">
           <p className="text-muted-foreground">
             <strong>Current:</strong> {selectedLanguageName}
           </p>
           {selectedLanguage === "auto" && (
-            <div className="p-2 bg-yellow-50 border border-yellow-200 rounded text-yellow-800">
+            <div className="
+              rounded-sm border border-yellow-200 bg-yellow-50 p-2
+              text-yellow-800
+            ">
               <p className="font-medium">
                 ⚠️ Auto Detect may produce incorrect results
               </p>
@@ -239,7 +250,10 @@ export function LanguageSelection({
             </div>
           )}
           {selectedLanguage === "auto-translate" && (
-            <div className="p-2 bg-blue-600/10 border border-blue-500/30 rounded text-blue-800">
+            <div className="
+              rounded-sm border border-blue-500/30 bg-blue-600/10 p-2
+              text-blue-800
+            ">
               <p className="font-medium">🌐 Translation Mode Active</p>
               <p className="mt-1">
                 All audio will be automatically translated to English. Best for

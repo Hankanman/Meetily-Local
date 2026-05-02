@@ -166,7 +166,7 @@ export const TiptapSummaryView = forwardRef<
 
     // Markdown is the only "live editing" format.
     return (
-      <div className="flex flex-col w-full">
+      <div className="flex w-full flex-col">
         <div className="w-full">
           <Editor
             initialMarkdown={data?.markdown ?? ""}

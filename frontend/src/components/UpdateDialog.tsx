@@ -198,7 +198,7 @@ export function UpdateDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="sm:max-w-[500px]"
+        className="sm:max-w-125"
         onEscapeKeyDown={handleEscapeKeyDown}
         onInteractOutside={handleInteractOutside}
       >
@@ -206,17 +206,17 @@ export function UpdateDialog({
           <DialogTitle className="flex items-center gap-2">
             {isDownloading ? (
               <>
-                <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+                <Loader2 className="size-5 animate-spin text-blue-600" />
                 Downloading Update
               </>
             ) : error ? (
               <>
-                <AlertCircle className="h-5 w-5 text-red-600" />
+                <AlertCircle className="size-5 text-red-600" />
                 Update Error
               </>
             ) : (
               <>
-                <Download className="h-5 w-5 text-blue-600" />
+                <Download className="size-5 text-blue-600" />
                 Update Available
               </>
             )}
@@ -259,8 +259,10 @@ export function UpdateDialog({
               </div>
 
               {updateInfo.body && (
-                <div className="bg-muted rounded-lg p-3 max-h-40 overflow-y-auto">
-                  <p className="text-sm text-foreground whitespace-pre-wrap">
+                <div className="
+                  max-h-40 overflow-y-auto rounded-lg bg-muted p-3
+                ">
+                  <p className="text-sm whitespace-pre-wrap text-foreground">
                     {updateInfo.body}
                   </p>
                 </div>
@@ -271,13 +273,18 @@ export function UpdateDialog({
           {isDownloading && progress && (
             <div className="space-y-2">
               <div className="relative">
-                <div className="w-full bg-muted rounded-full h-3">
+                <div className="h-3 w-full rounded-full bg-muted">
                   <div
-                    className="bg-blue-600 h-3 rounded-full transition-all duration-300 ease-out"
+                    className="
+                      h-3 rounded-full bg-blue-600 transition-all duration-300
+                      ease-out
+                    "
                     style={{ width: `${Math.min(progress.percentage, 100)}%` }}
                   />
                 </div>
-                <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                <div className="
+                  mt-1 flex justify-between text-xs text-muted-foreground
+                ">
                   <span>{Math.round(progress.percentage)}% complete</span>
                   {progress.total > 0 && (
                     <span>
@@ -287,14 +294,14 @@ export function UpdateDialog({
                   )}
                 </div>
               </div>
-              <p className="text-sm text-muted-foreground text-center">
+              <p className="text-center text-sm text-muted-foreground">
                 The app will restart automatically after installation
               </p>
             </div>
           )}
 
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3">
               <p className="text-sm text-red-800">{error}</p>
             </div>
           )}
@@ -308,9 +315,12 @@ export function UpdateDialog({
               </Button>
               <Button
                 onClick={handleDownloadAndInstall}
-                className="bg-blue-600 hover:bg-blue-700"
+                className="
+                  bg-blue-600
+                  hover:bg-blue-700
+                "
               >
-                <Download className="h-4 w-4 mr-2" />
+                <Download className="mr-2 size-4" />
                 Download & Install
               </Button>
             </>

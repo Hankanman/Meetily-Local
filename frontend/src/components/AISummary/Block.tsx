@@ -236,18 +236,23 @@ export const BlockComponent: React.FC<BlockProps> = ({
 
   return (
     <div
-      className={`group relative min-h-[24px] flex items-start rounded transition-all duration-150 ease-in-out
-        ${isSelected ? "bg-blue-600/10 ring-1 ring-blue-200 shadow-sm" : "hover:bg-muted"}`}
+      className={`
+        group relative flex min-h-6 items-start rounded-sm transition-all
+        duration-150 ease-in-out
+        ${isSelected ? "bg-blue-600/10 shadow-sm ring-1 ring-blue-200" : `
+          hover:bg-muted
+        `}
+      `}
       onMouseDown={onMouseDown}
       onMouseEnter={onMouseEnter}
       onMouseUp={onMouseUp}
       onContextMenu={onContextMenu}
     >
       {block.type === "bullet" && (
-        <div className="flex-shrink-0 mr-2 select-none mt-[2px]">•</div>
+        <div className="mt-0.5 mr-2 shrink-0 select-none">•</div>
       )}
 
-      <div className="relative flex-1 py-0.5 px-1">
+      <div className="relative flex-1 px-1 py-0.5">
         <textarea
           ref={textareaRef}
           value={block.content}
@@ -264,8 +269,9 @@ export const BlockComponent: React.FC<BlockProps> = ({
           onContextMenu={onContextMenu}
           rows={1}
           className={`
-            w-full resize-none overflow-hidden bg-transparent border-none p-0 focus:outline-none focus:ring-0
+            w-full resize-none overflow-hidden border-none bg-transparent p-0
             transition-all duration-150 ease-in-out
+            focus:ring-0 focus:outline-none
             ${block.color === "gray" ? "text-muted-foreground" : ""}
             ${block.type === "heading1" ? "text-xl font-bold" : ""}
             ${block.type === "heading2" ? "text-lg font-semibold" : ""}
@@ -276,20 +282,27 @@ export const BlockComponent: React.FC<BlockProps> = ({
         {showCommands && (
           <div
             ref={commandsRef}
-            className="absolute left-0 top-full mt-1 w-64 bg-background rounded-lg shadow-lg border border-border py-2 z-50
-                       animate-in fade-in slide-in-from-top-2 duration-150"
+            className="
+              animate-in fade-in slide-in-from-top-2 absolute top-full left-0
+              z-50 mt-1 w-64 rounded-lg border border-border bg-background py-2
+              shadow-lg duration-150
+            "
           >
             {filteredCommands.map((cmd, index) => (
               <button
                 key={cmd.id}
                 className={`
-                  w-full text-left px-3 py-2 flex items-center space-x-3 hover:bg-muted
+                  flex w-full items-center space-x-3 px-3 py-2 text-left
+                  hover:bg-muted
                   ${index === selectedCommandIndex ? "bg-muted" : ""}
                 `}
                 onClick={() => handleCommandSelect(cmd)}
                 onMouseEnter={() => setSelectedCommandIndex(index)}
               >
-                <span className="flex-shrink-0 w-6 h-6 flex items-center justify-center bg-muted rounded text-muted-foreground">
+                <span className="
+                  flex size-6 shrink-0 items-center justify-center rounded-sm
+                  bg-muted text-muted-foreground
+                ">
                   {cmd.icon}
                 </span>
                 <div className="flex-1">

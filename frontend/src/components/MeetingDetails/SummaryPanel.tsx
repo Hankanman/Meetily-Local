@@ -110,9 +110,9 @@ export function SummaryPanel({
     summaryStatus === "regenerating";
 
   return (
-    <div className="flex-1 min-w-0 flex flex-col bg-background overflow-hidden">
+    <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
       {/* Title area */}
-      <div className="p-4 border-b border-border">
+      <div className="border-b border-border p-4">
         {/* <EditableTitle
           title={meetingTitle}
           isEditing={isEditingTitle}
@@ -123,9 +123,9 @@ export function SummaryPanel({
 
         {/* Button groups - only show when summary exists */}
         {aiSummary && !isSummaryLoading && (
-          <div className="flex items-center justify-center w-full pt-0 gap-2">
+          <div className="flex w-full items-center justify-center gap-2 pt-0">
             {/* Left-aligned: Summary Generator Button Group */}
-            <div className="flex-shrink-0">
+            <div className="shrink-0">
               <SummaryGeneratorButtonGroup
                 modelConfig={modelConfig}
                 setModelConfig={setModelConfig}
@@ -144,7 +144,7 @@ export function SummaryPanel({
             </div>
 
             {/* Right-aligned: Summary Updater Button Group */}
-            <div className="flex-shrink-0">
+            <div className="shrink-0">
               <SummaryUpdaterButtonGroup
                 isSaving={isSaving}
                 isDirty={isTitleDirty || summaryRef.current?.isDirty || false}
@@ -163,7 +163,7 @@ export function SummaryPanel({
       </div>
 
       {isSummaryLoading ? (
-        <div className="flex flex-col h-full">
+        <div className="flex h-full flex-col">
           {/* Show button group during generation */}
           <div className="flex items-center justify-center pt-8 pb-4">
             <SummaryGeneratorButtonGroup
@@ -183,15 +183,18 @@ export function SummaryPanel({
             />
           </div>
           {/* Loading spinner */}
-          <div className="flex items-center justify-center flex-1">
+          <div className="flex flex-1 items-center justify-center">
             <div className="text-center">
-              <div className="inline-block animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div>
+              <div className="
+                mb-4 inline-block size-12 animate-spin rounded-full border-y-2
+                border-blue-500
+              "></div>
               <p className="text-muted-foreground">Generating AI Summary...</p>
             </div>
           </div>
         </div>
       ) : !aiSummary ? (
-        <div className="flex flex-col h-full">
+        <div className="flex h-full flex-col">
           {/* Centered Summary Generator Button Group when no summary */}
           <div className="flex items-center justify-center pt-8 pb-4">
             <SummaryGeneratorButtonGroup
@@ -221,13 +224,16 @@ export function SummaryPanel({
         </div>
       ) : (
         transcripts?.length > 0 && (
-          <div className="flex-1 overflow-y-auto min-h-0">
+          <div className="min-h-0 flex-1 overflow-y-auto">
             {summaryResponse && (
-              <div className="fixed bottom-0 left-0 right-0 bg-background shadow-lg p-4 max-h-1/3 overflow-y-auto">
-                <h3 className="text-lg font-semibold mb-2">Meeting Summary</h3>
+              <div className="
+                fixed inset-x-0 bottom-0 max-h-1/3 overflow-y-auto bg-background
+                p-4 shadow-lg
+              ">
+                <h3 className="mb-2 text-lg font-semibold">Meeting Summary</h3>
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-background p-4 rounded-lg shadow-sm">
-                    <h4 className="font-medium mb-1">Key Points</h4>
+                  <div className="rounded-lg bg-background p-4 shadow-sm">
+                    <h4 className="mb-1 font-medium">Key Points</h4>
                     <ul className="list-disc pl-4">
                       {summaryResponse.summary.key_points.blocks.map(
                         (block, i) => (
@@ -238,8 +244,8 @@ export function SummaryPanel({
                       )}
                     </ul>
                   </div>
-                  <div className="bg-background p-4 rounded-lg shadow-sm mt-4">
-                    <h4 className="font-medium mb-1">Action Items</h4>
+                  <div className="mt-4 rounded-lg bg-background p-4 shadow-sm">
+                    <h4 className="mb-1 font-medium">Action Items</h4>
                     <ul className="list-disc pl-4">
                       {summaryResponse.summary.action_items.blocks.map(
                         (block, i) => (
@@ -250,8 +256,8 @@ export function SummaryPanel({
                       )}
                     </ul>
                   </div>
-                  <div className="bg-background p-4 rounded-lg shadow-sm mt-4">
-                    <h4 className="font-medium mb-1">Decisions</h4>
+                  <div className="mt-4 rounded-lg bg-background p-4 shadow-sm">
+                    <h4 className="mb-1 font-medium">Decisions</h4>
                     <ul className="list-disc pl-4">
                       {summaryResponse.summary.decisions.blocks.map(
                         (block, i) => (
@@ -262,8 +268,8 @@ export function SummaryPanel({
                       )}
                     </ul>
                   </div>
-                  <div className="bg-background p-4 rounded-lg shadow-sm mt-4">
-                    <h4 className="font-medium mb-1">Main Topics</h4>
+                  <div className="mt-4 rounded-lg bg-background p-4 shadow-sm">
+                    <h4 className="mb-1 font-medium">Main Topics</h4>
                     <ul className="list-disc pl-4">
                       {summaryResponse.summary.main_topics.blocks.map(
                         (block, i) => (
@@ -277,7 +283,7 @@ export function SummaryPanel({
                 </div>
                 {summaryResponse.raw_summary ? (
                   <div className="mt-4">
-                    <h4 className="font-medium mb-1">Full Summary</h4>
+                    <h4 className="mb-1 font-medium">Full Summary</h4>
                     <p className="text-sm whitespace-pre-wrap">
                       {summaryResponse.raw_summary}
                     </p>
@@ -285,7 +291,7 @@ export function SummaryPanel({
                 ) : null}
               </div>
             )}
-            <div className="p-6 w-full">
+            <div className="w-full p-6">
               <TiptapSummaryView
                 ref={summaryRef}
                 summaryData={aiSummary}
@@ -310,13 +316,16 @@ export function SummaryPanel({
             </div>
             {summaryStatus !== "idle" && (
               <div
-                className={`mt-4 p-4 rounded-lg ${
+                className={`
+                  mt-4 rounded-lg p-4
+                  ${
                   summaryStatus === "error"
                     ? "bg-red-100 text-red-700"
                     : summaryStatus === "completed"
                       ? "bg-green-100 text-green-700"
                       : "bg-blue-600/15 text-blue-700"
-                }`}
+                }
+                `}
               >
                 <p className="text-sm font-medium">
                   {getSummaryStatusMessage(summaryStatus)}

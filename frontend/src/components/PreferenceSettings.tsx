@@ -160,12 +160,12 @@ export function PreferenceSettings() {
 
   // Show loading only if we're actually loading and don't have cached data
   if (isLoadingPreferences && !notificationSettings && !storageLocations) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>;
+    return <div className="mx-auto max-w-2xl p-6">Loading Preferences...</div>;
   }
 
   // Show loading if notificationsEnabled hasn't been determined yet
   if (notificationsEnabled === null && !isLoadingPreferences) {
-    return <div className="max-w-2xl mx-auto p-6">Loading Preferences...</div>;
+    return <div className="mx-auto max-w-2xl p-6">Loading Preferences...</div>;
   }
 
   // Ensure we have a boolean value for the Switch component
@@ -174,10 +174,14 @@ export function PreferenceSettings() {
   return (
     <div className="space-y-6">
       {/* Notifications Section */}
-      <div className="bg-background rounded-lg border border-border p-6 shadow-sm">
+      <div
+        className="
+        rounded-lg border border-border bg-background p-6 shadow-sm
+      "
+      >
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-foreground mb-2">
+            <h3 className="mb-2 text-lg font-semibold text-foreground">
               Notifications
             </h3>
             <p className="text-sm text-muted-foreground">
@@ -192,11 +196,15 @@ export function PreferenceSettings() {
       </div>
 
       {/* Data Storage Locations Section */}
-      <div className="bg-background rounded-lg border border-border p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-foreground mb-4">
+      <div
+        className="
+        rounded-lg border border-border bg-background p-6 shadow-sm
+      "
+      >
+        <h3 className="mb-4 text-lg font-semibold text-foreground">
           Data Storage Locations
         </h3>
-        <p className="text-sm text-muted-foreground mb-6">
+        <p className="mb-6 text-sm text-muted-foreground">
           View and access where Meetily stores your data
         </p>
 
@@ -232,22 +240,30 @@ export function PreferenceSettings() {
           </div> */}
 
           {/* Recordings Location */}
-          <div className="p-4 border rounded-lg bg-muted">
-            <div className="font-medium mb-2">Meeting Recordings</div>
-            <div className="text-sm text-muted-foreground mb-3 break-all font-mono text-xs">
+          <div className="rounded-lg border bg-muted p-4">
+            <div className="mb-2 font-medium">Meeting Recordings</div>
+            <div
+              className="
+              mb-3 font-mono text-sm break-all text-muted-foreground
+            "
+            >
               {storageLocations?.recordings || "Loading..."}
             </div>
             <button
               onClick={() => handleOpenFolder("recordings")}
-              className="flex items-center gap-2 px-3 py-2 text-sm border border-border rounded-md hover:bg-muted transition-colors"
+              className="
+                flex items-center gap-2 rounded-md border border-border px-3
+                py-2 text-sm transition-colors
+                hover:bg-muted
+              "
             >
-              <FolderOpen className="w-4 h-4" />
+              <FolderOpen className="size-4" />
               Open Folder
             </button>
           </div>
         </div>
 
-        <div className="mt-4 p-3 bg-blue-600/10 rounded-md">
+        <div className="mt-4 rounded-md bg-blue-600/10 p-3">
           <p className="text-xs text-blue-800">
             <strong>Note:</strong> Database and models are stored together in
             your application data directory for unified management.
@@ -256,7 +272,11 @@ export function PreferenceSettings() {
       </div>
 
       {/* Analytics Section */}
-      <div className="bg-background rounded-lg border border-border p-6 shadow-sm">
+      <div
+        className="
+        rounded-lg border border-border bg-background p-6 shadow-sm
+      "
+      >
         <AnalyticsConsentSwitch />
       </div>
     </div>

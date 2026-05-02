@@ -31,20 +31,26 @@ export function WelcomeStep() {
     >
       <div className="flex flex-col items-center space-y-10">
         {/* Divider */}
-        <div className="w-16 h-px bg-muted" />
+        <div className="h-px w-16 bg-muted" />
 
         {/* Features Card */}
-        <div className="w-full max-w-md bg-background rounded-lg border border-border shadow-sm p-6 space-y-4">
+        <div className="
+          w-full max-w-md space-y-4 rounded-lg border border-border
+          bg-background p-6 shadow-sm
+        ">
           {features.map((feature, index) => {
             const Icon = feature.icon;
             return (
               <div key={index} className="flex items-start gap-3">
-                <div className="flex-shrink-0 mt-0.5">
-                  <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center">
-                    <Icon className="w-3 h-3 text-foreground" />
+                <div className="mt-0.5 shrink-0">
+                  <div className="
+                    flex size-5 items-center justify-center rounded-full
+                    bg-muted
+                  ">
+                    <Icon className="size-3 text-foreground" />
                   </div>
                 </div>
-                <p className="text-sm text-foreground leading-relaxed">
+                <p className="text-sm/relaxed text-foreground">
                   {feature.title}
                 </p>
               </div>
@@ -56,11 +62,14 @@ export function WelcomeStep() {
         <div className="w-full max-w-xs space-y-3">
           <Button
             onClick={goNext}
-            className="w-full h-11 bg-gray-900 hover:bg-gray-800 text-white"
+            className="
+              h-11 w-full bg-gray-900 text-white
+              hover:bg-gray-800
+            "
           >
             Get Started
           </Button>
-          <p className="text-xs text-center text-muted-foreground">
+          <p className="text-center text-xs text-muted-foreground">
             Takes less than 3 minutes
           </p>
         </div>

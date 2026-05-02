@@ -55,13 +55,16 @@ export function TranscriptPanel({
   return (
     <div
       ref={transcriptContainerRef}
-      className="w-full border-r border-border bg-background flex flex-col overflow-y-auto"
+      className="
+        flex w-full flex-col overflow-y-auto border-r border-border
+        bg-background
+      "
     >
       {/* Title area - Sticky header */}
-      <div className="sticky top-0 z-10 bg-background p-4 border-border">
+      <div className="sticky top-0 z-10 border-border bg-background p-4">
         <div className="flex flex-col space-y-3">
-          <div className="flex  flex-col space-y-2">
-            <div className="flex justify-center  items-center space-x-2">
+          <div className="flex flex-col space-y-2">
+            <div className="flex items-center justify-center space-x-2">
               <ButtonGroup>
                 {transcripts?.length > 0 && (
                   <Button
@@ -71,7 +74,14 @@ export function TranscriptPanel({
                     title="Copy Transcript"
                   >
                     <Copy />
-                    <span className="hidden md:inline">Copy</span>
+                    <span
+                      className="
+                      hidden
+                      md:inline
+                    "
+                    >
+                      Copy
+                    </span>
                   </Button>
                 )}
                 {transcriptModelConfig.provider === "localWhisper" && (
@@ -82,7 +92,14 @@ export function TranscriptPanel({
                     title="Language"
                   >
                     <GlobeIcon />
-                    <span className="hidden md:inline">Language</span>
+                    <span
+                      className="
+                      hidden
+                      md:inline
+                    "
+                    >
+                      Language
+                    </span>
                   </Button>
                 )}
               </ButtonGroup>
@@ -106,7 +123,7 @@ export function TranscriptPanel({
       {/* Transcript content */}
       <div className="pb-20">
         <div className="flex justify-center">
-          <div className="w-2/3 max-w-[750px]">
+          <div className="w-2/3 max-w-187.5">
             <VirtualizedTranscriptView
               segments={segments}
               isRecording={isRecording}

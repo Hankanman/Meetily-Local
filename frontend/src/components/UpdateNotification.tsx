@@ -24,7 +24,7 @@ export function showUpdateNotification(
   toast.info(
     <div className="flex items-center justify-between gap-4">
       <div className="flex items-center gap-2">
-        <Download className="h-4 w-4" />
+        <Download className="size-4" />
         <div>
           <p className="font-medium">Update Available</p>
           <p className="text-sm text-muted-foreground">
@@ -37,7 +37,10 @@ export function showUpdateNotification(
           e.stopPropagation();
           handleClick();
         }}
-        className="text-sm font-medium text-blue-600 hover:text-blue-700 underline"
+        className="
+          text-sm font-medium text-blue-600 underline
+          hover:text-blue-700
+        "
       >
         View Details
       </button>

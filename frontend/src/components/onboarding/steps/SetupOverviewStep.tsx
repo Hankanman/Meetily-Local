@@ -69,20 +69,27 @@ export function SetupOverviewStep() {
     >
       <div className="flex flex-col items-center space-y-10">
         {/* Steps Card */}
-        <div className="w-full max-w-md bg-background rounded-lg border border-border p-4">
+        <div className="
+          w-full max-w-md rounded-lg border border-border bg-background p-4
+        ">
           <div className="space-y-4">
             {steps.map((step, idx) => {
               return (
                 <div key={step.number} className={`flex items-start gap-4 p-1`}>
-                  <div className="flex-1 ml-1">
-                    <h3 className="font-medium text-foreground flex items-center gap-2">
+                  <div className="ml-1 flex-1">
+                    <h3 className="
+                      flex items-center gap-2 font-medium text-foreground
+                    ">
                       Step {step.number} : {step.title}
                       {step.type === "summarization" && (
                         <TooltipProvider>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <button className="text-muted-foreground/70 hover:text-muted-foreground">
-                                <Info className="w-4 h-4" />
+                              <button className="
+                                text-muted-foreground/70
+                                hover:text-muted-foreground
+                              ">
+                                <Info className="size-4" />
                               </button>
                             </TooltipTrigger>
                             <TooltipContent className="max-w-xs text-sm">
@@ -105,7 +112,10 @@ export function SetupOverviewStep() {
         <div className="w-full max-w-xs space-y-4">
           <Button
             onClick={handleContinue}
-            className="w-full h-11 bg-gray-900 hover:bg-gray-800 text-white"
+            className="
+              h-11 w-full bg-gray-900 text-white
+              hover:bg-gray-800
+            "
           >
             Let's Go
           </Button>
@@ -114,7 +124,10 @@ export function SetupOverviewStep() {
               href="https://github.com/Zackriya-Solutions/meeting-minutes"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs text-muted-foreground hover:underline"
+              className="
+                text-xs text-muted-foreground
+                hover:underline
+              "
             >
               Report issues on GitHub
             </a>

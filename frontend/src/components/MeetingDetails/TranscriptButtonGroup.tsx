@@ -36,7 +36,7 @@ export function TranscriptButtonGroup({
   }, [onRefetchTranscripts]);
 
   return (
-    <div className="flex items-center justify-center w-full gap-2">
+    <div className="flex w-full items-center justify-center gap-2">
       <ButtonGroup>
         <Button
           variant="outline"
@@ -53,7 +53,10 @@ export function TranscriptButtonGroup({
           }
         >
           <Copy />
-          <span className="hidden lg:inline">Copy</span>
+          <span className="
+            hidden
+            lg:inline
+          ">Copy</span>
         </Button>
 
         <Button
@@ -70,7 +73,10 @@ export function TranscriptButtonGroup({
           title="Open Recording Folder"
         >
           <FolderOpen className="xl:mr-2" size={18} />
-          <span className="hidden lg:inline">Recording</span>
+          <span className="
+            hidden
+            lg:inline
+          ">Recording</span>
         </Button>
 
         {betaFeatures.importAndRetranscribe &&
@@ -79,7 +85,12 @@ export function TranscriptButtonGroup({
             <Button
               size="sm"
               variant="outline"
-              className="bg-gradient-to-r from-blue-600/10 to-purple-600/10 hover:from-blue-600/20 hover:to-purple-600/20 border-blue-500/30 xl:px-4"
+              className="
+                border-blue-500/30 bg-linear-to-r from-blue-600/10
+                to-purple-600/10
+                hover:from-blue-600/20 hover:to-purple-600/20
+                xl:px-4
+              "
               onClick={() => {
                 Analytics.trackButtonClick(
                   "enhance_transcript",
@@ -90,7 +101,10 @@ export function TranscriptButtonGroup({
               title="Retranscribe to enhance your recorded audio"
             >
               <RefreshCw className="xl:mr-2" size={18} />
-              <span className="hidden lg:inline">Enhance</span>
+              <span className="
+                hidden
+                lg:inline
+              ">Enhance</span>
             </Button>
           )}
       </ButtonGroup>

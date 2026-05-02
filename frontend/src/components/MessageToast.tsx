@@ -24,7 +24,9 @@ export function MessageToast({
   return (
     show && (
       <span
-        className={`${type === "success" ? "text-green-500" : "text-red-500"}`}
+        className={`
+          ${type === "success" ? "text-green-500" : "text-red-500"}
+        `}
       >
         {message}
       </span>

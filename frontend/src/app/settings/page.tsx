@@ -70,16 +70,19 @@ export default function SettingsPage() {
   }, [activeTab]);
 
   return (
-    <div className="h-screen bg-muted flex flex-col">
+    <div className="flex h-screen flex-col bg-muted">
       {/* Fixed Header */}
-      <div className="sticky top-0 z-10 bg-muted border-b border-border">
-        <div className="max-w-6xl mx-auto px-8 py-6">
+      <div className="sticky top-0 z-10 border-b border-border bg-muted">
+        <div className="mx-auto max-w-6xl px-8 py-6">
           <div className="flex items-center gap-4">
             <button
               onClick={() => router.back()}
-              className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
+              className="
+                flex items-center gap-2 text-muted-foreground transition-colors
+                hover:text-foreground
+              "
             >
-              <ArrowLeft className="w-5 h-5" />
+              <ArrowLeft className="size-5" />
               <span>Back</span>
             </button>
             <h1 className="text-3xl font-bold">Settings</h1>
@@ -89,10 +92,13 @@ export default function SettingsPage() {
 
       {/* Scrollable Content */}
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-6xl mx-auto p-8 pt-6">
+        <div className="mx-auto max-w-6xl p-8 pt-6">
           {/* Tabs */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="bg-transparent relative rounded-none border-b border-border p-0 h-auto">
+            <TabsList className="
+              relative h-auto rounded-none border-b border-border bg-transparent
+              p-0
+            ">
               {TABS.map((tab, index) => {
                 const Icon = tab.icon;
                 return (
@@ -102,9 +108,16 @@ export default function SettingsPage() {
                     ref={(el) => {
                       tabRefs.current[index] = el;
                     }}
-                    className="flex items-center gap-2 px-6 py-4 bg-transparent rounded-none border-0 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 data-[state=active]:shadow-none text-muted-foreground hover:text-foreground relative z-10"
+                    className="
+                      relative z-10 flex items-center gap-2 rounded-none
+                      border-0 bg-transparent px-6 py-4 text-muted-foreground
+                      hover:text-foreground
+                      data-[state=active]:bg-transparent
+                      data-[state=active]:text-blue-600
+                      data-[state=active]:shadow-none
+                    "
                   >
-                    <Icon className="w-4 h-4" />
+                    <Icon className="size-4" />
                     {tab.label}
                   </TabsTrigger>
                 );

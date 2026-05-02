@@ -499,18 +499,21 @@ const Sidebar: React.FC = () => {
 
     return (
       <TooltipProvider>
-        <div className="flex flex-col items-center space-y-4 mt-4">
+        <div className="mt-4 flex flex-col items-center space-y-4">
           <Logo isCollapsed={isCollapsed} />
 
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 onClick={() => router.push("/")}
-                className={`p-2 rounded-lg transition-colors duration-150 ${
+                className={`
+                  rounded-lg p-2 transition-colors duration-150
+                  ${
                   isHomePage ? "bg-muted" : "hover:bg-muted"
-                }`}
+                }
+                `}
               >
-                <Home className="w-5 h-5 text-muted-foreground" />
+                <Home className="size-5 text-muted-foreground" />
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">
@@ -523,12 +526,19 @@ const Sidebar: React.FC = () => {
               <button
                 onClick={handleRecordingToggle}
                 disabled={isRecording}
-                className={`p-2 ${isRecording ? "bg-red-500 cursor-not-allowed" : "bg-red-500 hover:bg-red-600"} rounded-full transition-colors duration-150 shadow-sm`}
+                className={`
+                  p-2
+                  ${isRecording ? "cursor-not-allowed bg-red-500" : `
+                    bg-red-500
+                    hover:bg-red-600
+                  `}
+                  rounded-full shadow-sm transition-colors duration-150
+                `}
               >
                 {isRecording ? (
-                  <Square className="w-5 h-5 text-white" />
+                  <Square className="size-5 text-white" />
                 ) : (
-                  <Mic className="w-5 h-5 text-white" />
+                  <Mic className="size-5 text-white" />
                 )}
               </button>
             </TooltipTrigger>
@@ -544,9 +554,12 @@ const Sidebar: React.FC = () => {
               <TooltipTrigger asChild>
                 <button
                   onClick={() => openImportDialog()}
-                  className="p-2 rounded-lg transition-colors duration-150 hover:bg-blue-600/15 bg-blue-600/10"
+                  className="
+                    rounded-lg bg-blue-600/10 p-2 transition-colors duration-150
+                    hover:bg-blue-600/15
+                  "
                 >
-                  <Upload className="w-5 h-5 text-blue-600" />
+                  <Upload className="size-5 text-blue-600" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="right">
@@ -562,11 +575,14 @@ const Sidebar: React.FC = () => {
                   if (isCollapsed) toggleCollapse();
                   toggleFolder("meetings");
                 }}
-                className={`p-2 rounded-lg transition-colors duration-150 ${
+                className={`
+                  rounded-lg p-2 transition-colors duration-150
+                  ${
                   isMeetingPage ? "bg-muted" : "hover:bg-muted"
-                }`}
+                }
+                `}
               >
-                <NotebookPen className="w-5 h-5 text-muted-foreground" />
+                <NotebookPen className="size-5 text-muted-foreground" />
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">
@@ -578,11 +594,14 @@ const Sidebar: React.FC = () => {
             <TooltipTrigger asChild>
               <button
                 onClick={() => router.push("/settings")}
-                className={`p-2 rounded-lg transition-colors duration-150 ${
+                className={`
+                  rounded-lg p-2 transition-colors duration-150
+                  ${
                   isSettingsPage ? "bg-muted" : "hover:bg-muted"
-                }`}
+                }
+                `}
               >
-                <Settings className="w-5 h-5 text-muted-foreground" />
+                <Settings className="size-5 text-muted-foreground" />
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">
@@ -618,17 +637,24 @@ const Sidebar: React.FC = () => {
     return (
       <div key={item.id}>
         <div
-          className={`flex items-center transition-all duration-150 group ${
+          className={`
+            group flex items-center transition-all duration-150
+            ${
             item.type === "folder" && depth === 0
-              ? "p-3 text-lg font-semibold h-10 mx-3 mt-3 rounded-lg"
-              : `px-3 py-2 my-0.5 rounded-md text-sm ${
+              ? "mx-3 mt-3 h-10 rounded-lg p-3 text-lg font-semibold"
+              : `
+                my-0.5 rounded-md px-3 py-2 text-sm
+                ${
                   isActive
-                    ? "bg-blue-600/15 text-blue-700 font-medium"
+                    ? "bg-blue-600/15 font-medium text-blue-700"
                     : hasTranscriptMatch
                       ? "bg-yellow-50"
                       : "hover:bg-muted"
-                } cursor-pointer`
-          }`}
+                }
+                cursor-pointer
+              `
+          }
+          `}
           style={item.type === "folder" && depth === 0 ? {} : { paddingLeft }}
           onClick={() => {
             if (item.type === "folder") {
@@ -647,60 +673,76 @@ const Sidebar: React.FC = () => {
           {item.type === "folder" ? (
             <>
               {item.id === "meetings" ? (
-                <Calendar className="w-4 h-4 mr-2" />
+                <Calendar className="mr-2 size-4" />
               ) : item.id === "notes" ? (
-                <Calendar className="w-4 h-4 mr-2" />
+                <Calendar className="mr-2 size-4" />
               ) : null}
               <span className={depth === 0 ? "" : "font-medium"}>
                 {item.title}
               </span>
               <div className="ml-auto">
                 {isExpanded ? (
-                  <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                  <ChevronDown className="size-4 text-muted-foreground" />
                 ) : (
-                  <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                  <ChevronRight className="size-4 text-muted-foreground" />
                 )}
               </div>
               {searchQuery && item.id === "meetings" && isSearching && (
-                <span className="ml-2 text-xs text-blue-500 animate-pulse">
+                <span className="ml-2 animate-pulse text-xs text-blue-500">
                   Searching...
                 </span>
               )}
             </>
           ) : (
-            <div className="flex flex-col w-full">
-              <div className="flex items-center w-full">
+            <div className="flex w-full flex-col">
+              <div className="flex w-full items-center">
                 {isMeetingItem ? (
-                  <div className="flex-shrink-0 flex items-center justify-center w-6 h-6 rounded-full mr-2 bg-muted">
-                    <File className="w-3.5 h-3.5 text-muted-foreground" />
+                  <div className="
+                    mr-2 flex size-6 shrink-0 items-center justify-center
+                    rounded-full bg-muted
+                  ">
+                    <File className="size-3.5 text-muted-foreground" />
                   </div>
                 ) : (
-                  <div className="flex-shrink-0 flex items-center justify-center w-6 h-6 rounded-full mr-2 bg-blue-600/15">
-                    <Plus className="w-3.5 h-3.5 text-blue-600" />
+                  <div className="
+                    mr-2 flex size-6 shrink-0 items-center justify-center
+                    rounded-full bg-blue-600/15
+                  ">
+                    <Plus className="size-3.5 text-blue-600" />
                   </div>
                 )}
-                <span className="flex-1 break-words">{item.title}</span>
+                <span className="flex-1 wrap-break-word">{item.title}</span>
                 {isMeetingItem && (
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                  <div className="
+                    flex items-center gap-1 opacity-0 transition-opacity
+                    duration-150
+                    group-hover:opacity-100
+                  ">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         handleEditStart(item.id, item.title);
                       }}
-                      className="hover:text-blue-600 p-1 rounded-md hover:bg-blue-600/10 flex-shrink-0"
+                      className="
+                        shrink-0 rounded-md p-1
+                        hover:bg-blue-600/10 hover:text-blue-600
+                      "
                       aria-label="Edit meeting title"
                     >
-                      <Pencil className="w-4 h-4" />
+                      <Pencil className="size-4" />
                     </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         setDeleteModalState({ isOpen: true, itemId: item.id });
                       }}
-                      className="hover:text-red-600 p-1 rounded-md hover:bg-red-50 flex-shrink-0"
+                      className="
+                        shrink-0 rounded-md p-1
+                        hover:bg-red-50 hover:text-red-600
+                      "
                       aria-label="Delete meeting"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="size-4" />
                     </button>
                   </div>
                 )}
@@ -708,7 +750,10 @@ const Sidebar: React.FC = () => {
 
               {/* Show transcript match snippet if available */}
               {hasTranscriptMatch && (
-                <div className="mt-1 ml-8 text-xs text-muted-foreground bg-yellow-50 p-1.5 rounded border border-yellow-100 line-clamp-2">
+                <div className="
+                  mt-1 ml-8 line-clamp-2 rounded-sm border border-yellow-100
+                  bg-yellow-50 p-1.5 text-xs text-muted-foreground
+                ">
                   <span className="font-medium text-yellow-600">Match:</span>{" "}
                   {matchingResult.matchContext}
                 </div>
@@ -726,27 +771,35 @@ const Sidebar: React.FC = () => {
   };
 
   return (
-    <div className="fixed top-0 left-0 h-screen z-40">
+    <div className="fixed top-0 left-0 z-40 h-screen">
       {/* Floating collapse button */}
       <button
         onClick={toggleCollapse}
-        className="absolute -right-6 top-20 z-50 p-1 bg-background hover:bg-muted rounded-full shadow-lg border"
+        className="
+          absolute top-20 -right-6 z-50 rounded-full border bg-background p-1
+          shadow-lg
+          hover:bg-muted
+        "
         style={{ transform: "translateX(50%)" }}
       >
         {isCollapsed ? (
-          <ChevronRightCircle className="w-6 h-6" />
+          <ChevronRightCircle className="size-6" />
         ) : (
-          <ChevronLeftCircle className="w-6 h-6" />
+          <ChevronLeftCircle className="size-6" />
         )}
       </button>
 
       <div
-        className={`h-screen bg-background border-r shadow-sm flex flex-col transition-all duration-300 ${
+        className={`
+          flex h-screen flex-col border-r bg-background shadow-sm transition-all
+          duration-300
+          ${
           isCollapsed ? "w-16" : "w-64"
-        }`}
+        }
+        `}
       >
         {/*  Header with traffic light spacing */}
-        <div className="flex-shrink-0 h-22 flex items-center">
+        <div className="flex h-22 shrink-0 items-center">
           {/* Title container */}
 
           <div className="flex-1">
@@ -784,37 +837,48 @@ const Sidebar: React.FC = () => {
         </div>
 
         {/* Main content - scrollable area */}
-        <div className="flex-1 flex flex-col min-h-0">
+        <div className="flex min-h-0 flex-1 flex-col">
           {/* Fixed navigation items */}
-          <div className="flex-shrink-0">
+          <div className="shrink-0">
             {!isCollapsed && (
               <div
                 onClick={() => router.push("/")}
-                className="p-3  text-lg font-semibold items-center hover:bg-muted h-10   flex mx-3 mt-3 rounded-lg cursor-pointer"
+                className="
+                  mx-3 mt-3 flex h-10 cursor-pointer items-center rounded-lg p-3
+                  text-lg font-semibold
+                  hover:bg-muted
+                "
               >
-                <Home className="w-4 h-4 mr-2" />
+                <Home className="mr-2 size-4" />
                 <span>Home</span>
               </div>
             )}
           </div>
 
           {/* Content area */}
-          <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex min-h-0 flex-1 flex-col">
             {renderCollapsedIcons()}
             {/* Meeting Notes folder header - fixed */}
             {!isCollapsed && (
-              <div className="flex-shrink-0">
+              <div className="shrink-0">
                 {filteredSidebarItems
                   .filter((item) => item.type === "folder")
                   .map((item) => (
                     <div key={item.id}>
-                      <div className="flex items-center transition-all duration-150 p-3 text-lg font-semibold h-10 mx-3 mt-3 rounded-lg">
-                        <NotebookPen className="w-4 h-4 mr-2 text-muted-foreground" />
+                      <div className="
+                        mx-3 mt-3 flex h-10 items-center rounded-lg p-3 text-lg
+                        font-semibold transition-all duration-150
+                      ">
+                        <NotebookPen className="
+                          mr-2 size-4 text-muted-foreground
+                        " />
                         <span className="text-foreground">{item.title}</span>
                         {searchQuery &&
                           item.id === "meetings" &&
                           isSearching && (
-                            <span className="ml-2 text-xs text-blue-500 animate-pulse">
+                            <span className="
+                              ml-2 animate-pulse text-xs text-blue-500
+                            ">
                               Searching...
                             </span>
                           )}
@@ -826,7 +890,7 @@ const Sidebar: React.FC = () => {
 
             {/* Scrollable meeting items */}
             {!isCollapsed && (
-              <div className="flex-1 overflow-y-auto custom-scrollbar min-h-0">
+              <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
                 {filteredSidebarItems
                   .filter(
                     (item) =>
@@ -846,20 +910,28 @@ const Sidebar: React.FC = () => {
 
         {/* Footer */}
         {!isCollapsed && (
-          <div className="flex-shrink-0 p-2 border-t border-gray-100">
+          <div className="shrink-0 border-t border-gray-100 p-2">
             <button
               onClick={handleRecordingToggle}
               disabled={isRecording}
-              className={`w-full flex items-center justify-center px-3 py-2 text-sm font-medium text-white ${isRecording ? "bg-red-300 cursor-not-allowed" : "bg-red-500 hover:bg-red-600"} rounded-lg transition-colors shadow-sm`}
+              className={`
+                flex w-full items-center justify-center px-3 py-2 text-sm
+                font-medium text-white
+                ${isRecording ? `cursor-not-allowed bg-red-300` : `
+                  bg-red-500
+                  hover:bg-red-600
+                `}
+                rounded-lg shadow-sm transition-colors
+              `}
             >
               {isRecording ? (
                 <>
-                  <Square className="w-4 h-4 mr-2" />
+                  <Square className="mr-2 size-4" />
                   <span>Recording in progress...</span>
                 </>
               ) : (
                 <>
-                  <Mic className="w-4 h-4 mr-2" />
+                  <Mic className="mr-2 size-4" />
                   <span>Start Recording</span>
                 </>
               )}
@@ -868,22 +940,35 @@ const Sidebar: React.FC = () => {
             {betaFeatures.importAndRetranscribe && (
               <button
                 onClick={() => openImportDialog()}
-                className="w-full flex items-center justify-center px-3 py-2 mt-1 text-sm font-medium text-foreground bg-blue-600/15 hover:bg-blue-600/25 rounded-lg transition-colors shadow-sm"
+                className="
+                  mt-1 flex w-full items-center justify-center rounded-lg
+                  bg-blue-600/15 px-3 py-2 text-sm font-medium text-foreground
+                  shadow-sm transition-colors
+                  hover:bg-blue-600/25
+                "
               >
-                <Upload className="w-4 h-4 mr-2" />
+                <Upload className="mr-2 size-4" />
                 <span>Import Audio</span>
               </button>
             )}
 
             <button
               onClick={() => router.push("/settings")}
-              className="w-full flex items-center justify-center px-3 py-1.5 mt-1 mb-1 text-sm font-medium text-foreground bg-muted hover:bg-muted rounded-lg transition-colors shadow-sm"
+              className="
+                my-1 flex w-full items-center justify-center rounded-lg bg-muted
+                px-3 py-1.5 text-sm font-medium text-foreground shadow-sm
+                transition-colors
+                hover:bg-muted
+              "
             >
-              <Settings className="w-4 h-4 mr-2" />
+              <Settings className="mr-2 size-4" />
               <span>Settings</span>
             </button>
             <Info isCollapsed={isCollapsed} />
-            <div className="w-full flex items-center justify-center px-3 py-1 text-xs text-muted-foreground/70">
+            <div className="
+              flex w-full items-center justify-center px-3 py-1 text-xs
+              text-muted-foreground/70
+            ">
               v0.3.0
             </div>
           </div>
@@ -905,17 +990,17 @@ const Sidebar: React.FC = () => {
           if (!open) handleEditCancel();
         }}
       >
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="sm:max-w-106.25">
           <VisuallyHidden>
             <DialogTitle>Edit Meeting Title</DialogTitle>
           </VisuallyHidden>
           <div className="py-4">
-            <h3 className="text-lg font-semibold mb-4">Edit Meeting Title</h3>
+            <h3 className="mb-4 text-lg font-semibold">Edit Meeting Title</h3>
             <div className="space-y-4">
               <div>
                 <label
                   htmlFor="meeting-title"
-                  className="block text-sm font-medium text-foreground mb-2"
+                  className="mb-2 block text-sm font-medium text-foreground"
                 >
                   Meeting Title
                 </label>
@@ -931,7 +1016,11 @@ const Sidebar: React.FC = () => {
                       handleEditCancel();
                     }
                   }}
-                  className="w-full px-3 py-2 border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="
+                    w-full rounded-md border border-border px-3 py-2
+                    focus:border-transparent focus:ring-2 focus:ring-blue-500
+                    focus:outline-none
+                  "
                   placeholder="Enter meeting title"
                   autoFocus
                 />
@@ -941,13 +1030,21 @@ const Sidebar: React.FC = () => {
           <DialogFooter>
             <button
               onClick={handleEditCancel}
-              className="px-4 py-2 text-sm font-medium text-foreground bg-muted hover:bg-muted rounded-md transition-colors"
+              className="
+                rounded-md bg-muted px-4 py-2 text-sm font-medium
+                text-foreground transition-colors
+                hover:bg-muted
+              "
             >
               Cancel
             </button>
             <button
               onClick={handleEditConfirm}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors"
+              className="
+                rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white
+                transition-colors
+                hover:bg-blue-700
+              "
             >
               Save
             </button>

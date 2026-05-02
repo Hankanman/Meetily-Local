@@ -15,15 +15,29 @@ const Info = React.forwardRef<HTMLButtonElement, InfoProps>(
         <DialogTrigger asChild>
           <button
             ref={ref}
-            className={`flex items-center justify-center mb-2 cursor-pointer border-none transition-colors ${
+            className={`
+              mb-2 flex cursor-pointer items-center justify-center border-none
+              transition-colors
+              ${
               isCollapsed
-                ? "bg-transparent p-2 hover:bg-muted rounded-lg"
-                : "w-full px-3 py-1.5 mt-1 text-sm font-medium text-foreground bg-muted hover:bg-muted rounded-lg shadow-sm"
-            }`}
+                ? `
+                  rounded-lg bg-transparent p-2
+                  hover:bg-muted
+                `
+                : `
+                  mt-1 w-full rounded-lg bg-muted px-3 py-1.5 text-sm
+                  font-medium text-foreground shadow-sm
+                  hover:bg-muted
+                `
+            }
+            `}
             title="About Meetily"
           >
             <InfoIcon
-              className={`text-muted-foreground ${isCollapsed ? "w-5 h-5" : "w-4 h-4"}`}
+              className={`
+                text-muted-foreground
+                ${isCollapsed ? "size-5" : "size-4"}
+              `}
             />
             {!isCollapsed && (
               <span className="ml-2 text-sm text-foreground">About</span>

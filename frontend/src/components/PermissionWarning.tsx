@@ -56,15 +56,15 @@ export function PermissionWarning({
   };
 
   return (
-    <div className="max-w-md mb-4 space-y-3">
+    <div className="mb-4 max-w-md space-y-3">
       {/* Combined Permission Warning - Show when either permission is missing */}
       {(!hasMicrophone || !hasSystemAudio) && (
         <Alert variant="destructive" className="border-amber-400 bg-amber-50">
-          <AlertTriangle className="h-5 w-5 text-amber-600" />
-          <AlertTitle className="text-amber-900 font-semibold">
+          <AlertTriangle className="size-5 text-amber-600" />
+          <AlertTitle className="font-semibold text-amber-900">
             <div className="flex items-center gap-2">
-              {!hasMicrophone && <Mic className="h-4 w-4" />}
-              {!hasSystemAudio && <Speaker className="h-4 w-4" />}
+              {!hasMicrophone && <Mic className="size-4" />}
+              {!hasSystemAudio && <Speaker className="size-4" />}
               {!hasMicrophone && !hasSystemAudio
                 ? "Permissions Required"
                 : !hasMicrophone
@@ -77,33 +77,49 @@ export function PermissionWarning({
             {isMacOS && !hasMicrophone && (
               <button
                 onClick={openMicrophoneSettings}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-md transition-colors"
+                className="
+                  inline-flex items-center gap-2 rounded-md bg-amber-600 px-4
+                  py-2 text-sm font-medium text-white transition-colors
+                  hover:bg-amber-700
+                "
               >
-                <Mic className="h-4 w-4" />
+                <Mic className="size-4" />
                 Open Microphone Settings
               </button>
             )}
             {isMacOS && !hasSystemAudio && (
               <button
                 onClick={openScreenRecordingSettings}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors"
+                className="
+                  inline-flex items-center gap-2 rounded-md bg-blue-600 px-4
+                  py-2 text-sm font-medium text-white transition-colors
+                  hover:bg-blue-700
+                "
               >
-                <Speaker className="h-4 w-4" />
+                <Speaker className="size-4" />
                 Open Screen Recording Settings
               </button>
             )}
             <button
               onClick={onRecheck}
               disabled={isRechecking}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 rounded-md transition-colors disabled:opacity-50"
+              className="
+                inline-flex items-center gap-2 rounded-md bg-amber-100 px-4 py-2
+                text-sm font-medium text-amber-900 transition-colors
+                hover:bg-amber-200
+                disabled:opacity-50
+              "
             >
               <RefreshCw
-                className={`h-4 w-4 ${isRechecking ? "animate-spin" : ""}`}
+                className={`
+                  size-4
+                  ${isRechecking ? "animate-spin" : ""}
+                `}
               />
               Recheck
             </button>
           </div>
-          <AlertDescription className="text-amber-800 mt-2">
+          <AlertDescription className="mt-2 text-amber-800">
             {/* Microphone Warning */}
             {!hasMicrophone && (
               <>
@@ -111,9 +127,9 @@ export function PermissionWarning({
                   Meetily needs access to your microphone to record meetings. No
                   microphone devices were detected.
                 </p>
-                <div className="space-y-2 text-sm mb-4">
+                <div className="mb-4 space-y-2 text-sm">
                   <p className="font-medium">Please check:</p>
-                  <ul className="list-disc list-inside ml-2 space-y-1">
+                  <ul className="ml-2 list-inside list-disc space-y-1">
                     <li>Your microphone is connected and powered on</li>
                     <li>Microphone permission is granted in System Settings</li>
                     <li>No other app is exclusively using the microphone</li>
@@ -131,11 +147,11 @@ export function PermissionWarning({
                     : "System audio capture is also not available."}
                 </p>
                 {isMacOS && (
-                  <div className="space-y-2 text-sm mb-4">
+                  <div className="mb-4 space-y-2 text-sm">
                     <p className="font-medium">
                       To enable system audio on macOS:
                     </p>
-                    <ul className="list-disc list-inside ml-2 space-y-1">
+                    <ul className="ml-2 list-inside list-disc space-y-1">
                       <li>
                         Install a virtual audio device (e.g., BlackHole 2ch)
                       </li>

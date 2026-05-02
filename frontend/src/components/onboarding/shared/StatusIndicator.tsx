@@ -19,7 +19,7 @@ export function StatusIndicator({ status, size = "md" }: StatusIndicatorProps) {
   return (
     <span
       className={cn(
-        "rounded-full inline-block",
+        "inline-block rounded-full",
         sizeClasses[size],
         statusColors[status],
       )}

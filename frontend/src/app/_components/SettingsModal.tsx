@@ -68,20 +68,33 @@ export function SettingsModals({
     <>
       {/* Legacy Settings Modal */}
       {modals.modelSettings && (
-        <div className="fixed inset-0 bg-foreground bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-background rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+        <div
+          className="
+          bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center
+          bg-foreground p-4
+        "
+        >
+          <div
+            className="
+            flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden
+            rounded-lg bg-background shadow-xl
+          "
+          >
             {/* Header */}
-            <div className="flex justify-between items-center p-6 border-b">
+            <div className="flex items-center justify-between border-b p-6">
               <h3 className="text-xl font-semibold text-foreground">
                 Preferences
               </h3>
               <button
                 onClick={() => onClose("modelSettings")}
-                className="text-muted-foreground hover:text-foreground"
+                className="
+                  text-muted-foreground
+                  hover:text-foreground
+                "
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
-                  className="h-6 w-6"
+                  className="size-6"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -97,23 +110,32 @@ export function SettingsModals({
             </div>
 
             {/* Content - Scrollable */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-8">
+            <div className="flex-1 space-y-8 overflow-y-auto p-6">
               {/* General Preferences Section */}
               <PreferenceSettings />
 
               {/* Divider */}
               <div className="border-t pt-8">
-                <h4 className="text-lg font-semibold text-foreground mb-4">
+                <h4 className="mb-4 text-lg font-semibold text-foreground">
                   AI Model Configuration
                 </h4>
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-foreground mb-1">
+                    <label
+                      className="
+                      mb-1 block text-sm font-medium text-foreground
+                    "
+                    >
                       Summarization Model
                     </label>
                     <div className="flex space-x-2">
                       <select
-                        className="px-3 py-2 text-sm bg-background border border-border rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                        className="
+                          rounded-md border border-border bg-background px-3
+                          py-2 text-sm shadow-sm
+                          focus:border-blue-500 focus:ring-1 focus:ring-blue-500
+                          focus:outline-none
+                        "
                         value={modelConfig.provider}
                         onChange={(e) => {
                           const provider = e.target
@@ -134,7 +156,12 @@ export function SettingsModals({
                       </select>
 
                       <select
-                        className="flex-1 px-3 py-2 text-sm bg-background border border-border rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                        className="
+                          flex-1 rounded-md border border-border bg-background
+                          px-3 py-2 text-sm shadow-sm
+                          focus:border-blue-500 focus:ring-1 focus:ring-blue-500
+                          focus:outline-none
+                        "
                         value={modelConfig.model}
                         onChange={(e) =>
                           setModelConfig((prev: ModelConfig) => ({
@@ -155,23 +182,36 @@ export function SettingsModals({
                   </div>
                   {modelConfig.provider === "ollama" && (
                     <div>
-                      <h4 className="text-lg font-bold mb-4">
+                      <h4 className="mb-4 text-lg font-bold">
                         Available Ollama Models
                       </h4>
                       {error && (
-                        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+                        <div
+                          className="
+                          mb-4 rounded-sm border border-red-400 bg-red-100 px-4
+                          py-3 text-red-700
+                        "
+                        >
                           {error}
                         </div>
                       )}
-                      <div className="grid gap-4 max-h-[400px] overflow-y-auto pr-2">
+                      <div
+                        className="
+                        grid max-h-100 gap-4 overflow-y-auto pr-2
+                      "
+                      >
                         {models.map((model) => (
                           <div
                             key={model.id}
-                            className={`bg-background p-4 rounded-lg shadow cursor-pointer transition-colors ${
-                              modelConfig.model === model.name
-                                ? "ring-2 ring-blue-500 bg-blue-600/10"
-                                : "hover:bg-muted"
-                            }`}
+                            className={`
+                              cursor-pointer rounded-lg bg-background p-4
+                              shadow-sm transition-colors
+                              ${
+                                modelConfig.model === model.name
+                                  ? "bg-blue-600/10 ring-2 ring-blue-500"
+                                  : "hover:bg-muted"
+                              }
+                            `}
                             onClick={() =>
                               setModelConfig((prev: ModelConfig) => ({
                                 ...prev,
@@ -196,10 +236,16 @@ export function SettingsModals({
             </div>
 
             {/* Footer */}
-            <div className="border-t p-6 flex justify-end">
+            <div className="flex justify-end border-t p-6">
               <button
                 onClick={() => onClose("modelSettings")}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                className="
+                  rounded-md bg-blue-600 px-4 py-2 text-sm font-medium
+                  text-white
+                  hover:bg-blue-700
+                  focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
+                  focus:outline-none
+                "
               >
                 Done
               </button>
@@ -210,19 +256,31 @@ export function SettingsModals({
 
       {/* Device Settings Modal */}
       {modals.deviceSettings && (
-        <div className="fixed inset-0 bg-foreground bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-background rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
-            <div className="flex justify-between items-center mb-4">
+        <div
+          className="
+          bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center
+          bg-foreground
+        "
+        >
+          <div
+            className="
+            mx-4 w-full max-w-md rounded-lg bg-background p-6 shadow-xl
+          "
+          >
+            <div className="mb-4 flex items-center justify-between">
               <h3 className="text-lg font-semibold text-foreground">
                 Audio Device Settings
               </h3>
               <button
                 onClick={() => onClose("deviceSettings")}
-                className="text-muted-foreground hover:text-foreground"
+                className="
+                  text-muted-foreground
+                  hover:text-foreground
+                "
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
-                  className="h-6 w-6"
+                  className="size-6"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -254,7 +312,13 @@ export function SettingsModals({
                   });
                   onClose("deviceSettings");
                 }}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                className="
+                  rounded-md bg-blue-600 px-4 py-2 text-sm font-medium
+                  text-white
+                  hover:bg-blue-700
+                  focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
+                  focus:outline-none
+                "
               >
                 Done
               </button>
@@ -265,19 +329,31 @@ export function SettingsModals({
 
       {/* Language Settings Modal */}
       {modals.languageSettings && (
-        <div className="fixed inset-0 bg-foreground bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-background rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
-            <div className="flex justify-between items-center mb-4">
+        <div
+          className="
+          bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center
+          bg-foreground
+        "
+        >
+          <div
+            className="
+            mx-4 w-full max-w-md rounded-lg bg-background p-6 shadow-xl
+          "
+          >
+            <div className="mb-4 flex items-center justify-between">
               <h3 className="text-lg font-semibold text-foreground">
                 Language Settings
               </h3>
               <button
                 onClick={() => onClose("languageSettings")}
-                className="text-muted-foreground hover:text-foreground"
+                className="
+                  text-muted-foreground
+                  hover:text-foreground
+                "
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
-                  className="h-6 w-6"
+                  className="size-6"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -302,7 +378,13 @@ export function SettingsModals({
             <div className="mt-6 flex justify-end">
               <button
                 onClick={() => onClose("languageSettings")}
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                className="
+                  rounded-md bg-blue-600 px-4 py-2 text-sm font-medium
+                  text-white
+                  hover:bg-blue-700
+                  focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
+                  focus:outline-none
+                "
               >
                 Done
               </button>
@@ -313,10 +395,24 @@ export function SettingsModals({
 
       {/* Model Selection Modal */}
       {modals.modelSelector && (
-        <div className="fixed inset-0 bg-foreground bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-background rounded-lg max-w-4xl w-full mx-4 shadow-xl max-h-[90vh] flex flex-col">
+        <div
+          className="
+          bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center
+          bg-foreground
+        "
+        >
+          <div
+            className="
+            mx-4 flex max-h-[90vh] w-full max-w-4xl flex-col rounded-lg
+            bg-background shadow-xl
+          "
+          >
             {/* Fixed Header */}
-            <div className="flex justify-between items-center p-6 pb-4 border-b border-border">
+            <div
+              className="
+              flex items-center justify-between border-b border-border p-6 pb-4
+            "
+            >
               <h3 className="text-lg font-semibold text-foreground">
                 {messages.modelSelector
                   ? "Speech Recognition Setup Required"
@@ -324,11 +420,14 @@ export function SettingsModals({
               </h3>
               <button
                 onClick={() => onClose("modelSelector")}
-                className="text-muted-foreground hover:text-foreground"
+                className="
+                  text-muted-foreground
+                  hover:text-foreground
+                "
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
-                  className="h-6 w-6"
+                  className="size-6"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -353,19 +452,41 @@ export function SettingsModals({
             </div>
 
             {/* Fixed Footer */}
-            <div className="p-6 pt-4 border-t border-border flex items-center justify-between">
+            <div
+              className="
+              flex items-center justify-between border-t border-border p-6 pt-4
+            "
+            >
               {/* Confidence Indicator Toggle */}
               <div className="flex items-center gap-3">
-                <label className="relative inline-flex items-center cursor-pointer">
+                <label
+                  className="
+                  relative inline-flex cursor-pointer items-center
+                "
+                >
                   <input
                     type="checkbox"
                     checked={showConfidenceIndicator}
                     onChange={(e) =>
                       toggleConfidenceIndicator(e.target.checked)
                     }
-                    className="sr-only peer"
+                    className="peer sr-only"
                   />
-                  <div className="w-11 h-6 bg-muted peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-background after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-background after:border-border after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  <div
+                    className="
+                    peer h-6 w-11 rounded-full bg-muted
+                    peer-checked:bg-blue-600
+                    peer-focus:ring-2 peer-focus:ring-blue-300
+                    peer-focus:outline-none
+                    after:absolute after:inset-s-0.5 after:top-0.5
+                    after:size-5 after:rounded-full after:border
+                    after:border-border after:bg-background after:transition-all
+                    after:content-['']
+                    peer-checked:after:translate-x-full
+                    peer-checked:after:border-background
+                    rtl:peer-checked:after:-translate-x-full
+                  "
+                  ></div>
                 </label>
                 <div>
                   <p className="text-sm font-medium text-foreground">
@@ -380,7 +501,13 @@ export function SettingsModals({
 
               <button
                 onClick={() => onClose("modelSelector")}
-                className="px-4 py-2 text-sm font-medium text-foreground bg-muted rounded-md hover:bg-muted focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-ring"
+                className="
+                  rounded-md bg-muted px-4 py-2 text-sm font-medium
+                  text-foreground
+                  hover:bg-muted
+                  focus:ring-2 focus:ring-ring focus:ring-offset-2
+                  focus:outline-none
+                "
               >
                 {messages.modelSelector ? "Cancel" : "Done"}
               </button>
@@ -391,14 +518,26 @@ export function SettingsModals({
 
       {/* Error Alert Modal */}
       {modals.errorAlert && (
-        <div className="fixed inset-0 bg-foreground bg-opacity-50 flex items-center justify-center z-50">
-          <Alert className="max-w-md mx-4 border-red-200 bg-background shadow-xl">
+        <div
+          className="
+          bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center
+          bg-foreground
+        "
+        >
+          <Alert
+            className="
+            mx-4 max-w-md border-red-200 bg-background shadow-xl
+          "
+          >
             <AlertTitle className="text-red-800">Recording Stopped</AlertTitle>
             <AlertDescription className="text-red-700">
               {messages.errorAlert}
               <button
                 onClick={() => onClose("errorAlert")}
-                className="ml-2 text-red-600 hover:text-red-800 underline"
+                className="
+                  ml-2 text-red-600 underline
+                  hover:text-red-800
+                "
               >
                 Dismiss
               </button>
@@ -409,8 +548,17 @@ export function SettingsModals({
 
       {/* Chunk Drop Warning Modal */}
       {modals.chunkDropWarning && (
-        <div className="fixed inset-0 bg-foreground bg-opacity-50 flex items-center justify-center z-50">
-          <Alert className="max-w-lg mx-4 border-yellow-200 bg-background shadow-xl">
+        <div
+          className="
+          bg-opacity-50 fixed inset-0 z-50 flex items-center justify-center
+          bg-foreground
+        "
+        >
+          <Alert
+            className="
+            mx-4 max-w-lg border-yellow-200 bg-background shadow-xl
+          "
+          >
             <AlertTitle className="text-yellow-800">
               Transcription Performance Warning
             </AlertTitle>
@@ -418,7 +566,10 @@ export function SettingsModals({
               {messages.chunkDropWarning}
               <button
                 onClick={() => onClose("chunkDropWarning")}
-                className="ml-2 text-yellow-600 hover:text-yellow-800 underline"
+                className="
+                  ml-2 text-yellow-600 underline
+                  hover:text-yellow-800
+                "
               >
                 Dismiss
               </button>

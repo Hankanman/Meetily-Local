@@ -41,7 +41,11 @@ export const ConfidenceIndicator: React.FC<ConfidenceIndicatorProps> = ({
       aria-label={`Transcription confidence: ${confidencePercent}%`}
     >
       <div
-        className={`w-2 h-2 rounded-full ${colorClass} transition-colors duration-200`}
+        className={`
+          size-2 rounded-full
+          ${colorClass}
+          transition-colors duration-200
+        `}
         role="status"
       />
     </div>

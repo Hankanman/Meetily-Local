@@ -43,43 +43,63 @@ export function OnboardingContainer({
   };
 
   return (
-    <div className="fixed inset-0 bg-muted flex items-center justify-center z-50 overflow-hidden">
+    <div className="
+      fixed inset-0 z-50 flex items-center justify-center overflow-hidden
+      bg-muted
+    ">
       <div
         className={cn(
-          "w-full max-w-2xl h-full max-h-screen flex flex-col px-6 py-6",
+          "flex size-full max-h-screen max-w-2xl flex-col p-6",
           className,
         )}
       >
         {/* Progress Indicator with Navigation - Fixed */}
         {step && !hideProgress && (
-          <div className="mb-2 relative flex-shrink-0">
+          <div className="relative mb-2 shrink-0">
             {/* Navigation Buttons */}
             {showNavigation && (
-              <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 flex justify-between pointer-events-none">
+              <div className="
+                pointer-events-none absolute inset-x-0 top-1/2 flex
+                -translate-y-1/2 justify-between
+              ">
                 <button
                   onClick={handlePrevious}
                   disabled={!canGoPrevious || step === 1}
                   className={cn(
-                    "pointer-events-auto w-8 h-8 rounded-full bg-background border border-border shadow-sm flex items-center justify-center transition-all duration-200",
+                    `
+                      pointer-events-auto flex size-8 items-center
+                      justify-center rounded-full border border-border
+                      bg-background shadow-sm transition-all duration-200
+                    `,
                     canGoPrevious && step !== 1
-                      ? "hover:bg-muted hover:shadow-md hover:scale-110 text-foreground"
-                      : "opacity-0 cursor-not-allowed",
+                      ? `
+                        text-foreground
+                        hover:scale-110 hover:bg-muted hover:shadow-md
+                      `
+                      : "cursor-not-allowed opacity-0",
                   )}
                 >
-                  <ChevronLeft className="w-4 h-4" />
+                  <ChevronLeft className="size-4" />
                 </button>
 
                 <button
                   onClick={handleNext}
                   disabled={!canGoNext || step === totalSteps}
                   className={cn(
-                    "pointer-events-auto w-8 h-8 rounded-full bg-background border border-border shadow-sm flex items-center justify-center transition-all duration-200",
+                    `
+                      pointer-events-auto flex size-8 items-center
+                      justify-center rounded-full border border-border
+                      bg-background shadow-sm transition-all duration-200
+                    `,
                     canGoNext && step !== totalSteps
-                      ? "hover:bg-muted hover:shadow-md hover:scale-110 text-foreground"
-                      : "opacity-0 cursor-not-allowed",
+                      ? `
+                        text-foreground
+                        hover:scale-110 hover:bg-muted hover:shadow-md
+                      `
+                      : "cursor-not-allowed opacity-0",
                   )}
                 >
-                  <ChevronRight className="w-4 h-4" />
+                  <ChevronRight className="size-4" />
                 </button>
               </div>
             )}
@@ -94,12 +114,17 @@ export function OnboardingContainer({
         )}
 
         {/* Header - Fixed */}
-        <div className="mb-4 text-center space-y-3 flex-shrink-0">
-          <h1 className="text-4xl font-semibold text-foreground animate-fade-in-up">
+        <div className="mb-4 shrink-0 space-y-3 text-center">
+          <h1 className="
+            animate-fade-in-up text-4xl font-semibold text-foreground
+          ">
             {title}
           </h1>
           {description && (
-            <p className="text-base text-muted-foreground max-w-md mx-auto animate-fade-in-up delay-75">
+            <p className="
+              animate-fade-in-up mx-auto max-w-md text-base
+              text-muted-foreground delay-75
+            ">
               {description}
             </p>
           )}

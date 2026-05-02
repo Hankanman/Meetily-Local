@@ -131,10 +131,10 @@ export function TranscriptSettings({
                 </div> */}
         <div className="space-y-4 pb-6">
           <div>
-            <Label className="block text-sm font-medium text-foreground mb-1">
+            <Label className="mb-1 block text-sm font-medium text-foreground">
               Transcript Model
             </Label>
-            <div className="flex space-x-2 mx-1">
+            <div className="mx-1 flex space-x-2">
               <Select
                 value={uiProvider}
                 onValueChange={(value) => {
@@ -145,7 +145,9 @@ export function TranscriptSettings({
                   }
                 }}
               >
-                <SelectTrigger className="focus:ring-1 focus:ring-blue-500 focus:border-blue-500">
+                <SelectTrigger className="
+                  focus:border-blue-500 focus:ring-1 focus:ring-blue-500
+                ">
                   <SelectValue placeholder="Select provider" />
                 </SelectTrigger>
                 <SelectContent>
@@ -174,7 +176,9 @@ export function TranscriptSettings({
                     });
                   }}
                 >
-                  <SelectTrigger className="focus:ring-1 focus:ring-blue-500 focus:border-blue-500">
+                  <SelectTrigger className="
+                    focus:border-blue-500 focus:ring-1 focus:ring-blue-500
+                  ">
                     <SelectValue placeholder="Select model" />
                   </SelectTrigger>
                   <SelectContent>
@@ -219,15 +223,19 @@ export function TranscriptSettings({
 
           {requiresApiKey && (
             <div>
-              <Label className="block text-sm font-medium text-foreground mb-1">
+              <Label className="mb-1 block text-sm font-medium text-foreground">
                 API Key
               </Label>
               <div className="relative mx-1">
                 <Input
                   type={showApiKey ? "text" : "password"}
-                  className={`pr-24 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 ${
-                    isApiKeyLocked ? "bg-muted cursor-not-allowed" : ""
-                  }`}
+                  className={`
+                    pr-24
+                    focus:border-blue-500 focus:ring-1 focus:ring-blue-500
+                    ${
+                    isApiKeyLocked ? "cursor-not-allowed bg-muted" : ""
+                  }
+                  `}
                   value={apiKey || ""}
                   onChange={(e) => setApiKey(e.target.value)}
                   disabled={isApiKeyLocked}
@@ -237,20 +245,28 @@ export function TranscriptSettings({
                 {isApiKeyLocked && (
                   <div
                     onClick={handleInputClick}
-                    className="absolute inset-0 flex items-center justify-center bg-muted bg-opacity-50 rounded-md cursor-not-allowed"
+                    className="
+                      bg-opacity-50 absolute inset-0 flex cursor-not-allowed
+                      items-center justify-center rounded-md bg-muted
+                    "
                   />
                 )}
-                <div className="absolute inset-y-0 right-0 pr-1 flex items-center">
+                <div className="
+                  absolute inset-y-0 right-0 flex items-center pr-1
+                ">
                   <Button
                     type="button"
                     variant="ghost"
                     size="icon"
                     onClick={() => setIsApiKeyLocked(!isApiKeyLocked)}
-                    className={`transition-colors duration-200 ${
+                    className={`
+                      transition-colors duration-200
+                      ${
                       isLockButtonVibrating
                         ? "animate-vibrate text-red-500"
                         : ""
-                    }`}
+                    }
+                    `}
                     title={
                       isApiKeyLocked
                         ? "Unlock to edit"
@@ -258,9 +274,9 @@ export function TranscriptSettings({
                     }
                   >
                     {isApiKeyLocked ? (
-                      <Lock className="h-4 w-4" />
+                      <Lock className="size-4" />
                     ) : (
-                      <Unlock className="h-4 w-4" />
+                      <Unlock className="size-4" />
                     )}
                   </Button>
                   <Button
@@ -270,9 +286,9 @@ export function TranscriptSettings({
                     onClick={() => setShowApiKey(!showApiKey)}
                   >
                     {showApiKey ? (
-                      <EyeOff className="h-4 w-4" />
+                      <EyeOff className="size-4" />
                     ) : (
-                      <Eye className="h-4 w-4" />
+                      <Eye className="size-4" />
                     )}
                   </Button>
                 </div>
