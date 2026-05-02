@@ -8,7 +8,7 @@ use super::devices::AudioDevice;
 use super::buffer_pool::AudioBufferPool;
 
 /// Device type for audio chunks
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceType {
     Microphone,
     System,

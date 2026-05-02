@@ -609,7 +609,7 @@ impl AudioCapture {
             sample_rate: if self.needs_resampling { 48000 } else { self.sample_rate },
             timestamp,
             chunk_id,
-            device_type: self.device_type.clone(),
+            device_type: self.device_type,
         };
 
         // NOTE: Raw audio is NOT sent to recording saver to prevent echo
@@ -811,7 +811,7 @@ impl AudioPipeline {
                     // STEP 1: Add raw audio to ring buffer for mixing
                     // Microphone audio is already normalized at capture level (AudioCapture)
                     // System audio remains raw
-                    self.ring_buffer.add_samples(chunk.device_type.clone(), chunk.data);
+                    self.ring_buffer.add_samples(chunk.device_type, chunk.data);
 
                     // STEP 2: Mix audio in fixed windows when both streams have sufficient data
                     while self.ring_buffer.can_mix() {
