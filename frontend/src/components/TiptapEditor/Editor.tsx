@@ -4,6 +4,8 @@ import { useEffect, useRef } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { TextStyleKit } from "@tiptap/extension-text-style";
+import { TableKit } from "@tiptap/extension-table";
+import { TaskList, TaskItem } from "@tiptap/extension-list";
 import { Markdown } from "tiptap-markdown";
 import type { Editor as TiptapEditorInstance } from "@tiptap/core";
 
@@ -19,6 +21,11 @@ interface EditorProps {
 const extensions = [
   TextStyleKit,
   StarterKit,
+  TableKit.configure({
+    table: { resizable: true },
+  }),
+  TaskList,
+  TaskItem.configure({ nested: true }),
   Markdown.configure({
     html: false,
     linkify: true,

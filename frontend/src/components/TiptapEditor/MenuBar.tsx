@@ -120,6 +120,13 @@ export function MenuBar({ editor }: { editor: Editor | null }) {
         </button>
         <button
           type="button"
+          onClick={() => editor.chain().focus().toggleTaskList().run()}
+          className={editorState.isTaskList ? "is-active" : ""}
+        >
+          Task list
+        </button>
+        <button
+          type="button"
           onClick={() => editor.chain().focus().toggleCodeBlock().run()}
           className={editorState.isCodeBlock ? "is-active" : ""}
         >
@@ -138,6 +145,106 @@ export function MenuBar({ editor }: { editor: Editor | null }) {
         <button type="button" onClick={() => editor.chain().focus().setHardBreak().run()}>
           Hard break
         </button>
+      </div>
+      <div className="button-group">
+        <button
+          type="button"
+          onClick={() =>
+            editor
+              .chain()
+              .focus()
+              .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
+              .run()
+          }
+        >
+          Insert table
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().addColumnBefore().run()}
+          disabled={!editorState.canAddColumnBefore}
+        >
+          Add column before
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().addColumnAfter().run()}
+          disabled={!editorState.canAddColumnAfter}
+        >
+          Add column after
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().deleteColumn().run()}
+          disabled={!editorState.canDeleteColumn}
+        >
+          Delete column
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().addRowBefore().run()}
+          disabled={!editorState.canAddRowBefore}
+        >
+          Add row before
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().addRowAfter().run()}
+          disabled={!editorState.canAddRowAfter}
+        >
+          Add row after
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().deleteRow().run()}
+          disabled={!editorState.canDeleteRow}
+        >
+          Delete row
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().mergeCells().run()}
+          disabled={!editorState.canMergeCells}
+        >
+          Merge cells
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().splitCell().run()}
+          disabled={!editorState.canSplitCell}
+        >
+          Split cell
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().toggleHeaderRow().run()}
+          disabled={!editorState.canToggleHeaderRow}
+        >
+          Toggle header row
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().toggleHeaderColumn().run()}
+          disabled={!editorState.canToggleHeaderColumn}
+        >
+          Toggle header column
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().toggleHeaderCell().run()}
+          disabled={!editorState.canToggleHeaderCell}
+        >
+          Toggle header cell
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().deleteTable().run()}
+          disabled={!editorState.canDeleteTable}
+        >
+          Delete table
+        </button>
+      </div>
+      <div className="button-group">
         <button
           type="button"
           onClick={() => editor.chain().focus().undo().run()}

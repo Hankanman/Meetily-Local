@@ -336,3 +336,91 @@
   border-top: 1px solid hsl(var(--border));
   margin: 2rem 0;
 }
+
+/* Tables — ported from
+   https://tiptap.dev/docs/examples/basics/tables */
+.tiptap-editor .tiptap .tableWrapper {
+  margin: 1.5rem 0;
+  overflow-x: auto;
+}
+
+.tiptap-editor .tiptap table {
+  border-collapse: collapse;
+  margin: 0;
+  overflow: hidden;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.tiptap-editor .tiptap table td,
+.tiptap-editor .tiptap table th {
+  border: 1px solid hsl(var(--border));
+  box-sizing: border-box;
+  min-width: 1em;
+  padding: 6px 8px;
+  position: relative;
+  vertical-align: top;
+}
+
+.tiptap-editor .tiptap table td > *,
+.tiptap-editor .tiptap table th > * {
+  margin-bottom: 0;
+}
+
+.tiptap-editor .tiptap table th {
+  background-color: hsl(var(--muted));
+  font-weight: 600;
+  text-align: left;
+}
+
+.tiptap-editor .tiptap table .selectedCell:after {
+  background: hsl(var(--accent) / 0.5);
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 2;
+}
+
+.tiptap-editor .tiptap table .column-resize-handle {
+  background-color: hsl(var(--primary));
+  bottom: -2px;
+  pointer-events: none;
+  position: absolute;
+  right: -2px;
+  top: 0;
+  width: 4px;
+}
+
+.tiptap-editor .tiptap.resize-cursor {
+  cursor: ew-resize;
+  cursor: col-resize;
+}
+
+/* Task lists — ported from
+   https://tiptap.dev/docs/examples/basics/tasks */
+.tiptap-editor .tiptap ul[data-type="taskList"] {
+  list-style: none;
+  margin-left: 0;
+  padding: 0;
+}
+
+.tiptap-editor .tiptap ul[data-type="taskList"] li {
+  align-items: flex-start;
+  display: flex;
+}
+
+.tiptap-editor .tiptap ul[data-type="taskList"] li > label {
+  flex: 0 0 auto;
+  margin-right: 0.5rem;
+  margin-top: 0.25rem;
+  user-select: none;
+}
+
+.tiptap-editor .tiptap ul[data-type="taskList"] li > div {
+  flex: 1 1 auto;
+}
+
+.tiptap-editor .tiptap ul[data-type="taskList"] input[type="checkbox"] {
+  cursor: pointer;
+}
