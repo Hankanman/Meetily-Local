@@ -78,12 +78,15 @@ export function SummaryModelSettings({
 
   // Fetch on mount
   useEffect(() => {
+    // setModelConfig happens after await inside fetchModelConfig.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchModelConfig();
   }, [fetchModelConfig]);
 
   // Refetch when trigger changes (optional external control)
   useEffect(() => {
     if (refetchTrigger !== undefined && refetchTrigger > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchModelConfig();
     }
   }, [refetchTrigger, fetchModelConfig]);

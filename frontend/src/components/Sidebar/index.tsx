@@ -124,14 +124,9 @@ const Sidebar: React.FC = () => {
   });
   const [editingTitle, setEditingTitle] = useState<string>("");
 
-  // Ensure 'meetings' folder is always expanded
-  useEffect(() => {
-    if (!expandedFolders.has("meetings")) {
-      const newExpanded = new Set(expandedFolders);
-      newExpanded.add("meetings");
-      setExpandedFolders(newExpanded);
-    }
-  }, [expandedFolders]);
+  // 'meetings' folder is initialized as expanded via useState default above.
+  // The previous "always re-expand" effect created a re-render loop and was
+  // semantically wrong — if the user collapses it explicitly, we should not fight them.
 
   // useEffect(() => {
   //   if (settingsSaveSuccess !== null) {
@@ -360,7 +355,7 @@ const Sidebar: React.FC = () => {
         })
         .filter((item): item is SidebarItem => item !== undefined); // Type-safe filter
     }
-  }, [sidebarItems, searchQuery, searchResults, expandedFolders]);
+  }, [sidebarItems, searchQuery, searchResults]);
 
   const handleDelete = async (itemId: string) => {
     console.log("Deleting item:", itemId);

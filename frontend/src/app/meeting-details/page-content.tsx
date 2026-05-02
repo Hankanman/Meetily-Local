@@ -156,7 +156,13 @@ export default function PageContent({
     return () => {
       cancelled = true;
     };
-  }, [shouldAutoGenerate, meeting.id]); // Re-run if meeting changes
+  }, [
+    shouldAutoGenerate,
+    meeting.id,
+    meetingData.transcripts.length,
+    onAutoGenerateComplete,
+    summaryGeneration,
+  ]);
 
   return (
     <motion.div
@@ -195,6 +201,7 @@ export default function PageContent({
           onStartEditTitle={() => meetingData.setIsEditingTitle(true)}
           onFinishEditTitle={() => meetingData.setIsEditingTitle(false)}
           isTitleDirty={meetingData.isTitleDirty}
+          isSummaryDirty={meetingData.isSummaryDirty}
           summaryRef={meetingData.summaryRef}
           isSaving={meetingData.isSaving}
           onSaveAll={meetingData.saveAllChanges}

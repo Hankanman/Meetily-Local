@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { useOllamaDownload } from "@/contexts/OllamaDownloadContext";
@@ -270,23 +270,36 @@ export function ModelSettingsModal({
     }
   };
 
-  // Auto-unlock when API key becomes empty,
+  // Auto-unlock when API key becomes empty. The lock state is also user-toggleable,
+  // so it can't be purely derived from apiKey — we need to react to the empty case.
   useEffect(() => {
     const hasContent = !!apiKey?.trim();
     if (!hasContent) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsApiKeyLocked(false);
     }
   }, [apiKey]);
 
-  const modelOptions: Record<string, string[]> = {
-    ollama: models.map((model) => model.name),
-    claude: claudeModels.length > 0 ? claudeModels : CLAUDE_FALLBACK_MODELS,
-    groq: groqModels.length > 0 ? groqModels : GROQ_FALLBACK_MODELS,
-    openai: openaiModels.length > 0 ? openaiModels : OPENAI_FALLBACK_MODELS,
-    openrouter: openRouterModels.map((m) => m.id),
-    "builtin-ai": builtinAiModels.map((m) => m.name),
-    "custom-openai": customOpenAIModel ? [customOpenAIModel] : [], // User specifies model manually
-  };
+  const modelOptions: Record<string, string[]> = useMemo(
+    () => ({
+      ollama: models.map((model) => model.name),
+      claude: claudeModels.length > 0 ? claudeModels : CLAUDE_FALLBACK_MODELS,
+      groq: groqModels.length > 0 ? groqModels : GROQ_FALLBACK_MODELS,
+      openai: openaiModels.length > 0 ? openaiModels : OPENAI_FALLBACK_MODELS,
+      openrouter: openRouterModels.map((m) => m.id),
+      "builtin-ai": builtinAiModels.map((m) => m.name),
+      "custom-openai": customOpenAIModel ? [customOpenAIModel] : [], // User specifies model manually
+    }),
+    [
+      models,
+      claudeModels,
+      groqModels,
+      openaiModels,
+      openRouterModels,
+      builtinAiModels,
+      customOpenAIModel,
+    ],
+  );
 
   const requiresApiKey =
     modelConfig.provider === "claude" ||
@@ -371,12 +384,15 @@ export function ModelSettingsModal({
     };
 
     fetchModelConfig();
-  }, [skipInitialFetch]);
+  }, [skipInitialFetch, setModelConfig]);
 
-  // Sync ollamaEndpoint state when modelConfig.ollamaEndpoint changes from parent
+  // Sync ollamaEndpoint state when modelConfig.ollamaEndpoint changes from parent.
+  // ollamaEndpoint is mutable local state (user can type into the input), so it cannot
+  // be purely derived; we compare against the prop and only update on parent-driven change.
   useEffect(() => {
     const endpoint = modelConfig.ollamaEndpoint || "";
     if (endpoint !== ollamaEndpoint) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setOllamaEndpoint(endpoint);
       // Don't set lastFetchedEndpoint here - only after successful model fetch
     }
@@ -384,9 +400,13 @@ export function ModelSettingsModal({
     if (modelConfig.provider) {
       hasSyncedFromParent.current = true; // Mark that we've received prop value
     }
+    // ollamaEndpoint intentionally excluded — it's the comparison target, not a trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelConfig.ollamaEndpoint, modelConfig.provider]);
 
-  // Sync custom OpenAI state from modelConfig (context or props)
+  // Sync custom OpenAI state from modelConfig (context or props).
+  // Local state mirrors the modelConfig prop fields so the UI inputs are editable;
+  // when the upstream config changes (provider switch, restore from disk) we resync.
   useEffect(() => {
     if (modelConfig.provider === "custom-openai") {
       console.log("Syncing custom OpenAI fields from ConfigContext:", {
@@ -396,12 +416,14 @@ export function ModelSettingsModal({
       });
 
       // Always sync from modelConfig (which comes from context if available)
+      /* eslint-disable react-hooks/set-state-in-effect */
       setCustomOpenAIEndpoint(modelConfig.customOpenAIEndpoint || "");
       setCustomOpenAIModel(modelConfig.customOpenAIModel || "");
       setCustomOpenAIApiKey(modelConfig.customOpenAIApiKey || "");
       setCustomMaxTokens(modelConfig.maxTokens?.toString() || "");
       setCustomTemperature(modelConfig.temperature?.toString() || "");
       setCustomTopP(modelConfig.topP?.toString() || "");
+      /* eslint-enable react-hooks/set-state-in-effect */
     }
   }, [
     modelConfig.provider,
@@ -413,13 +435,16 @@ export function ModelSettingsModal({
     modelConfig.topP,
   ]);
 
-  // Reset hasAutoFetched flag and clear models when switching away from Ollama
+  // Reset hasAutoFetched flag and clear models when switching away from Ollama.
+  // Genuine reset cascade on prop change.
   useEffect(() => {
     if (modelConfig.provider !== "ollama") {
+      /* eslint-disable react-hooks/set-state-in-effect */
       setHasAutoFetched(false); // Reset flag so it can auto-fetch again if user switches back
       setModels([]); // Clear models list
       setError(""); // Clear any error state
       setOllamaNotInstalled(false); // Reset installation status
+      /* eslint-enable react-hooks/set-state-in-effect */
     }
   }, [modelConfig.provider]);
 
@@ -446,7 +471,9 @@ export function ModelSettingsModal({
     }
   }, [ollamaEndpoint, lastFetchedEndpoint, modelConfig.provider]);
 
-  // Sync local apiKey state when provider changes
+  // Sync local apiKey state when provider changes.
+  // apiKey is mutable local state (typed by user); we resync only when the upstream
+  // provider/keys change and the cached value differs.
   useEffect(() => {
     if (
       providerApiKeys &&
@@ -456,14 +483,18 @@ export function ModelSettingsModal({
       const correctKey =
         providerApiKeys[modelConfig.provider as keyof typeof providerApiKeys];
       if (correctKey !== apiKey) {
+        /* eslint-disable react-hooks/set-state-in-effect */
         setApiKey(correctKey || "");
         setIsApiKeyLocked(!!correctKey?.trim());
+        /* eslint-enable react-hooks/set-state-in-effect */
       }
     }
+    // apiKey intentionally excluded — it's the comparison target, not a trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modelConfig.provider, providerApiKeys, requiresApiKey]);
 
   // Manual fetch function for Ollama models
-  const fetchOllamaModels = async (silent = false) => {
+  const fetchOllamaModels = useCallback(async (silent = false) => {
     const trimmedEndpoint = ollamaEndpoint.trim();
 
     // Validate URL if provided
@@ -512,7 +543,7 @@ export function ModelSettingsModal({
     } finally {
       setIsLoadingOllama(false);
     }
-  };
+  }, [ollamaEndpoint]);
 
   // Auto-fetch models on initial load only (not on endpoint changes)
   useEffect(() => {
@@ -535,7 +566,10 @@ export function ModelSettingsModal({
     return () => {
       mounted = false;
     };
-  }, [modelConfig.provider]); // Only depend on provider, NOT endpoint
+    // Only react to provider changes — re-fetching whenever fetchOllamaModels (closure
+    // over endpoint) or hasAutoFetched changes would defeat the purpose of the guard.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelConfig.provider]);
 
   const loadOpenRouterModels = async () => {
     if (openRouterModels.length > 0) return; // Already loaded
@@ -581,7 +615,7 @@ export function ModelSettingsModal({
   };
 
   // Fetch OpenAI models from API
-  const loadOpenAIModels = async (key: string | null) => {
+  const loadOpenAIModels = useCallback(async (key: string | null) => {
     if (!key?.trim()) {
       setOpenaiModels([]); // Will use fallback via modelOptions
       return;
@@ -598,10 +632,10 @@ export function ModelSettingsModal({
     } finally {
       setIsLoadingOpenAI(false);
     }
-  };
+  }, []);
 
   // Fetch Anthropic (Claude) models from API
-  const loadClaudeModels = async (key: string | null) => {
+  const loadClaudeModels = useCallback(async (key: string | null) => {
     if (!key?.trim()) {
       setClaudeModels([]); // Will use fallback via modelOptions
       return;
@@ -618,10 +652,10 @@ export function ModelSettingsModal({
     } finally {
       setIsLoadingClaude(false);
     }
-  };
+  }, []);
 
   // Fetch Groq models from API
-  const loadGroqModels = async (key: string | null) => {
+  const loadGroqModels = useCallback(async (key: string | null) => {
     if (!key?.trim()) {
       setGroqModels([]); // Will use fallback via modelOptions
       return;
@@ -638,30 +672,37 @@ export function ModelSettingsModal({
     } finally {
       setIsLoadingGroq(false);
     }
-  };
+  }, []);
 
-  // Auto-fetch OpenAI models when provider is openai and we have an API key
+  // Auto-fetch OpenAI models when provider is openai and we have an API key.
+  // load*Models sets a loading flag synchronously then awaits — the rule cannot
+  // distinguish that from a sync setState, so we suppress.
   useEffect(() => {
     if (modelConfig.provider === "openai" && apiKey?.trim()) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       loadOpenAIModels(apiKey);
     }
-  }, [modelConfig.provider, apiKey]);
+  }, [modelConfig.provider, apiKey, loadOpenAIModels]);
 
   // Auto-fetch Claude models when provider is claude and we have an API key
   useEffect(() => {
     if (modelConfig.provider === "claude" && apiKey?.trim()) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       loadClaudeModels(apiKey);
     }
-  }, [modelConfig.provider, apiKey]);
+  }, [modelConfig.provider, apiKey, loadClaudeModels]);
 
   // Auto-fetch Groq models when provider is groq and we have an API key
   useEffect(() => {
     if (modelConfig.provider === "groq" && apiKey?.trim()) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       loadGroqModels(apiKey);
     }
-  }, [modelConfig.provider, apiKey]);
+  }, [modelConfig.provider, apiKey, loadGroqModels]);
 
-  // Restore cached model when async model lists become available
+  // Restore cached model when async model lists become available.
+  // Only setState when the current model is invalid AND a cached one is recoverable —
+  // gated cascade, not a feedback loop.
   useEffect(() => {
     const providerModels = modelOptions[modelConfig.provider];
     if (!providerModels || providerModels.length === 0) return;
@@ -683,6 +724,9 @@ export function ModelSettingsModal({
     claudeModels,
     groqModels,
     modelConfig.provider,
+    modelConfig.model,
+    modelOptions,
+    setModelConfig,
   ]);
 
   const handleSave = async () => {
@@ -895,7 +939,7 @@ export function ModelSettingsModal({
 
     // Update ref for next comparison
     previousDownloadingRef.current = new Set(current);
-  }, [downloadingModels]);
+  }, [downloadingModels, fetchOllamaModels]);
 
   // Filter Ollama models based on search query
   const filteredModels = models.filter((model) => {

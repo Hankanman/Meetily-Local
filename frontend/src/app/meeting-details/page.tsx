@@ -1,6 +1,6 @@
 "use client";
 import { useSidebar } from "@/components/Sidebar/SidebarProvider";
-import { useState, useEffect, useCallback, Suspense } from "react";
+import { useState, useEffect, useCallback, useMemo, Suspense } from "react";
 import { Transcript, Summary } from "@/types";
 import PageContent from "./page-content";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -27,10 +27,7 @@ function MeetingDetailsContent() {
     useSidebar();
   const { isAutoSummary } = useConfig(); // Get auto-summary toggle state
   const router = useRouter();
-  const [meetingDetails, setMeetingDetails] =
-    useState<MeetingDetailsResponse | null>(null);
   const [meetingSummary, setMeetingSummary] = useState<Summary | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [shouldAutoGenerate, setShouldAutoGenerate] = useState<boolean>(false);
   const [hasCheckedAutoGen, setHasCheckedAutoGen] = useState<boolean>(false);
@@ -49,6 +46,29 @@ function MeetingDetailsContent() {
     refetch,
     error: transcriptError,
   } = usePaginatedTranscripts({ meetingId: meetingId || "" });
+
+  // Derived from the paginated-transcripts hook — was previously mirrored
+  // into useState via an effect, which tripped react-hooks/set-state-in-effect
+  // and added a useless render cycle. Resets implicitly: when the hook
+  // refetches, `metadata` becomes null until the new meeting loads.
+  const meetingDetails: MeetingDetailsResponse | null = useMemo(() => {
+    if (!metadata || !meetingId || meetingId === "intro-call") return null;
+    return {
+      id: metadata.id,
+      title: metadata.title,
+      created_at: metadata.created_at,
+      updated_at: metadata.updated_at,
+      transcripts: transcripts,
+      folder_path: metadata.folder_path,
+    };
+  }, [metadata, transcripts, meetingId]);
+
+  // `error` is fully derived: invalid meeting id wins, then transcript-load
+  // errors. Was previously mirrored via useState + two effects.
+  const error: string | null =
+    !meetingId || meetingId === "intro-call"
+      ? "No meeting selected"
+      : (transcriptError ?? null);
 
   // Check if gemma3:1b model is available in Ollama
   const checkForGemmaModel = useCallback(async (): Promise<boolean> => {
@@ -120,38 +140,13 @@ function MeetingDetailsContent() {
     setHasCheckedAutoGen(true);
   }, [hasCheckedAutoGen, checkForGemmaModel, source, isAutoSummary]);
 
-  // Sync meeting metadata from pagination hook to meeting details state
+  // Sync meeting title to the sidebar when metadata loads. The
+  // `meetingDetails` object is now derived above; this effect only exists to
+  // push to an external system (the sidebar context).
   useEffect(() => {
-    if (metadata && (!meetingId || meetingId === "intro-call")) {
-      // If invalid meeting ID, don't sync
-      return;
-    }
-
-    if (metadata) {
-      console.log("Meeting metadata loaded:", metadata);
-
-      // Build meeting details from metadata and paginated transcripts
-      setMeetingDetails({
-        id: metadata.id,
-        title: metadata.title,
-        created_at: metadata.created_at,
-        updated_at: metadata.updated_at,
-        transcripts: transcripts, // Paginated transcripts from hook
-        folder_path: metadata.folder_path, // For retranscription feature
-      });
-
-      // Sync with sidebar context
-      setCurrentMeeting({ id: metadata.id, title: metadata.title });
-    }
-  }, [metadata, transcripts, meetingId, setCurrentMeeting]);
-
-  // Handle transcript loading errors
-  useEffect(() => {
-    if (transcriptError) {
-      console.error("Error loading transcripts:", transcriptError);
-      setError(transcriptError);
-    }
-  }, [transcriptError]);
+    if (!metadata || !meetingId || meetingId === "intro-call") return;
+    setCurrentMeeting({ id: metadata.id, title: metadata.title });
+  }, [metadata, meetingId, setCurrentMeeting]);
 
   // Extract fetchMeetingDetails for use in child components (now refetches via hook)
   const fetchMeetingDetails = useCallback(async () => {
@@ -166,15 +161,17 @@ function MeetingDetailsContent() {
     );
   }, [meetingId]);
 
-  // Reset states when meetingId changes (prevent race conditions)
+  // Reset states when meetingId changes (prevent race conditions).
+  // `meetingDetails` and `error` are derived above so they reset implicitly.
+  // The setStates here are intentional: we want the loading UI to show
+  // immediately on navigation, before the summary fetch even starts.
   useEffect(() => {
-    setMeetingDetails(null);
+    /* eslint-disable react-hooks/set-state-in-effect */
     setMeetingSummary(null);
-    setError(null);
     setIsLoading(true);
-    // Reset auto-generation state to allow new meeting to be checked
     setHasCheckedAutoGen(false);
     setShouldAutoGenerate(false);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [meetingId]);
 
   // Cleanup: Stop polling when navigating away from a meeting
@@ -190,12 +187,13 @@ function MeetingDetailsContent() {
     };
   }, [meetingId, stopSummaryPolling]);
 
+  // Loading-state lifecycle (set during fetch, cleared in async finally).
   useEffect(() => {
     console.log("MeetingDetails useEffect triggered - meetingId:", meetingId);
 
     if (!meetingId || meetingId === "intro-call") {
       console.warn("No valid meeting ID in URL - meetingId:", meetingId);
-      setError("No meeting selected");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsLoading(false);
       Analytics.trackPageView("meeting_details");
       return;
@@ -203,9 +201,7 @@ function MeetingDetailsContent() {
 
     console.log("Valid meeting ID found, fetching details for:", meetingId);
 
-    setMeetingDetails(null);
     setMeetingSummary(null);
-    setError(null);
     setIsLoading(true);
 
     const fetchMeetingSummary = async () => {

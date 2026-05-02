@@ -487,8 +487,6 @@ export function useRecordingStop(
       markMeetingAsSaved,
       refetchMeetings,
       setCurrentMeeting,
-      setMeetings,
-      meetings,
       setIsMeetingActive,
       router,
     ],

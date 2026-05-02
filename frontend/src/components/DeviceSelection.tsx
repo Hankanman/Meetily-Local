@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { RefreshCw, Mic, Speaker } from "lucide-react";
@@ -67,7 +67,7 @@ export function DeviceSelection({
   );
 
   // Fetch available audio devices
-  const fetchDevices = async () => {
+  const fetchDevices = useCallback(async () => {
     try {
       setError(null);
       const result = await invoke<AudioDevice[]>("get_audio_devices");
@@ -82,12 +82,26 @@ export function DeviceSelection({
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, []);
+
+  // Stop audio level monitoring (declared early so cleanup effects can reference it)
+  const stopAudioLevelMonitoring = useCallback(async () => {
+    try {
+      await invoke("stop_audio_level_monitoring");
+      setIsMonitoring(false);
+      setAudioLevels(new Map());
+      console.log("Stopped audio level monitoring");
+    } catch (err) {
+      console.error("Failed to stop audio level monitoring:", err);
+    }
+  }, []);
 
   // Load devices on component mount
   useEffect(() => {
+    // setState happens after await; the rule cannot see through async boundaries.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchDevices();
-  }, []);
+  }, [fetchDevices]);
 
   // Set up audio level event listener
   useEffect(() => {
@@ -122,7 +136,7 @@ export function DeviceSelection({
         stopAudioLevelMonitoring();
       }
     };
-  }, [isMonitoring]);
+  }, [isMonitoring, stopAudioLevelMonitoring]);
 
   // Handle device refresh
   const handleRefresh = async () => {
@@ -215,18 +229,6 @@ export function DeviceSelection({
     } catch (err) {
       console.error("Failed to start audio level monitoring:", err);
       setError("Failed to start audio level monitoring");
-    }
-  };
-
-  // Stop audio level monitoring
-  const stopAudioLevelMonitoring = async () => {
-    try {
-      await invoke("stop_audio_level_monitoring");
-      setIsMonitoring(false);
-      setAudioLevels(new Map());
-      console.log("Stopped audio level monitoring");
-    } catch (err) {
-      console.error("Failed to stop audio level monitoring:", err);
     }
   };
 

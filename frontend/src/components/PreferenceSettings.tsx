@@ -58,8 +58,10 @@ export function PreferenceSettings() {
     trackPreferencesViewed();
   }, [notificationSettings, isLoadingPreferences]);
 
-  // Update notificationsEnabled when notificationSettings are loaded from global state
+  // Update notificationsEnabled when notificationSettings are loaded from global state.
+  // Mirrors async-loaded global preferences into local UI state — genuine sync cascade.
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
     if (notificationSettings) {
       // Notification enabled means both started and stopped notifications are enabled
       const enabled =
@@ -78,6 +80,7 @@ export function PreferenceSettings() {
         setIsInitialLoad(false);
       }
     }
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [notificationSettings, isLoadingPreferences, isInitialLoad]);
 
   useEffect(() => {

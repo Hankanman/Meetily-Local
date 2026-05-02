@@ -179,6 +179,7 @@ export function usePaginatedTranscripts({
   // Initial load
   useEffect(() => {
     if (!meetingId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       reset();
       return;
     }

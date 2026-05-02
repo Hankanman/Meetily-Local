@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { updateService, UpdateInfo } from "@/services/updateService";
 import { showUpdateNotification } from "@/components/UpdateNotification";
 
@@ -18,33 +18,36 @@ export function useUpdateCheck(options: UseUpdateCheckOptions = {}) {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [isChecking, setIsChecking] = useState(false);
 
-  const checkForUpdates = async (force = false) => {
-    // Skip if checked recently (unless forced)
-    if (!force && updateService.wasCheckedRecently()) {
-      return;
-    }
-
-    setIsChecking(true);
-    try {
-      const info = await updateService.checkForUpdates(force);
-      setUpdateInfo(info);
-
-      if (info.available) {
-        if (onUpdateAvailable) {
-          onUpdateAvailable(info);
-        } else if (showNotification) {
-          showUpdateNotification(info, () => {
-            // This will be handled by the component that uses this hook
-          });
-        }
+  const checkForUpdates = useCallback(
+    async (force = false) => {
+      // Skip if checked recently (unless forced)
+      if (!force && updateService.wasCheckedRecently()) {
+        return;
       }
-    } catch (error) {
-      console.error("Failed to check for updates:", error);
-      // Silently fail on startup checks to avoid disrupting user experience
-    } finally {
-      setIsChecking(false);
-    }
-  };
+
+      setIsChecking(true);
+      try {
+        const info = await updateService.checkForUpdates(force);
+        setUpdateInfo(info);
+
+        if (info.available) {
+          if (onUpdateAvailable) {
+            onUpdateAvailable(info);
+          } else if (showNotification) {
+            showUpdateNotification(info, () => {
+              // This will be handled by the component that uses this hook
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Failed to check for updates:", error);
+        // Silently fail on startup checks to avoid disrupting user experience
+      } finally {
+        setIsChecking(false);
+      }
+    },
+    [onUpdateAvailable, showNotification],
+  );
 
   useEffect(() => {
     if (checkOnMount) {
@@ -55,7 +58,7 @@ export function useUpdateCheck(options: UseUpdateCheckOptions = {}) {
 
       return () => clearTimeout(timer);
     }
-  }, [checkOnMount]);
+  }, [checkOnMount, checkForUpdates]);
 
   return {
     updateInfo,

@@ -36,10 +36,12 @@ export function UpdateDialog({
 
   useEffect(() => {
     if (open && updateInfo?.available) {
-      // Reset state when dialog opens
+      // Reset state when dialog opens — genuine reset cascade on prop transition.
+      /* eslint-disable react-hooks/set-state-in-effect */
       setIsDownloading(false);
       setProgress(null);
       setError(null);
+      /* eslint-enable react-hooks/set-state-in-effect */
 
       // Get the update object when dialog opens
       check()

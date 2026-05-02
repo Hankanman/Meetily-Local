@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Button } from "@/components/ui/button";
@@ -55,7 +55,7 @@ export function BuiltInModelManager({
     new Set(),
   );
 
-  const fetchModels = async () => {
+  const fetchModels = useCallback(async () => {
     try {
       setIsLoading(true);
       const data = (await invoke("builtin_ai_list_models")) as ModelInfo[];
@@ -75,11 +75,15 @@ export function BuiltInModelManager({
       setIsLoading(false);
       setHasFetched(true);
     }
-  };
+  }, [selectedModel, onModelSelect]);
 
+  // Fetch models on mount. The setState calls inside fetchModels happen
+  // after an `await`, but the lint rule can't see through the async
+  // boundary so we suppress it here.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchModels();
-  }, []);
+  }, [fetchModels]);
 
   // Listen for download progress events
   useEffect(() => {
@@ -205,7 +209,7 @@ export function BuiltInModelManager({
         unlisten();
       }
     };
-  }, []);
+  }, [fetchModels]);
 
   const downloadModel = async (modelName: string) => {
     try {

@@ -176,7 +176,8 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
     if (isRecording) {
       setupListener();
     } else {
-      // Reset when not recording
+      // Reset when not recording — genuine reset on prop change.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSpeechDetected(false);
     }
 
@@ -190,11 +191,12 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
   // Streaming effect: animate new transcripts character-by-character
   useEffect(() => {
     if (!enableStreaming || !isRecording) {
-      // Clean up if streaming is disabled
+      // Clean up if streaming is disabled — reset on prop change.
       if (streamingIntervalRef.current) {
         clearInterval(streamingIntervalRef.current);
         streamingIntervalRef.current = null;
       }
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setStreamingTranscript(null);
       lastStreamedIdRef.current = null;
       return;

@@ -75,6 +75,66 @@ export function ParakeetModelManager({
     initializeModels();
   }, [initialized, selectedModel, onModelSelect]);
 
+  // saveModelSelection and downloadModel are declared before the listener-setup
+  // effect so the cleanup closure can reference them without TDZ issues.
+  const saveModelSelection = useCallback(async (modelName: string) => {
+    try {
+      await invoke("api_save_transcript_config", {
+        provider: "parakeet",
+        model: modelName,
+        apiKey: null,
+      });
+    } catch (error) {
+      console.error("Failed to save model selection:", error);
+    }
+  }, []);
+
+  const downloadModel = useCallback(
+    async (modelName: string) => {
+      if (downloadingModels.has(modelName)) return;
+
+      const displayInfo = getModelDisplayInfo(modelName);
+      const displayName = displayInfo?.friendlyName || modelName;
+
+      try {
+        setDownloadingModels((prev) => new Set([...prev, modelName]));
+
+        setModels((prevModels) =>
+          prevModels.map((model) =>
+            model.name === modelName
+              ? { ...model, status: { Downloading: 0 } as ModelStatus }
+              : model,
+          ),
+        );
+
+        toast.info(`Downloading ${displayName}...`, {
+          description: "This may take a few minutes",
+          duration: 5000, // Auto-dismiss after 5 seconds
+        });
+
+        await ParakeetAPI.downloadModel(modelName);
+      } catch (err) {
+        console.error("Download failed:", err);
+        setDownloadingModels((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(modelName);
+          return newSet;
+        });
+
+        const errorMessage =
+          err instanceof Error ? err.message : "Download failed";
+        setModels((prev) =>
+          prev.map((model) =>
+            model.name === modelName
+              ? { ...model, status: { Error: errorMessage } }
+              : model,
+          ),
+        );
+      }
+    },
+    [downloadingModels],
+  );
+
   // Set up event listeners for download progress
   useEffect(() => {
     let unlistenProgress: (() => void) | null = null;
@@ -206,19 +266,7 @@ export function ParakeetModelManager({
       if (unlistenComplete) unlistenComplete();
       if (unlistenError) unlistenError();
     };
-  }, []); // Empty dependency array - listeners use refs for stable callbacks
-
-  const saveModelSelection = async (modelName: string) => {
-    try {
-      await invoke("api_save_transcript_config", {
-        provider: "parakeet",
-        model: modelName,
-        apiKey: null,
-      });
-    } catch (error) {
-      console.error("Failed to save model selection:", error);
-    }
-  };
+  }, [saveModelSelection, downloadModel]);
 
   const cancelDownload = async (modelName: string) => {
     const displayInfo = getModelDisplayInfo(modelName);
@@ -253,49 +301,6 @@ export function ParakeetModelManager({
         description: err instanceof Error ? err.message : "Unknown error",
         duration: 4000,
       });
-    }
-  };
-
-  const downloadModel = async (modelName: string) => {
-    if (downloadingModels.has(modelName)) return;
-
-    const displayInfo = getModelDisplayInfo(modelName);
-    const displayName = displayInfo?.friendlyName || modelName;
-
-    try {
-      setDownloadingModels((prev) => new Set([...prev, modelName]));
-
-      setModels((prevModels) =>
-        prevModels.map((model) =>
-          model.name === modelName
-            ? { ...model, status: { Downloading: 0 } as ModelStatus }
-            : model,
-        ),
-      );
-
-      toast.info(`Downloading ${displayName}...`, {
-        description: "This may take a few minutes",
-        duration: 5000, // Auto-dismiss after 5 seconds
-      });
-
-      await ParakeetAPI.downloadModel(modelName);
-    } catch (err) {
-      console.error("Download failed:", err);
-      setDownloadingModels((prev) => {
-        const newSet = new Set(prev);
-        newSet.delete(modelName);
-        return newSet;
-      });
-
-      const errorMessage =
-        err instanceof Error ? err.message : "Download failed";
-      setModels((prev) =>
-        prev.map((model) =>
-          model.name === modelName
-            ? { ...model, status: { Error: errorMessage } }
-            : model,
-        ),
-      );
     }
   };
 

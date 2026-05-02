@@ -244,7 +244,9 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     loadTranscriptConfig();
   }, []);
 
-  // Sync language preference to Rust on mount (fixes startup desync bug)
+  // Sync language preference to Rust on mount (fixes startup desync bug).
+  // Intentionally mount-only — subsequent language changes are pushed via
+  // handleSetSelectedLanguage which already syncs to Rust.
   useEffect(() => {
     if (selectedLanguage) {
       invoke("set_language_preference", { language: selectedLanguage })
@@ -261,6 +263,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
           );
         });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Load model configuration on mount
@@ -372,6 +375,15 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     loadAllApiKeys();
   }, []);
 
+  // updateProviderApiKey is declared here so the model-config-updated listener
+  // effect below can reference it without TDZ issues.
+  const updateProviderApiKey = useCallback(
+    (provider: string, apiKey: string | null) => {
+      setProviderApiKeys((prev) => ({ ...prev, [provider]: apiKey }));
+    },
+    [],
+  );
+
   // Listen for model config updates from other components
   useEffect(() => {
     const setupListener = async () => {
@@ -403,7 +415,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     return () => {
       cleanup?.();
     };
-  }, []);
+  }, [updateProviderApiKey]);
 
   // Load device preferences on mount
   useEffect(() => {
@@ -427,16 +439,20 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     loadDevicePreferences();
   }, []);
 
-  // Calculate model options based on available models
-  const modelOptions: Record<ModelConfig["provider"], string[]> = {
-    ollama: models.map((model) => model.name),
-    claude: ["claude-3-5-sonnet-latest"],
-    groq: ["llama-3.3-70b-versatile"],
-    openrouter: [],
-    openai: ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"],
-    "builtin-ai": [],
-    "custom-openai": [],
-  };
+  // Calculate model options based on available models. Memoized so the value
+  // object below doesn't change on every render (preserve-manual-memoization).
+  const modelOptions: Record<ModelConfig["provider"], string[]> = useMemo(
+    () => ({
+      ollama: models.map((model) => model.name),
+      claude: ["claude-3-5-sonnet-latest"],
+      groq: ["llama-3.3-70b-versatile"],
+      openrouter: [],
+      openai: ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"],
+      "builtin-ai": [],
+      "custom-openai": [],
+    }),
+    [models],
+  );
 
   // Toggle confidence indicator with localStorage persistence
   const toggleConfidenceIndicator = useCallback((checked: boolean) => {
@@ -474,14 +490,6 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
 
         return updated;
       });
-    },
-    [],
-  );
-
-  // Update individual provider API key
-  const updateProviderApiKey = useCallback(
-    (provider: string, apiKey: string | null) => {
-      setProviderApiKeys((prev) => ({ ...prev, [provider]: apiKey }));
     },
     [],
   );

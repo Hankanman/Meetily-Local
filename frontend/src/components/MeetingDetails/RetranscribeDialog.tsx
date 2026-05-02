@@ -113,11 +113,9 @@ export function RetranscribeDialog({
   }, [selectedModelKey, availableModels]);
   const isParakeetModel = selectedModelDetails?.provider === "parakeet";
 
-  useEffect(() => {
-    if (isParakeetModel && selectedLang !== "auto") {
-      setSelectedLang("auto");
-    }
-  }, [isParakeetModel, selectedLang]);
+  // Parakeet doesn't support language selection — coerce to "auto" at read time
+  // instead of mirroring through state (avoids cascading render).
+  const effectiveLang = isParakeetModel ? "auto" : selectedLang;
 
   // Reset state only when dialog transitions from closed to open
   // This prevents re-initialization when config changes while dialog is already open
@@ -135,7 +133,13 @@ export function RetranscribeDialog({
       // Fetch available models using centralized hook
       fetchModels();
     }
-  }, [open, selectedLanguage, transcriptModelConfig, fetchModels]);
+  }, [
+    open,
+    selectedLanguage,
+    transcriptModelConfig,
+    fetchModels,
+    resetSelection,
+  ]);
 
   // Listen for retranscription events
   useEffect(() => {
@@ -229,17 +233,9 @@ export function RetranscribeDialog({
     setProgress(null);
 
     try {
-      const languageToSend = isParakeetModel
-        ? null
-        : selectedLang === "auto"
-          ? null
-          : selectedLang;
+      const languageToSend = effectiveLang === "auto" ? null : effectiveLang;
       await Analytics.track("enhance_transcript_started", {
-        language: isParakeetModel
-          ? "auto"
-          : selectedLang === "auto"
-            ? "auto"
-            : selectedLang,
+        language: effectiveLang,
         model_provider: selectedModelDetails?.provider || "",
         model_name: selectedModelDetails?.name || "",
       });

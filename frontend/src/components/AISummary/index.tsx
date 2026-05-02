@@ -92,17 +92,25 @@ export const AISummary = ({
   const [currentHistoryIndex, setCurrentHistoryIndex] = useState(0);
   const [isUndoRedoing, setIsUndoRedoing] = useState(false);
 
-  // Add to history when summary changes
+  // Append to undo history when the summary prop changes from outside.
+  // This is a true accumulator (history depends on previous history + new
+  // value), so it can't be derived during render. Functional setState lets
+  // us reference current values without listing them as deps. The
+  // `isUndoRedoing` guard suppresses the round-trip when the change came
+  // from our own undo/redo handler.
+  /* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
   useEffect(() => {
     if (!isUndoRedoing && summary) {
-      // Only update history if summary is not null
-      const newHistory = history.slice(0, currentHistoryIndex + 1);
-      newHistory.push(summary);
-      setHistory(newHistory);
-      setCurrentHistoryIndex(newHistory.length - 1);
+      setHistory((prev) => {
+        const truncated = prev.slice(0, currentHistoryIndex + 1);
+        truncated.push(summary);
+        return truncated;
+      });
+      setCurrentHistoryIndex((idx) => idx + 1);
     }
     setIsUndoRedoing(false);
   }, [summary]);
+  /* eslint-enable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 
   const handleUndo = useCallback(() => {
     if (currentHistoryIndex > 0) {
@@ -262,6 +270,35 @@ export const AISummary = ({
     console.log("Updated summary:", updatedSummary);
     onSummaryChange(updatedSummary);
   };
+
+  const handleDeleteSelectedBlocks = useCallback(() => {
+    // Group selected blocks by section
+    const blocksBySection = new Map<string, string[]>();
+    selectedBlocks.forEach((blockId) => {
+      Object.entries(currentSummary).forEach(([sectionKey, section]) => {
+        if (section.blocks.some((b) => b.id === blockId)) {
+          const blocks = blocksBySection.get(sectionKey) || [];
+          blocks.push(blockId);
+          blocksBySection.set(sectionKey, blocks);
+        }
+      });
+    });
+
+    // Create new summary with blocks removed
+    const newSummary = { ...currentSummary };
+    blocksBySection.forEach((blockIds, sectionKey) => {
+      newSummary[sectionKey] = {
+        ...newSummary[sectionKey],
+        blocks: newSummary[sectionKey].blocks.filter(
+          (b) => !blockIds.includes(b.id),
+        ),
+      };
+    });
+
+    onSummaryChange(newSummary);
+    setSelectedBlocks([]);
+    setLastSelectedBlock(null);
+  }, [selectedBlocks, currentSummary, onSummaryChange]);
 
   const handleKeyDown = (e: React.KeyboardEvent, blockId: string) => {
     if (
@@ -494,36 +531,7 @@ export const AISummary = ({
       document.removeEventListener("mouseup", handleMouseUp);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [selectedBlocks, currentSummary, handleUndo, handleRedo]);
-
-  const handleDeleteSelectedBlocks = () => {
-    // Group selected blocks by section
-    const blocksBySection = new Map<string, string[]>();
-    selectedBlocks.forEach((blockId) => {
-      Object.entries(currentSummary).forEach(([sectionKey, section]) => {
-        if (section.blocks.some((b) => b.id === blockId)) {
-          const blocks = blocksBySection.get(sectionKey) || [];
-          blocks.push(blockId);
-          blocksBySection.set(sectionKey, blocks);
-        }
-      });
-    });
-
-    // Create new summary with blocks removed
-    const newSummary = { ...currentSummary };
-    blocksBySection.forEach((blockIds, sectionKey) => {
-      newSummary[sectionKey] = {
-        ...newSummary[sectionKey],
-        blocks: newSummary[sectionKey].blocks.filter(
-          (b) => !blockIds.includes(b.id),
-        ),
-      };
-    });
-
-    onSummaryChange(newSummary);
-    setSelectedBlocks([]);
-    setLastSelectedBlock(null);
-  };
+  }, [selectedBlocks, currentSummary, handleUndo, handleRedo, handleDeleteSelectedBlocks]);
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{

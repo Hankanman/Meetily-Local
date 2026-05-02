@@ -404,6 +404,7 @@ export function useSummaryGeneration({
       setAiSummary,
       updateMeetingTitle,
       onMeetingUpdated,
+      onOpenModelSettings,
     ],
   );
 
@@ -631,7 +632,7 @@ export function useSummaryGeneration({
       processSummary,
       modelConfig,
       isModelConfigLoading,
-      selectedTemplate,
+      onOpenModelSettings,
     ],
   );
 

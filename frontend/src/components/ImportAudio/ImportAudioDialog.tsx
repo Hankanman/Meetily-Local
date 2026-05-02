@@ -145,7 +145,7 @@ export function ImportAudioDialog({
     const wasOpen = prevOpenRef.current;
     prevOpenRef.current = open;
 
-    // Only initialize when transitioning from closed (false) to open (true)
+    // Only initialize when transitioning from closed (false) to open (true).
     if (open && !wasOpen) {
       reset();
       resetSelection();
@@ -177,9 +177,11 @@ export function ImportAudioDialog({
     fetchModels,
   ]);
 
-  // Update title when fileInfo changes
+  // Update title when fileInfo changes (only if user hasn't typed their own title yet).
+  // setState happens after async file validation completes; the rule cannot see this.
   useEffect(() => {
     if (fileInfo && !title && !titleModifiedByUser) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setTitle(fileInfo.filename);
     }
   }, [fileInfo, title, titleModifiedByUser]);
@@ -196,11 +198,9 @@ export function ImportAudioDialog({
   }, [selectedModelKey, availableModels]);
   const isParakeetModel = selectedModel?.provider === "parakeet";
 
-  useEffect(() => {
-    if (isParakeetModel && selectedLang !== "auto") {
-      setSelectedLang("auto");
-    }
-  }, [isParakeetModel, selectedLang]);
+  // Parakeet doesn't support language selection — coerce to "auto" at read time
+  // instead of mirroring through state (avoids cascading render).
+  const effectiveLang = isParakeetModel ? "auto" : selectedLang;
 
   const handleSelectFile = async () => {
     const info = await selectFile();
@@ -215,7 +215,7 @@ export function ImportAudioDialog({
     await startImport(
       fileInfo.path,
       title || fileInfo.filename,
-      isParakeetModel ? null : selectedLang === "auto" ? null : selectedLang,
+      effectiveLang === "auto" ? null : effectiveLang,
       selectedModel?.name || null,
       selectedModel?.provider || null,
     );

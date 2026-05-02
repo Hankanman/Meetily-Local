@@ -1,6 +1,12 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useMemo,
+} from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Analytics from "@/lib/analytics";
 import { invoke } from "@tauri-apps/api/core";
@@ -72,11 +78,12 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   });
   const [isCollapsed, setIsCollapsed] = useState(true);
   const [meetings, setMeetings] = useState<CurrentMeeting[]>([]);
-  const [sidebarItems, setSidebarItems] = useState<SidebarItem[]>([]);
   const [isMeetingActive, setIsMeetingActive] = useState(false);
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [transcriptServerAddress, setTranscriptServerAddress] = useState("");
+  const [transcriptServerAddress, setTranscriptServerAddress] = useState(
+    "http://127.0.0.1:8178/stream",
+  );
   const [activeSummaryPolls, setActiveSummaryPolls] = useState<
     Map<string, NodeJS.Timeout>
   >(new Map());
@@ -107,44 +114,40 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    // setMeetings happens after await inside fetchMeetings; rule cannot see through async.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchMeetings();
   }, [fetchMeetings]);
 
-  useEffect(() => {
-    setTranscriptServerAddress("http://127.0.0.1:8178/stream");
-  }, []);
-
-  const baseItems: SidebarItem[] = [
-    {
-      id: "meetings",
-      title: "Meeting Notes",
-      type: "folder" as const,
-      children: [
-        ...meetings.map((meeting) => ({
+  // sidebarItems is purely derived from meetings — compute it instead of mirroring
+  // through state (avoids two redundant set-state-in-effect cascades).
+  const sidebarItems: SidebarItem[] = useMemo(
+    () => [
+      {
+        id: "meetings",
+        title: "Meeting Notes",
+        type: "folder" as const,
+        children: meetings.map((meeting) => ({
           id: meeting.id,
           title: meeting.title,
           type: "file" as const,
         })),
-      ],
-    },
-  ];
+      },
+    ],
+    [meetings],
+  );
 
   const toggleCollapse = () => {
     setIsCollapsed(!isCollapsed);
   };
 
-  // Update current meeting when on home page
+  // Reset current meeting when navigating to home page (genuine pathname-driven reset)
   useEffect(() => {
     if (pathname === "/") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCurrentMeeting({ id: "intro-call", title: "+ New Call" });
     }
-    setSidebarItems(baseItems);
   }, [pathname]);
-
-  // Update sidebar items when meetings change
-  useEffect(() => {
-    setSidebarItems(baseItems);
-  }, [meetings]);
 
   // Function to handle recording toggle from sidebar
   const handleRecordingToggle = () => {

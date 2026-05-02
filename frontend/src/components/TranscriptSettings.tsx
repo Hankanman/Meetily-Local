@@ -48,16 +48,21 @@ export function TranscriptSettings({
     TranscriptModelProps["provider"]
   >(transcriptModelConfig.provider);
 
-  // Sync uiProvider when backend config changes (e.g., after model selection or initial load)
+  // Sync uiProvider when backend config changes (e.g., after model selection or initial load).
+  // uiProvider is mutable local state (changes when user picks a provider in the UI),
+  // so it cannot be purely derived from the prop.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setUiProvider(transcriptModelConfig.provider);
   }, [transcriptModelConfig.provider]);
 
+  // Clear API key when switching to a provider that doesn't use one
   useEffect(() => {
     if (
       transcriptModelConfig.provider === "localWhisper" ||
       transcriptModelConfig.provider === "parakeet"
     ) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setApiKey(null);
     }
   }, [transcriptModelConfig.provider]);

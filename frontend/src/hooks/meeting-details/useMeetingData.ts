@@ -29,7 +29,7 @@ export function useMeetingData({
   const [isTitleDirty, setIsTitleDirty] = useState(false);
   const [aiSummary, setAiSummary] = useState<Summary | null>(summaryData);
   const [isSaving, setIsSaving] = useState(false);
-  const [, setIsSummaryDirty] = useState(false);
+  const [isSummaryDirty, setIsSummaryDirty] = useState(false);
   const [, setError] = useState<string>("");
 
   // Ref for TiptapSummaryView
@@ -42,8 +42,11 @@ export function useMeetingData({
     meetings: sidebarMeetings,
   } = useSidebar();
 
-  // Sync aiSummary state when summaryData prop changes (fixes display of fetched summaries)
+  // Sync aiSummary state when summaryData prop changes (fixes display of fetched summaries).
+  // aiSummary is mutable local state (edited via handleSummaryChange), so we cannot just
+  // derive it from the prop — we need to reset it when the parent's data changes.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAiSummary(summaryData);
   }, [summaryData]); // Only trigger when parent prop changes, not when aiSummary changes
 
@@ -169,6 +172,7 @@ export function useMeetingData({
     meetingTitle,
     isEditingTitle,
     isTitleDirty,
+    isSummaryDirty,
     aiSummary,
     isSaving,
     summaryRef,

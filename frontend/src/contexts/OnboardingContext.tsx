@@ -118,63 +118,12 @@ export function OnboardingProvider({
   const [permissionsSkipped, setPermissionsSkipped] = useState(false);
 
   const saveTimeoutRef = useRef<NodeJS.Timeout>(undefined);
+  const isCompletingRef = useRef(false);
 
-  // Load status on mount and initialize database
-  useEffect(() => {
-    loadOnboardingStatus();
-    checkDatabaseStatus();
-    initializeDatabaseInBackground();
-
-    // Fetch and set recommended model
-    const fetchRecommendation = async () => {
-      try {
-        const recommendedModel = await invoke<string>(
-          "builtin_ai_get_recommended_model",
-        );
-        setSelectedSummaryModel(recommendedModel);
-        console.log(
-          "[OnboardingContext] Set recommended model:",
-          recommendedModel,
-        );
-      } catch (error) {
-        console.error(
-          "[OnboardingContext] Failed to get recommended model:",
-          error,
-        );
-        // Keep default gemma3:1b
-      }
-    };
-    fetchRecommendation();
-  }, []);
-
-  // Initialize database silently in background (moved from SetupOverviewStep)
-  const initializeDatabaseInBackground = async () => {
-    try {
-      console.log(
-        "[OnboardingContext] Starting background database initialization",
-      );
-      const isFirstLaunch = await invoke<boolean>("check_first_launch");
-
-      if (!isFirstLaunch) {
-        console.log(
-          "[OnboardingContext] Database exists, skipping initialization",
-        );
-        setDatabaseExists(true);
-        return;
-      }
-
-      // First launch - attempt auto-detection and import
-      await performAutoDetection();
-    } catch (error) {
-      console.error(
-        "[OnboardingContext] Database initialization failed:",
-        error,
-      );
-      // Don't throw - database init failure shouldn't block onboarding
-    }
-  };
-
-  const performAutoDetection = async () => {
+  // The following helpers are declared before the mount effect so it can
+  // reference them without TDZ. Each is wrapped in useCallback so its identity
+  // is stable across renders.
+  const performAutoDetection = useCallback(async () => {
     // Check Homebrew (macOS only)
     if (
       typeof navigator !== "undefined" &&
@@ -226,9 +175,235 @@ export function OnboardingProvider({
     );
     await invoke("initialize_fresh_database");
     setDatabaseExists(true);
-  };
+  }, []);
 
-  const isCompletingRef = useRef(false);
+  const initializeDatabaseInBackground = useCallback(async () => {
+    try {
+      console.log(
+        "[OnboardingContext] Starting background database initialization",
+      );
+      const isFirstLaunch = await invoke<boolean>("check_first_launch");
+
+      if (!isFirstLaunch) {
+        console.log(
+          "[OnboardingContext] Database exists, skipping initialization",
+        );
+        setDatabaseExists(true);
+        return;
+      }
+
+      // First launch - attempt auto-detection and import
+      await performAutoDetection();
+    } catch (error) {
+      console.error(
+        "[OnboardingContext] Database initialization failed:",
+        error,
+      );
+      // Don't throw - database init failure shouldn't block onboarding
+    }
+  }, [performAutoDetection]);
+
+  const checkDatabaseStatus = useCallback(async () => {
+    try {
+      const isFirstLaunch = await invoke<boolean>("check_first_launch");
+      setDatabaseExists(!isFirstLaunch);
+      console.log("[OnboardingContext] Database exists:", !isFirstLaunch);
+    } catch (error) {
+      console.error(
+        "[OnboardingContext] Failed to check database status:",
+        error,
+      );
+      setDatabaseExists(false);
+    }
+  }, []);
+
+  // Verify that models actually exist on disk, not just trust saved JSON
+  const verifyModelStatus = useCallback(
+    async (savedStatus: OnboardingStatus) => {
+      let parakeetDownloaded = false;
+      let summaryModelDownloaded = false;
+
+      // Verify Parakeet model exists on disk
+      try {
+        await invoke("parakeet_init");
+        parakeetDownloaded = await invoke<boolean>(
+          "parakeet_has_available_models",
+        );
+        console.log(
+          "[OnboardingContext] Parakeet verified on disk:",
+          parakeetDownloaded,
+        );
+      } catch (error) {
+        console.warn("[OnboardingContext] Failed to verify Parakeet:", error);
+        parakeetDownloaded = false;
+      }
+
+      // Verify Summary model exists on disk - check if ANY model is available
+      // Onboarding always uses builtin-ai (local models)
+      try {
+        const availableModel = await invoke<string | null>(
+          "builtin_ai_get_available_summary_model",
+        );
+        summaryModelDownloaded = !!availableModel;
+        console.log(
+          "[OnboardingContext] Summary model verified on disk:",
+          summaryModelDownloaded,
+          "model:",
+          availableModel,
+        );
+      } catch (error) {
+        console.warn(
+          "[OnboardingContext] Failed to verify Summary model:",
+          error,
+        );
+        summaryModelDownloaded = false;
+      }
+
+      // Determine the correct step based on verified status
+      // New simplified flow: Step 1: Welcome, Step 2: Setup Overview, Step 3: Download Progress, Step 4: Permissions (macOS)
+      let currentStep = savedStatus.current_step;
+      const completed = savedStatus.completed;
+
+      // Clamp step to new max (4)
+      if (currentStep > 4) {
+        currentStep = 3; // Go to download progress step
+      }
+
+      // Trust the completed status - don't revert based on model downloads
+      // Downloads continue in background; user stays in main app regardless
+      return {
+        currentStep,
+        completed,
+        parakeetDownloaded,
+        summaryModelDownloaded,
+      };
+    },
+    [],
+  );
+
+  // Check if any models are currently downloading (for re-entry)
+  const checkActiveDownloads = useCallback(async () => {
+    try {
+      const models = await invoke<any[]>("parakeet_get_available_models");
+      const isDownloading = models.some(
+        (m) =>
+          m.status &&
+          (typeof m.status === "object"
+            ? "Downloading" in m.status
+            : m.status === "Downloading"),
+      );
+
+      if (isDownloading) {
+        console.log(
+          "[OnboardingContext] Detected active background downloads on mount",
+        );
+        setIsBackgroundDownloading(true);
+      }
+
+      // Also check for Gemma/Built-in AI downloads if possible (though less critical as Parakeet is the main blocker)
+    } catch (error) {
+      console.warn(
+        "[OnboardingContext] Failed to check active downloads:",
+        error,
+      );
+    }
+  }, []);
+
+  const loadOnboardingStatus = useCallback(async () => {
+    try {
+      const status = await invoke<OnboardingStatus | null>(
+        "get_onboarding_status",
+      );
+      if (status) {
+        console.log("[OnboardingContext] Loaded saved status:", status);
+
+        // Don't trust saved status - verify actual model status on disk
+        const verifiedStatus = await verifyModelStatus(status);
+
+        setCurrentStep(verifiedStatus.currentStep);
+        setCompleted(verifiedStatus.completed);
+        setParakeetDownloaded(verifiedStatus.parakeetDownloaded);
+        setSummaryModelDownloaded(verifiedStatus.summaryModelDownloaded);
+
+        console.log("[OnboardingContext] Verified status:", verifiedStatus);
+
+        // Check if any downloads are active to restore isBackgroundDownloading state
+        await checkActiveDownloads();
+      }
+    } catch (error) {
+      console.error(
+        "[OnboardingContext] Failed to load onboarding status:",
+        error,
+      );
+    }
+  }, [verifyModelStatus, checkActiveDownloads]);
+
+  const saveOnboardingStatus = useCallback(async () => {
+    // Safety check: if we are in the process of completing, DO NOT save
+    // This prevents a race condition where a download completion event triggers a save
+    // that overwrites the "completed" status set by completeOnboarding
+    if (isCompletingRef.current) {
+      console.log(
+        "[OnboardingContext] Skipping saveOnboardingStatus because completion is in progress",
+      );
+      return;
+    }
+
+    try {
+      await invoke("save_onboarding_status_cmd", {
+        status: {
+          version: "1.0",
+          completed: completed,
+          current_step: currentStep,
+          model_status: {
+            parakeet: parakeetDownloaded ? "downloaded" : "not_downloaded",
+            summary: summaryModelDownloaded ? "downloaded" : "not_downloaded",
+          },
+          last_updated: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      console.error(
+        "[OnboardingContext] Failed to save onboarding status:",
+        error,
+      );
+    }
+  }, [completed, currentStep, parakeetDownloaded, summaryModelDownloaded]);
+
+  // Load status on mount and initialize database. Each helper performs its
+  // setState calls after an await; the rule cannot see through async boundaries.
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
+    loadOnboardingStatus();
+    checkDatabaseStatus();
+    initializeDatabaseInBackground();
+    /* eslint-enable react-hooks/set-state-in-effect */
+
+    // Fetch and set recommended model
+    const fetchRecommendation = async () => {
+      try {
+        const recommendedModel = await invoke<string>(
+          "builtin_ai_get_recommended_model",
+        );
+        setSelectedSummaryModel(recommendedModel);
+        console.log(
+          "[OnboardingContext] Set recommended model:",
+          recommendedModel,
+        );
+      } catch (error) {
+        console.error(
+          "[OnboardingContext] Failed to get recommended model:",
+          error,
+        );
+        // Keep default gemma3:1b
+      }
+    };
+    fetchRecommendation();
+  }, [
+    loadOnboardingStatus,
+    checkDatabaseStatus,
+    initializeDatabaseInBackground,
+  ]);
 
   // Auto-save on state change (debounced)
   useEffect(() => {
@@ -245,7 +420,13 @@ export function OnboardingProvider({
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
-  }, [currentStep, parakeetDownloaded, summaryModelDownloaded, completed]);
+  }, [
+    currentStep,
+    parakeetDownloaded,
+    summaryModelDownloaded,
+    completed,
+    saveOnboardingStatus,
+  ]);
 
   // Listen to Parakeet download progress
   useEffect(() => {
@@ -343,142 +524,6 @@ export function OnboardingProvider({
     };
   }, [selectedSummaryModel]);
 
-  const checkDatabaseStatus = async () => {
-    try {
-      const isFirstLaunch = await invoke<boolean>("check_first_launch");
-      setDatabaseExists(!isFirstLaunch);
-      console.log("[OnboardingContext] Database exists:", !isFirstLaunch);
-    } catch (error) {
-      console.error(
-        "[OnboardingContext] Failed to check database status:",
-        error,
-      );
-      setDatabaseExists(false);
-    }
-  };
-
-  const loadOnboardingStatus = async () => {
-    try {
-      const status = await invoke<OnboardingStatus | null>(
-        "get_onboarding_status",
-      );
-      if (status) {
-        console.log("[OnboardingContext] Loaded saved status:", status);
-
-        // Don't trust saved status - verify actual model status on disk
-        const verifiedStatus = await verifyModelStatus(status);
-
-        setCurrentStep(verifiedStatus.currentStep);
-        setCompleted(verifiedStatus.completed);
-        setParakeetDownloaded(verifiedStatus.parakeetDownloaded);
-        setSummaryModelDownloaded(verifiedStatus.summaryModelDownloaded);
-
-        console.log("[OnboardingContext] Verified status:", verifiedStatus);
-
-        // Check if any downloads are active to restore isBackgroundDownloading state
-        await checkActiveDownloads();
-      }
-    } catch (error) {
-      console.error(
-        "[OnboardingContext] Failed to load onboarding status:",
-        error,
-      );
-    }
-  };
-
-  // Verify that models actually exist on disk, not just trust saved JSON
-  const verifyModelStatus = async (savedStatus: OnboardingStatus) => {
-    let parakeetDownloaded = false;
-    let summaryModelDownloaded = false;
-
-    // Verify Parakeet model exists on disk
-    try {
-      await invoke("parakeet_init");
-      parakeetDownloaded = await invoke<boolean>(
-        "parakeet_has_available_models",
-      );
-      console.log(
-        "[OnboardingContext] Parakeet verified on disk:",
-        parakeetDownloaded,
-      );
-    } catch (error) {
-      console.warn("[OnboardingContext] Failed to verify Parakeet:", error);
-      parakeetDownloaded = false;
-    }
-
-    // Verify Summary model exists on disk - check if ANY model is available
-    // Onboarding always uses builtin-ai (local models)
-    try {
-      const availableModel = await invoke<string | null>(
-        "builtin_ai_get_available_summary_model",
-      );
-      summaryModelDownloaded = !!availableModel;
-      console.log(
-        "[OnboardingContext] Summary model verified on disk:",
-        summaryModelDownloaded,
-        "model:",
-        availableModel,
-      );
-    } catch (error) {
-      console.warn(
-        "[OnboardingContext] Failed to verify Summary model:",
-        error,
-      );
-      summaryModelDownloaded = false;
-    }
-
-    // Determine the correct step based on verified status
-    // New simplified flow: Step 1: Welcome, Step 2: Setup Overview, Step 3: Download Progress, Step 4: Permissions (macOS)
-    let currentStep = savedStatus.current_step;
-    const completed = savedStatus.completed;
-
-    // Clamp step to new max (4)
-    if (currentStep > 4) {
-      currentStep = 3; // Go to download progress step
-    }
-
-    // Trust the completed status - don't revert based on model downloads
-    // Downloads continue in background; user stays in main app regardless
-    return {
-      currentStep,
-      completed,
-      parakeetDownloaded,
-      summaryModelDownloaded,
-    };
-  };
-
-  const saveOnboardingStatus = async () => {
-    // Safety check: if we are in the process of completing, DO NOT save
-    // This prevents a race condition where a download completion event triggers a save
-    // that overwrites the "completed" status set by completeOnboarding
-    if (isCompletingRef.current) {
-      console.log(
-        "[OnboardingContext] Skipping saveOnboardingStatus because completion is in progress",
-      );
-      return;
-    }
-
-    try {
-      await invoke("save_onboarding_status_cmd", {
-        status: {
-          version: "1.0",
-          completed: completed,
-          current_step: currentStep,
-          model_status: {
-            parakeet: parakeetDownloaded ? "downloaded" : "not_downloaded",
-            summary: summaryModelDownloaded ? "downloaded" : "not_downloaded",
-          },
-          last_updated: new Date().toISOString(),
-        },
-      });
-    } catch (error) {
-      console.error(
-        "[OnboardingContext] Failed to save onboarding status:",
-        error,
-      );
-    }
-  };
-
   const completeOnboarding = async () => {
     try {
       // Set completion flag to prevent race conditions with auto-save
@@ -550,34 +595,6 @@ export function OnboardingProvider({
       );
       setIsBackgroundDownloading(false);
       throw error;
-    }
-  };
-
-  // Check if any models are currently downloading (for re-entry)
-  const checkActiveDownloads = async () => {
-    try {
-      const models = await invoke<any[]>("parakeet_get_available_models");
-      const isDownloading = models.some(
-        (m) =>
-          m.status &&
-          (typeof m.status === "object"
-            ? "Downloading" in m.status
-            : m.status === "Downloading"),
-      );
-
-      if (isDownloading) {
-        console.log(
-          "[OnboardingContext] Detected active background downloads on mount",
-        );
-        setIsBackgroundDownloading(true);
-      }
-
-      // Also check for Gemma/Built-in AI downloads if possible (though less critical as Parakeet is the main blocker)
-    } catch (error) {
-      console.warn(
-        "[OnboardingContext] Failed to check active downloads:",
-        error,
-      );
     }
   };
 

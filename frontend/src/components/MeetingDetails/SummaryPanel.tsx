@@ -25,6 +25,7 @@ interface SummaryPanelProps {
   onStartEditTitle: () => void;
   onFinishEditTitle: () => void;
   isTitleDirty: boolean;
+  isSummaryDirty: boolean;
   summaryRef: RefObject<TiptapSummaryViewRef | null>;
   isSaving: boolean;
   onSaveAll: () => Promise<void>;
@@ -77,6 +78,7 @@ export function SummaryPanel({
   onStartEditTitle,
   onFinishEditTitle,
   isTitleDirty,
+  isSummaryDirty,
   summaryRef,
   isSaving,
   onSaveAll,
@@ -147,7 +149,7 @@ export function SummaryPanel({
             <div className="shrink-0">
               <SummaryUpdaterButtonGroup
                 isSaving={isSaving}
-                isDirty={isTitleDirty || summaryRef.current?.isDirty || false}
+                isDirty={isTitleDirty || isSummaryDirty}
                 onSave={onSaveAll}
                 onCopy={onCopySummary}
                 onFind={() => {

@@ -470,7 +470,11 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     };
 
     syncFromBackend();
-  }, [recordingState.isRecording]); // Run when recording state changes
+    // We intentionally don't depend on transcripts.length: this effect should
+    // only re-run when recording state flips, not whenever we receive a transcript
+    // (which would re-sync mid-recording and clobber local state).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordingState.isRecording]);
 
   // Manual transcript update handler (for RecordingControls component)
   const addTranscript = useCallback((update: TranscriptUpdate) => {

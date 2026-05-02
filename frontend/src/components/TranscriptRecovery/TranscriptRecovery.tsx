@@ -5,7 +5,7 @@
  * Displays recoverable meetings, allows preview, and enables recovery or deletion.
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { formatDistanceToNow } from "date-fns";
 import {
   AlertCircle,
@@ -56,36 +56,45 @@ export function TranscriptRecovery({
   const [isRecovering, setIsRecovering] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Reset selection when dialog opens
+  // Declared above its first caller (the auto-select effect) to avoid TDZ.
+  const handleMeetingSelect = useCallback(
+    async (meetingId: string) => {
+      setSelectedMeetingId(meetingId);
+      setIsLoadingPreview(true);
+
+      try {
+        const transcripts = await onLoadPreview(meetingId);
+        // Limit to first 10 for preview
+        setPreviewTranscripts(transcripts.slice(0, 10));
+      } catch (error) {
+        console.error("Failed to load preview:", error);
+        setPreviewTranscripts([]);
+      } finally {
+        setIsLoadingPreview(false);
+      }
+    },
+    [onLoadPreview],
+  );
+
+  // Reset selection when dialog opens — genuine reset cascade on prop transition.
   useEffect(() => {
     if (isOpen) {
+      /* eslint-disable react-hooks/set-state-in-effect */
       setSelectedMeetingId(null);
       setPreviewTranscripts([]);
+      /* eslint-enable react-hooks/set-state-in-effect */
     }
   }, [isOpen]);
 
-  // Auto-select first meeting if available
+  // Auto-select first meeting if available. handleMeetingSelect sets state
+  // synchronously before its await, so the rule flags it — but the gate above
+  // (selectedMeetingId is null) means this only fires once per dialog open.
   useEffect(() => {
     if (isOpen && recoverableMeetings.length > 0 && !selectedMeetingId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       handleMeetingSelect(recoverableMeetings[0].meetingId);
     }
-  }, [isOpen, recoverableMeetings]);
-
-  const handleMeetingSelect = async (meetingId: string) => {
-    setSelectedMeetingId(meetingId);
-    setIsLoadingPreview(true);
-
-    try {
-      const transcripts = await onLoadPreview(meetingId);
-      // Limit to first 10 for preview
-      setPreviewTranscripts(transcripts.slice(0, 10));
-    } catch (error) {
-      console.error("Failed to load preview:", error);
-      setPreviewTranscripts([]);
-    } finally {
-      setIsLoadingPreview(false);
-    }
-  };
+  }, [isOpen, recoverableMeetings, selectedMeetingId, handleMeetingSelect]);
 
   const handleRecover = async () => {
     if (!selectedMeetingId) return;

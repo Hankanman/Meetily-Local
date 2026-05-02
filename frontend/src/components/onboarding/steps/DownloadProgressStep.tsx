@@ -173,6 +173,10 @@ export function DownloadProgressStep() {
 
     fetchRecommendation();
     checkPlatform();
+    // Mount-only — fetches recommended model from backend and detects platform once.
+    // setSelectedSummaryModel is captured but only used after the await; depending on
+    // its identity is not desirable here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Start downloads on mount
@@ -181,6 +185,9 @@ export function DownloadProgressStep() {
     downloadStartedRef.current = true;
 
     startDownloads();
+    // Mount-only by design (downloadStartedRef guard); startDownloads closes over
+    // context state that we don't want to retrigger on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Listen to Parakeet download progress
@@ -249,7 +256,7 @@ export function DownloadProgressStep() {
       unlistenComplete.then((fn) => fn());
       unlistenError.then((fn) => fn());
     };
-  }, []);
+  }, [setParakeetDownloaded]);
 
   // Listen to Gemma download progress (always downloading for builtin-ai)
   useEffect(() => {
@@ -300,7 +307,7 @@ export function DownloadProgressStep() {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [selectedSummaryModel]);
+  }, [selectedSummaryModel, setSummaryModelDownloaded]);
 
   const startDownloads = async () => {
     // Always download both Parakeet and Gemma (system-recommended)

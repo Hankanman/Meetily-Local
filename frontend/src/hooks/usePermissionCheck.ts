@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getErrorMessage } from "@/lib/utils";
 
@@ -17,7 +17,7 @@ export function usePermissionCheck() {
     error: null,
   });
 
-  const checkPermissions = async () => {
+  const checkPermissions = useCallback(async () => {
     setStatus((prev) => ({ ...prev, isChecking: true, error: null }));
 
     try {
@@ -61,7 +61,7 @@ export function usePermissionCheck() {
       });
       return { hasMicrophone: false, hasSystemAudio: false };
     }
-  };
+  }, []);
 
   const requestPermissions = async () => {
     try {
@@ -77,10 +77,11 @@ export function usePermissionCheck() {
     }
   };
 
-  // Check permissions on mount
+  // Check permissions on mount. setStatus happens after await inside checkPermissions.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     checkPermissions();
-  }, []);
+  }, [checkPermissions]);
 
   return {
     ...status,

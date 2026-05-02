@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { motion, AnimatePresence } from "framer-motion";
@@ -141,6 +141,87 @@ export function ModelManager({
     initializeModels();
   }, [initialized, selectedModel, onModelSelect]);
 
+  // getDisplayName, saveModelSelection, and downloadModel are declared before the
+  // listener-setup effect so its closures can reference them without TDZ issues.
+  const getDisplayName = useCallback((modelName: string): string => {
+    const modelNameMapping: { [key: string]: string } = {
+      small: "Small",
+      "medium-q5_0": "Medium",
+      "large-v3-q5_0": "Large V3 Compressed",
+      "large-v3-turbo": "Large V3 Turbo",
+      "large-v3": "Large V3",
+    };
+
+    const basicModelNames = [
+      "small",
+      "medium-q5_0",
+      "large-v3-q5_0",
+      "large-v3-turbo",
+      "large-v3",
+    ];
+    if (basicModelNames.includes(modelName)) {
+      return modelNameMapping[modelName] || modelName;
+    }
+    return `Whisper ${modelName}`;
+  }, []);
+
+  const saveModelSelection = useCallback(async (modelName: string) => {
+    try {
+      await invoke("api_save_transcript_config", {
+        provider: "localWhisper",
+        model: modelName,
+        apiKey: null,
+      });
+    } catch (error) {
+      console.error("Failed to save model selection:", error);
+    }
+  }, []);
+
+  const downloadModel = useCallback(
+    async (modelName: string) => {
+      if (downloadingModels.has(modelName)) return;
+
+      const displayName = getDisplayName(modelName);
+
+      try {
+        updateDownloadingModels((prev) => new Set([...prev, modelName]));
+
+        setModels((prevModels) =>
+          prevModels.map((model) =>
+            model.name === modelName
+              ? { ...model, status: { Downloading: 0 } as ModelStatus }
+              : model,
+          ),
+        );
+
+        toast.info(`Downloading ${displayName}...`, {
+          description: "This may take a few minutes",
+          duration: 5000,
+        });
+
+        await WhisperAPI.downloadModel(modelName);
+      } catch (err) {
+        console.error("Download failed:", err);
+        updateDownloadingModels((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(modelName);
+          return newSet;
+        });
+
+        const errorMessage =
+          err instanceof Error ? err.message : "Download failed";
+        setModels((prev) =>
+          prev.map((model) =>
+            model.name === modelName
+              ? { ...model, status: { Error: errorMessage } }
+              : model,
+          ),
+        );
+      }
+    },
+    [downloadingModels, getDisplayName],
+  );
+
   // Set up event listeners for download progress
   useEffect(() => {
     let unlistenProgress: (() => void) | null = null;
@@ -274,19 +355,7 @@ export function ModelManager({
       if (unlistenComplete) unlistenComplete();
       if (unlistenError) unlistenError();
     };
-  }, []); // Empty dependency array - listeners use refs for stable callbacks
-
-  const saveModelSelection = async (modelName: string) => {
-    try {
-      await invoke("api_save_transcript_config", {
-        provider: "localWhisper",
-        model: modelName,
-        apiKey: null,
-      });
-    } catch (error) {
-      console.error("Failed to save model selection:", error);
-    }
-  };
+  }, [getDisplayName, saveModelSelection, downloadModel, models]);
 
   const cancelDownload = async (modelName: string) => {
     const displayName = getDisplayName(modelName);
@@ -320,48 +389,6 @@ export function ModelManager({
         description: err instanceof Error ? err.message : "Unknown error",
         duration: 4000,
       });
-    }
-  };
-
-  const downloadModel = async (modelName: string) => {
-    if (downloadingModels.has(modelName)) return;
-
-    const displayName = getDisplayName(modelName);
-
-    try {
-      updateDownloadingModels((prev) => new Set([...prev, modelName]));
-
-      setModels((prevModels) =>
-        prevModels.map((model) =>
-          model.name === modelName
-            ? { ...model, status: { Downloading: 0 } as ModelStatus }
-            : model,
-        ),
-      );
-
-      toast.info(`Downloading ${displayName}...`, {
-        description: "This may take a few minutes",
-        duration: 5000,
-      });
-
-      await WhisperAPI.downloadModel(modelName);
-    } catch (err) {
-      console.error("Download failed:", err);
-      updateDownloadingModels((prev) => {
-        const newSet = new Set(prev);
-        newSet.delete(modelName);
-        return newSet;
-      });
-
-      const errorMessage =
-        err instanceof Error ? err.message : "Download failed";
-      setModels((prev) =>
-        prev.map((model) =>
-          model.name === modelName
-            ? { ...model, status: { Error: errorMessage } }
-            : model,
-        ),
-      );
     }
   };
 
@@ -408,28 +435,6 @@ export function ModelManager({
         duration: 4000,
       });
     }
-  };
-
-  const getDisplayName = (modelName: string): string => {
-    const modelNameMapping: { [key: string]: string } = {
-      small: "Small",
-      "medium-q5_0": "Medium",
-      "large-v3-q5_0": "Large V3 Compressed",
-      "large-v3-turbo": "Large V3 Turbo",
-      "large-v3": "Large V3",
-    };
-
-    const basicModelNames = [
-      "small",
-      "medium-q5_0",
-      "large-v3-q5_0",
-      "large-v3-turbo",
-      "large-v3",
-    ];
-    if (basicModelNames.includes(modelName)) {
-      return modelNameMapping[modelName] || modelName;
-    }
-    return `Whisper ${modelName}`;
   };
 
   if (loading) {

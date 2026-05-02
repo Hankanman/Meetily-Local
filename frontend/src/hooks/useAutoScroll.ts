@@ -48,9 +48,12 @@ export function useAutoScroll({
   const useVirtualization =
     virtualizer && segments.length >= virtualizationThreshold;
   const [autoScroll, setAutoScroll] = useState(true);
-  // Ref to always have current autoScroll value in effects
+  // Ref to always have current autoScroll value in effects (kept in sync via effect
+  // so the ref write doesn't happen during render).
   const autoScrollRef = useRef(autoScroll);
-  autoScrollRef.current = autoScroll;
+  useEffect(() => {
+    autoScrollRef.current = autoScroll;
+  }, [autoScroll]);
 
   // Track if user has manually scrolled (to disable auto-scroll temporarily)
   const userScrolledRef = useRef(false);

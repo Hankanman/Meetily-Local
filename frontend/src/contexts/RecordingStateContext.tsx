@@ -99,14 +99,14 @@ export function RecordingStateProvider({
         statusMessage: message,
       }));
     },
-    [state.status, state.isRecording, state.isPaused],
+    [state.status],
   );
 
   /**
    * Sync recording state with backend
    * Called on mount (fixes refresh desync) and periodically while recording
    */
-  const syncWithBackend = async () => {
+  const syncWithBackend = useCallback(async () => {
     try {
       const backendState = await recordingService.getRecordingState();
 
@@ -127,12 +127,12 @@ export function RecordingStateProvider({
       );
       // Don't update state on error - keep current state
     }
-  };
+  }, []);
 
   /**
    * Start polling backend state (called when recording starts)
    */
-  const startPolling = () => {
+  const startPolling = useCallback(() => {
     if (pollingIntervalRef.current) {
       clearInterval(pollingIntervalRef.current);
     }
@@ -141,7 +141,7 @@ export function RecordingStateProvider({
       "[RecordingStateContext] Starting state polling (500ms interval)",
     );
     pollingIntervalRef.current = setInterval(syncWithBackend, 500);
-  };
+  }, [syncWithBackend]);
 
   /**
    * Stop polling backend state (called when recording stops)
@@ -258,16 +258,18 @@ export function RecordingStateProvider({
       unsubscribers.forEach((unsub) => unsub());
       stopPolling();
     };
-  }, []);
+  }, [startPolling]);
 
   /**
    * Initial sync on mount - CRITICAL for fixing refresh desync bug
-   * If backend is recording but UI state is false, this will correct it
+   * If backend is recording but UI state is false, this will correct it.
+   * setState happens after await inside syncWithBackend.
    */
   useEffect(() => {
     console.log("[RecordingStateContext] Initial mount - syncing with backend");
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     syncWithBackend();
-  }, []);
+  }, [syncWithBackend]);
 
   // NEW: Computed helpers from status
   const contextValue = useMemo(

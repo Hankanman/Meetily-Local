@@ -19,7 +19,7 @@ export function MessageToast({
     }, 3000);
 
     return () => clearTimeout(timer);
-  }, []);
+  }, [setShow]);
 
   return (
     show && (

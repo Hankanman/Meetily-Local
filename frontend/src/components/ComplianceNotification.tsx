@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useLayoutEffect, useRef } from "react";
 import { Button } from "./ui/button";
 import { AlertTriangle, CheckCircle, X } from "lucide-react";
 
@@ -20,7 +20,14 @@ export const ComplianceNotification: React.FC<ComplianceNotificationProps> = ({
   const [isVisible, setIsVisible] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0, width: 192 }); // Default width
 
-  useEffect(() => {
+  // useLayoutEffect so the DOM measurement + initial position are committed
+  // before the browser paints the entrance animation. Both setStates are
+  // genuinely required here: `isVisible` triggers the CSS transition (which
+  // can't happen until *after* the element mounts), and `position` depends
+  // on a DOM `getBoundingClientRect()` measurement that isn't available at
+  // render time.
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useLayoutEffect(() => {
     if (isOpen) {
       setIsVisible(true);
 
@@ -45,6 +52,7 @@ export const ComplianceNotification: React.FC<ComplianceNotificationProps> = ({
       }
     }
   }, [isOpen, recordingButtonRef]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleClose = () => {
     setIsVisible(false);

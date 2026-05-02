@@ -27,11 +27,12 @@ export function useTranscriptStreaming(
 
   useEffect(() => {
     if (!isRecording || !enableStreaming || segments.length === 0) {
-      // Clear streaming when not recording
+      // Clear streaming when not recording — reset on prop change.
       if (streamingIntervalRef.current) {
         clearInterval(streamingIntervalRef.current);
         streamingIntervalRef.current = null;
       }
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setStreamingSegment(null);
       lastSegmentIdRef.current = null;
       return;
