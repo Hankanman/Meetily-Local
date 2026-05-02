@@ -108,17 +108,16 @@ export function useMeetingData({ meeting, summaryData, onMeetingUpdated }: UseMe
   const saveAllChanges = useCallback(async () => {
     setIsSaving(true);
     try {
-      // Save meeting title only if changed
+      const tasks: Promise<unknown>[] = [];
       if (isTitleDirty) {
-        await handleSaveMeetingTitle();
+        tasks.push(handleSaveMeetingTitle());
       }
-
-      // Save BlockNote editor changes if dirty
       if (summaryRef.current?.isDirty) {
-        await summaryRef.current.saveSummary();
+        tasks.push(summaryRef.current.saveSummary());
       } else if (aiSummary) {
-        await handleSaveSummary(aiSummary);
+        tasks.push(handleSaveSummary(aiSummary));
       }
+      await Promise.all(tasks);
 
       toast.success("Changes saved successfully");
     } catch (error) {
