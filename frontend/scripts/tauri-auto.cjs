@@ -11,7 +11,7 @@ const os = require("os");
 // Get the command (dev or build)
 const command = process.argv[2];
 if (!command || !["dev", "build"].includes(command)) {
-  console.error("Usage: node tauri-auto.js [dev|build]");
+  console.error("Usage: node tauri-auto.cjs [dev|build]");
   process.exit(1);
 }
 
