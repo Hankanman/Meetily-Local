@@ -5,6 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { getErrorMessage } from '@/lib/utils';
 
 
 interface SidebarItem {
@@ -91,7 +92,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('Error fetching meetings:', error);
       setMeetings([]);
-      Analytics.trackBackendConnection(false, error instanceof Error ? error.message : 'Unknown error');
+      Analytics.trackBackendConnection(false, getErrorMessage(error));
     }
   }, []);
 
@@ -236,7 +237,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
         // Report error to callback
         onUpdate({
           status: 'error',
-          error: error instanceof Error ? error.message : 'Unknown error'
+          error: getErrorMessage(error)
         });
         clearInterval(pollInterval);
         setActiveSummaryPolls(prev => {

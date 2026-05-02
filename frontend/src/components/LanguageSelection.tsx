@@ -3,6 +3,7 @@ import { Globe } from 'lucide-react';
 import Analytics from '@/lib/analytics';
 import { toast } from 'sonner';
 import { useConfig } from '@/contexts/ConfigContext';
+import { getErrorMessage } from '@/lib/utils';
 
 export interface Language {
   code: string;
@@ -161,7 +162,7 @@ export function LanguageSelection({
     } catch (error) {
       console.error('Failed to save language preference:', error);
       toast.error("Failed to save language preference", {
-        description: error instanceof Error ? error.message : String(error)
+        description: getErrorMessage(error)
       });
     } finally {
       setSaving(false);

@@ -8,6 +8,7 @@ import { recordingService } from '@/services/recordingService';
 import Analytics from '@/lib/analytics';
 import { showRecordingNotification } from '@/lib/recordingNotification';
 import { toast } from 'sonner';
+import { getErrorMessage } from '@/lib/utils';
 
 interface UseRecordingStartReturn {
   handleRecordingStart: () => Promise<void>;
@@ -135,7 +136,7 @@ export function useRecordingStart(
       await showRecordingNotification();
     } catch (error) {
       console.error('Failed to start recording:', error);
-      setStatus(RecordingStatus.ERROR, error instanceof Error ? error.message : 'Failed to start recording');
+      setStatus(RecordingStatus.ERROR, getErrorMessage(error, 'Failed to start recording'));
       setIsRecording(false); // Reset state on error
       Analytics.trackButtonClick('start_recording_error', 'home_page');
       // Re-throw so RecordingControls can handle device-specific errors
@@ -204,7 +205,7 @@ export function useRecordingStart(
             await showRecordingNotification();
           } catch (error) {
             console.error('Failed to auto-start recording:', error);
-            setStatus(RecordingStatus.ERROR, error instanceof Error ? error.message : 'Failed to auto-start recording');
+            setStatus(RecordingStatus.ERROR, getErrorMessage(error, 'Failed to auto-start recording'));
             alert('Failed to start recording. Check console for details.');
             Analytics.trackButtonClick('start_recording_error', 'sidebar_auto');
           } finally {
@@ -291,7 +292,7 @@ export function useRecordingStart(
         await showRecordingNotification();
       } catch (error) {
         console.error('Failed to start recording from sidebar:', error);
-        setStatus(RecordingStatus.ERROR, error instanceof Error ? error.message : 'Failed to start recording from sidebar');
+        setStatus(RecordingStatus.ERROR, getErrorMessage(error, 'Failed to start recording from sidebar'));
         alert('Failed to start recording. Check console for details.');
         Analytics.trackButtonClick('start_recording_error', 'sidebar_direct');
       } finally {

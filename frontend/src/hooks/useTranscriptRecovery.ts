@@ -9,6 +9,7 @@ import { useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { indexedDBService, MeetingMetadata, StoredTranscript } from '@/services/indexedDBService';
 import { storageService } from '@/services/storageService';
+import { getErrorMessage } from '@/lib/utils';
 
 interface AudioRecoveryStatus {
   status: string; // "success" | "partial" | "failed" | "none"
@@ -147,7 +148,7 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
             status: 'failed',
             chunk_count: 0,
             estimated_duration_seconds: 0,
-            message: error instanceof Error ? error.message : 'Unknown error'
+            message: getErrorMessage(error)
           };
         }
       } else {

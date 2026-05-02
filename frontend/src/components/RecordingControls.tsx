@@ -10,6 +10,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import Analytics from '@/lib/analytics';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
+import { getErrorMessage } from '@/lib/utils';
 
 interface RecordingControlsProps {
   isRecording: boolean;
@@ -103,14 +104,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       await onRecordingStart();
     } catch (error) {
       console.error('Failed to start recording:', error);
-      console.error('Error details:', {
-        message: error instanceof Error ? error.message : String(error),
-        name: error instanceof Error ? error.name : 'Unknown',
-        stack: error instanceof Error ? error.stack : undefined
-      });
-
-      // Parse error message to provide user-friendly feedback
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = getErrorMessage(error);
 
       // Check for device-related errors
       if (errorMsg.includes('microphone') || errorMsg.includes('mic') || errorMsg.includes('input')) {

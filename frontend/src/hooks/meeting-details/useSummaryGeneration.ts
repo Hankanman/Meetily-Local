@@ -5,7 +5,7 @@ import { CurrentMeeting, useSidebar } from '@/components/Sidebar/SidebarProvider
 import { invoke as invokeTauri } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import Analytics from '@/lib/analytics';
-import { isOllamaNotInstalledError } from '@/lib/utils';
+import { getErrorMessage, isOllamaNotInstalledError } from '@/lib/utils';
 import { BuiltInModelInfo } from '@/lib/builtin-ai';
 
 type SummaryStatus = 'idle' | 'processing' | 'summarizing' | 'regenerating' | 'completed' | 'error';
@@ -322,7 +322,7 @@ export function useSummaryGeneration({
       });
     } catch (error) {
       console.error(`Failed to ${isRegeneration ? 'regenerate' : 'generate'} summary:`, error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage = getErrorMessage(error);
       setSummaryError(errorMessage);
       setSummaryStatus('error');
       // Note: We don't clear the summary here because the backend has already restored from backup
@@ -412,7 +412,7 @@ export function useSummaryGeneration({
         }
       } catch (error) {
         console.error('Error checking Ollama models:', error);
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const errorMessage = getErrorMessage(error);
 
         if (isOllamaNotInstalledError(errorMessage)) {
           // Ollama is not installed - show specific message with download link
@@ -518,7 +518,7 @@ export function useSummaryGeneration({
       } catch (error) {
         console.error('Error validating built-in AI model:', error);
         toast.error('Failed to validate built-in AI model', {
-          description: error instanceof Error ? error.message : String(error),
+          description: getErrorMessage(error),
           duration: 5000,
         });
         return;

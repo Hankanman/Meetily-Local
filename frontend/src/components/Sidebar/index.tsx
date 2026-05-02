@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { useRecordingState } from '@/contexts/RecordingStateContext';
 import { useImportDialog } from '@/contexts/ImportDialogContext';
 import { useConfig } from '@/contexts/ConfigContext';
+import { getErrorMessage } from '@/lib/utils';
 
 import {
   Dialog,
@@ -331,7 +332,7 @@ const Sidebar: React.FC = () => {
     } catch (error) {
       console.error('Failed to delete meeting:', error);
       toast.error("Failed to delete meeting", {
-        description: error instanceof Error ? error.message : String(error)
+        description: getErrorMessage(error)
       });
     }
   };
@@ -393,7 +394,7 @@ const Sidebar: React.FC = () => {
     } catch (error) {
       console.error('Failed to update meeting title:', error);
       toast.error("Failed to update meeting title", {
-        description: error instanceof Error ? error.message : String(error)
+        description: getErrorMessage(error)
       });
     }
   };

@@ -21,7 +21,7 @@ import Analytics from '@/lib/analytics';
 import { invoke } from '@tauri-apps/api/core';
 import { toast } from 'sonner';
 import { useState, useEffect, useRef } from 'react';
-import { isOllamaNotInstalledError } from '@/lib/utils';
+import { getErrorMessage, isOllamaNotInstalledError } from '@/lib/utils';
 import { BuiltInModelInfo } from '@/lib/builtin-ai';
 
 interface SummaryGeneratorButtonGroupProps {
@@ -167,7 +167,7 @@ export function SummaryGeneratorButtonGroup({
     } catch (error) {
       console.error('Error checking built-in AI models:', error);
       toast.error('Failed to check model status', {
-        description: error instanceof Error ? error.message : String(error),
+        description: getErrorMessage(error),
         duration: 5000,
       });
     } finally {
@@ -207,7 +207,7 @@ export function SummaryGeneratorButtonGroup({
       onGenerateSummary(customPrompt);
     } catch (error) {
       console.error('Error checking Ollama models:', error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = getErrorMessage(error);
 
       if (isOllamaNotInstalledError(errorMessage)) {
         // Ollama is not installed - show specific message with download link

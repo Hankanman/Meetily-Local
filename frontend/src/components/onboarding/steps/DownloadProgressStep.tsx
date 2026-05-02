@@ -7,6 +7,7 @@ import { OnboardingContainer } from '../OnboardingContainer';
 import { useOnboarding } from '@/contexts/OnboardingContext';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getErrorMessage } from '@/lib/utils';
 
 const PARAKEET_MODEL = 'parakeet-tdt-0.6b-v3-int8';
 
@@ -87,7 +88,7 @@ export function DownloadProgressStep() {
       setParakeetState((prev) => ({
         ...prev,
         status: 'error',
-        error: error instanceof Error ? error.message : 'Retry failed',
+        error: getErrorMessage(error, 'Retry failed'),
       }));
 
       toast.error('Download retry failed', {
@@ -130,7 +131,7 @@ export function DownloadProgressStep() {
       setGemmaState((prev) => ({
         ...prev,
         status: 'error',
-        error: error instanceof Error ? error.message : 'Retry failed',
+        error: getErrorMessage(error, 'Retry failed'),
       }));
 
       toast.error('Summary model download retry failed', {

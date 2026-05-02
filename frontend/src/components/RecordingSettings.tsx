@@ -5,6 +5,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { DeviceSelection, SelectedDevices } from '@/components/DeviceSelection';
 import Analytics from '@/lib/analytics';
 import { toast } from 'sonner';
+import { getErrorMessage } from '@/lib/utils';
 
 export interface RecordingPreferences {
   save_folder: string;
@@ -136,7 +137,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
     } catch (error) {
       console.error('Failed to save recording preferences:', error);
       toast.error("Failed to save device preferences", {
-        description: error instanceof Error ? error.message : String(error)
+        description: getErrorMessage(error)
       });
     } finally {
       setSaving(false);

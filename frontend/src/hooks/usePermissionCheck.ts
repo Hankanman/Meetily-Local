@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { getErrorMessage } from '@/lib/utils';
 
 export interface PermissionStatus {
   hasMicrophone: boolean;
@@ -53,7 +54,7 @@ export function usePermissionCheck() {
         hasMicrophone: false,
         hasSystemAudio: false,
         isChecking: false,
-        error: error instanceof Error ? error.message : 'Failed to check permissions',
+        error: getErrorMessage(error, 'Failed to check permissions'),
       });
       return { hasMicrophone: false, hasSystemAudio: false };
     }

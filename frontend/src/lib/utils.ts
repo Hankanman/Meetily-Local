@@ -6,6 +6,16 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
+ * Extract a string message from an unknown error value. Prefers `Error.message`
+ * and falls back to `String(error)` for non-Error throws.
+ */
+export function getErrorMessage(error: unknown, fallback = 'Unknown error'): string {
+  if (error instanceof Error) return error.message;
+  if (error == null) return fallback;
+  return String(error);
+}
+
+/**
  * Detects if an error message indicates that Ollama is not installed or not running
  * @param errorMessage - The error message to check
  * @returns true if the error indicates Ollama is not installed/running
