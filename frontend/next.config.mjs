@@ -12,4 +12,4 @@ const nextConfig = {
   // workarounds — TipTap is pure ESM and Turbopack handles it natively.
 };
 
-module.exports = nextConfig;
+export default nextConfig;
