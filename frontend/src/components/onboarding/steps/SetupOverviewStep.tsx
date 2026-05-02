@@ -113,8 +113,8 @@ export function SetupOverviewStep() {
           <Button
             onClick={handleContinue}
             className="
-              h-11 w-full bg-gray-900 text-white
-              hover:bg-gray-800
+              h-11 w-full bg-foreground text-white
+              hover:bg-foreground/90
             "
           >
             Let&apos;s Go
@@ -125,7 +125,7 @@ export function SetupOverviewStep() {
               target="_blank"
               rel="noopener noreferrer"
               className="
-                text-xs text-muted-foreground
+                text-sm text-muted-foreground
                 hover:underline
               "
             >

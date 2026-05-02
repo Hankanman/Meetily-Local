@@ -1,7 +1,8 @@
 import React from "react";
-import { CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { CheckCircle2, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import type { PermissionRowProps } from "@/types/onboarding";
 
 export function PermissionRow({
@@ -25,12 +26,12 @@ export function PermissionRow({
   return (
     <div
       className={cn(
-        "flex items-center justify-between rounded-2xl border px-6 py-5",
+        "flex items-center justify-between rounded-lg border px-6 py-5",
         "transition-all duration-200",
         isAuthorized
-          ? "border-gray-900 bg-muted"
+          ? "border-foreground bg-muted"
           : isDenied
-            ? "border-red-300 bg-red-50"
+            ? "border-destructive/30 bg-destructive/10"
             : "border-neutral-200 bg-background",
       )}
     >
@@ -43,7 +44,7 @@ export function PermissionRow({
             isAuthorized
               ? "bg-muted"
               : isDenied
-                ? "bg-red-100"
+                ? "bg-destructive/10"
                 : "bg-neutral-50",
           )}
         >
@@ -52,7 +53,7 @@ export function PermissionRow({
               isAuthorized
                 ? "text-foreground"
                 : isDenied
-                  ? "text-red-500"
+                  ? "text-destructive"
                   : "text-neutral-500",
             )}
           >
@@ -65,13 +66,13 @@ export function PermissionRow({
           <div className="truncate font-medium text-neutral-900">{title}</div>
           <div className="text-sm text-muted-foreground">
             {isAuthorized ? (
-              <span className="flex items-center gap-1 text-green-600">
-                <CheckCircle2 className="size-3.5" />
+              <span className="flex items-center gap-1 text-success">
+                <CheckCircle2 className="size-3" />
                 Access Granted
               </span>
             ) : isDenied ? (
-              <span className="flex items-center gap-1 text-red-500">
-                <XCircle className="size-3.5" />
+              <span className="flex items-center gap-1 text-destructive">
+                <XCircle className="size-3" />
                 Access Denied - Please grant in System Settings
               </span>
             ) : (
@@ -91,15 +92,15 @@ export function PermissionRow({
             disabled={isChecking}
             className="min-w-25"
           >
-            {isChecking && <Loader2 className="mr-2 size-4 animate-spin" />}
+            {isChecking && <Spinner size="sm" className="mr-2" />}
             {getButtonText()}
           </Button>
         )}
         {isAuthorized && (
           <div className="
-            flex size-8 items-center justify-center rounded-full bg-green-100
+            flex size-8 items-center justify-center rounded-full bg-success-muted
           ">
-            <CheckCircle2 className="size-4 text-green-600" />
+            <CheckCircle2 className="size-4 text-success" />
           </div>
         )}
       </div>

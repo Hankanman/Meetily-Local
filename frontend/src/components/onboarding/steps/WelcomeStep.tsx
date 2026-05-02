@@ -63,13 +63,13 @@ export function WelcomeStep() {
           <Button
             onClick={goNext}
             className="
-              h-11 w-full bg-gray-900 text-white
-              hover:bg-gray-800
+              h-11 w-full bg-foreground text-white
+              hover:bg-foreground/90
             "
           >
             Get Started
           </Button>
-          <p className="text-center text-xs text-muted-foreground">
+          <p className="text-center text-sm text-muted-foreground">
             Takes less than 3 minutes
           </p>
         </div>

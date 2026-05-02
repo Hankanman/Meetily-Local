@@ -188,7 +188,7 @@ export function SummaryPanel({
             <div className="text-center">
               <div className="
                 mb-4 inline-block size-12 animate-spin rounded-full border-y-2
-                border-blue-500
+                border-info
               "></div>
               <p className="text-muted-foreground">Generating AI Summary...</p>
             </div>
@@ -315,10 +315,10 @@ export function SummaryPanel({
                   mt-4 rounded-lg p-4
                   ${
                   summaryStatus === "error"
-                    ? "bg-red-100 text-red-700"
+                    ? "bg-destructive/10 text-destructive"
                     : summaryStatus === "completed"
-                      ? "bg-green-100 text-green-700"
-                      : "bg-blue-600/15 text-blue-700"
+                      ? "bg-success-muted text-success"
+                      : "bg-info/15 text-info"
                 }
                 `}
               >

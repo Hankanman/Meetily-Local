@@ -175,18 +175,16 @@ export function PermissionsStep() {
             Finish Setup
           </Button>
 
-          <button
+          <Button
+            variant="link"
             onClick={handleSkip}
-            className="
-              text-sm text-neutral-500 transition-colors
-              hover:text-neutral-700
-            "
+            className="text-sm text-neutral-500 hover:text-neutral-700 hover:no-underline"
           >
             I&apos;ll do this later
-          </button>
+          </Button>
 
           {!allPermissionsGranted && (
-            <p className="text-center text-xs text-muted-foreground">
+            <p className="text-center text-sm text-muted-foreground">
               Recording won&apos;t work without permissions. You can grant them later
               in settings.
             </p>

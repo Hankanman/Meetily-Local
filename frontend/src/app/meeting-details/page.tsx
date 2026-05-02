@@ -5,10 +5,11 @@ import { Transcript, Summary } from "@/types";
 import PageContent from "./page-content";
 import { useRouter, useSearchParams } from "next/navigation";
 import { invoke } from "@tauri-apps/api/core";
-import { LoaderIcon } from "lucide-react";
 import { useConfig } from "@/contexts/ConfigContext";
 import { usePaginatedTranscripts } from "@/hooks/usePaginatedTranscripts";
 import { PageLoading } from "@/components/layout/Page";
+import { Spinner } from "@/components/ui/spinner";
+import { Button } from "@/components/ui/button";
 
 interface MeetingDetailsResponse {
   id: string;
@@ -361,16 +362,10 @@ function MeetingDetailsContent() {
     return (
       <PageLoading>
         <div className="text-center">
-          <p className="mb-4 text-red-500">{error}</p>
-          <button
-            onClick={() => router.push("/")}
-            className="
-              rounded-sm bg-blue-500 px-4 py-2 text-white
-              hover:bg-blue-600
-            "
-          >
+          <p className="mb-4 text-destructive">{error}</p>
+          <Button onClick={() => router.push("/")}>
             Go Back
-          </button>
+          </Button>
         </div>
       </PageLoading>
     );
@@ -380,7 +375,7 @@ function MeetingDetailsContent() {
   if (isLoading || isLoadingTranscripts || !meetingDetails) {
     return (
       <PageLoading>
-        <LoaderIcon className="size-6 animate-spin" />
+        <Spinner size="lg" />
       </PageLoading>
     );
   }
@@ -414,7 +409,7 @@ export default function MeetingDetails() {
     <Suspense
       fallback={
         <PageLoading>
-          <LoaderIcon className="size-6 animate-spin" />
+          <Spinner size="lg" />
         </PageLoading>
       }
     >

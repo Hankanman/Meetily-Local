@@ -151,7 +151,7 @@ export function TranscriptSettings({
                 }}
               >
                 <SelectTrigger className="
-                  focus:border-blue-500 focus:ring-1 focus:ring-blue-500
+                  focus:border-info focus:ring-1 focus:ring-info
                 ">
                   <SelectValue placeholder="Select provider" />
                 </SelectTrigger>
@@ -182,7 +182,7 @@ export function TranscriptSettings({
                   }}
                 >
                   <SelectTrigger className="
-                    focus:border-blue-500 focus:ring-1 focus:ring-blue-500
+                    focus:border-info focus:ring-1 focus:ring-info
                   ">
                     <SelectValue placeholder="Select model" />
                   </SelectTrigger>
@@ -236,7 +236,7 @@ export function TranscriptSettings({
                   type={showApiKey ? "text" : "password"}
                   className={`
                     pr-24
-                    focus:border-blue-500 focus:ring-1 focus:ring-blue-500
+                    focus:border-info focus:ring-1 focus:ring-info
                     ${
                     isApiKeyLocked ? "cursor-not-allowed bg-muted" : ""
                   }
@@ -268,7 +268,7 @@ export function TranscriptSettings({
                       transition-colors duration-200
                       ${
                       isLockButtonVibrating
-                        ? "animate-vibrate text-red-500"
+                        ? "animate-vibrate text-destructive"
                         : ""
                     }
                     `}

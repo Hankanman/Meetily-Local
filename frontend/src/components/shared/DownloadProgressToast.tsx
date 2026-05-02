@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
-import { X, Download, Check, Loader2, ArrowBigDownDash } from "lucide-react";
+import { X, Download, Check, ArrowBigDownDash } from "lucide-react";
 
 interface DownloadProgress {
   modelName: string;
@@ -72,9 +72,9 @@ function DownloadToastContent({
           flex size-8 shrink-0 items-center justify-center rounded-full
           ${
           isComplete
-            ? "bg-green-100"
+            ? "bg-success-muted"
             : hasError
-              ? "bg-red-100"
+              ? "bg-destructive/10"
               : isCancelled
                 ? "bg-muted"
                 : "bg-muted"
@@ -82,9 +82,9 @@ function DownloadToastContent({
         `}
       >
         {isComplete ? (
-          <Check className="size-4 text-green-600" />
+          <Check className="size-4 text-success" />
         ) : hasError ? (
-          <X className="size-4 text-red-600" />
+          <X className="size-4 text-destructive" />
         ) : isCancelled ? (
           <X className="size-4 text-muted-foreground" />
         ) : (
@@ -101,13 +101,13 @@ function DownloadToastContent({
         </div>
 
         {hasError ? (
-          <p className="text-xs text-red-600">
+          <p className="text-sm text-destructive">
             {download.error || "Download failed"}
           </p>
         ) : isComplete ? (
-          <p className="text-xs text-green-600">Download complete</p>
+          <p className="text-sm text-success">Download complete</p>
         ) : isCancelled ? (
-          <p className="text-xs text-muted-foreground">Download cancelled</p>
+          <p className="text-sm text-muted-foreground">Download cancelled</p>
         ) : (
           <>
             {/* Progress bar */}
@@ -116,7 +116,7 @@ function DownloadToastContent({
             ">
               <div
                 className="
-                  h-full rounded-full bg-gray-900 transition-all duration-300
+                  h-full rounded-full bg-foreground transition-all duration-300
                 "
                 style={{ width: `${download.progress}%` }}
               />
@@ -124,7 +124,7 @@ function DownloadToastContent({
 
             {/* Progress text */}
             <div className="
-              flex items-center justify-between text-xs text-muted-foreground
+              flex items-center justify-between text-sm text-muted-foreground
             ">
               <span>
                 {download.downloadedMb.toFixed(1)} /{" "}

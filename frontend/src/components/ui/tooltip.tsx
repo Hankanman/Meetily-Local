@@ -29,7 +29,7 @@ const TooltipContent = React.forwardRef<
           data-[side=right]:slide-in-from-left-2
           data-[side=top]:slide-in-from-bottom-2
           z-50 origin-[--radix-tooltip-content-transform-origin] overflow-hidden
-          rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground
+          rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground
         `,
         className,
       )}

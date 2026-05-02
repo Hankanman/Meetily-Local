@@ -36,7 +36,7 @@ const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(
           <DialogTrigger asChild>
             <span className="
               mb-2 block cursor-pointer items-center rounded-full border
-              border-background bg-blue-600/10 text-center text-lg font-semibold
+              border-background bg-info/10 text-center text-lg font-semibold
               text-foreground transition-opacity
               hover:opacity-80
             ">

@@ -54,6 +54,7 @@ import Logo from "../Logo";
 import Info from "../Info";
 import { ComplianceNotification } from "../ComplianceNotification";
 import { Input } from "../ui/input";
+import { Button } from "../ui/button";
 import {
   InputGroup,
   InputGroupAddon,
@@ -530,9 +531,9 @@ const Sidebar: React.FC = () => {
                 disabled={isRecording}
                 className={`
                   p-2
-                  ${isRecording ? "cursor-not-allowed bg-red-500" : `
-                    bg-red-500
-                    hover:bg-red-600
+                  ${isRecording ? "cursor-not-allowed bg-destructive" : `
+                    bg-destructive
+                    hover:bg-destructive
                   `}
                   rounded-full shadow-sm transition-colors duration-150
                 `}
@@ -557,11 +558,11 @@ const Sidebar: React.FC = () => {
                 <button
                   onClick={() => openImportDialog()}
                   className="
-                    rounded-lg bg-blue-600/10 p-2 transition-colors duration-150
-                    hover:bg-blue-600/15
+                    rounded-lg bg-info/10 p-2 transition-colors duration-150
+                    hover:bg-info/15
                   "
                 >
-                  <Upload className="size-5 text-blue-600" />
+                  <Upload className="size-5 text-info" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="right">
@@ -645,14 +646,14 @@ const Sidebar: React.FC = () => {
             group flex items-center transition-all duration-150
             ${
             item.type === "folder" && depth === 0
-              ? "mx-3 mt-3 h-10 rounded-lg p-3 text-lg font-semibold"
+              ? "mx-3 mt-3 h-10 rounded-lg p-3 text-sm font-semibold"
               : `
                 my-0.5 rounded-md px-3 py-2 text-sm
                 ${
                   isActive
-                    ? "bg-blue-600/15 font-medium text-blue-700"
+                    ? "bg-info/15 font-medium text-info"
                     : hasTranscriptMatch
-                      ? "bg-yellow-50"
+                      ? "bg-warning-muted"
                       : "hover:bg-muted"
                 }
                 cursor-pointer
@@ -690,7 +691,7 @@ const Sidebar: React.FC = () => {
                 )}
               </div>
               {searchQuery && item.id === "meetings" && isSearching && (
-                <span className="ml-2 animate-pulse text-xs text-blue-500">
+                <span className="ml-2 animate-pulse text-sm text-info">
                   Searching...
                 </span>
               )}
@@ -703,9 +704,9 @@ const Sidebar: React.FC = () => {
                 {!isMeetingItem && (
                   <div className="
                     mr-2 flex size-5 shrink-0 items-center justify-center
-                    rounded-full bg-blue-600/15
+                    rounded-full bg-info/15
                   ">
-                    <Plus className="size-3 text-blue-600" />
+                    <Plus className="size-3 text-info" />
                   </div>
                 )}
                 {/* `min-w-0` + `truncate` so long titles ellipsize instead of
@@ -739,11 +740,11 @@ const Sidebar: React.FC = () => {
                     }}
                     className="
                       rounded-md p-1
-                      hover:bg-blue-600/10 hover:text-blue-600
+                      hover:bg-info/10 hover:text-info
                     "
                     aria-label="Edit meeting title"
                   >
-                    <Pencil className="size-3.5" />
+                    <Pencil className="size-3" />
                   </button>
                   <button
                     onClick={(e) => {
@@ -752,11 +753,11 @@ const Sidebar: React.FC = () => {
                     }}
                     className="
                       rounded-md p-1
-                      hover:bg-red-50 hover:text-red-600
+                      hover:bg-destructive/10 hover:text-destructive
                     "
                     aria-label="Delete meeting"
                   >
-                    <Trash2 className="size-3.5" />
+                    <Trash2 className="size-3" />
                   </button>
                 </div>
               )}
@@ -764,10 +765,10 @@ const Sidebar: React.FC = () => {
               {/* Show transcript match snippet if available */}
               {hasTranscriptMatch && (
                 <div className="
-                  mt-1 line-clamp-2 rounded-sm border border-yellow-100
-                  bg-yellow-50 p-1.5 text-xs text-muted-foreground
+                  mt-1 line-clamp-2 rounded-md border border-warning/30
+                  bg-warning-muted p-1.5 text-sm text-muted-foreground
                 ">
-                  <span className="font-medium text-yellow-600">Match:</span>{" "}
+                  <span className="font-medium text-warning">Match:</span>{" "}
                   {matchingResult.matchContext}
                 </div>
               )}
@@ -841,7 +842,7 @@ const Sidebar: React.FC = () => {
                 onClick={() => router.push("/")}
                 className="
                   mx-3 mt-3 flex h-10 cursor-pointer items-center rounded-lg p-3
-                  text-lg font-semibold
+                  text-sm font-semibold
                   hover:bg-muted
                 "
               >
@@ -862,7 +863,7 @@ const Sidebar: React.FC = () => {
                   .map((item) => (
                     <div key={item.id}>
                       <div className="
-                        mx-3 mt-3 flex h-10 items-center rounded-lg p-3 text-lg
+                        mx-3 mt-3 flex h-10 items-center rounded-lg p-3 text-sm
                         font-semibold transition-all duration-150
                       ">
                         <NotebookPen className="
@@ -873,7 +874,7 @@ const Sidebar: React.FC = () => {
                           item.id === "meetings" &&
                           isSearching && (
                             <span className="
-                              ml-2 animate-pulse text-xs text-blue-500
+                              ml-2 animate-pulse text-sm text-info
                             ">
                               Searching...
                             </span>
@@ -906,16 +907,16 @@ const Sidebar: React.FC = () => {
 
         {/* Footer */}
         {!isCollapsed && (
-          <div className="shrink-0 border-t border-gray-100 p-2">
+          <div className="shrink-0 border-t border-border p-2">
             <button
               onClick={handleRecordingToggle}
               disabled={isRecording}
               className={`
                 flex w-full items-center justify-center px-3 py-2 text-sm
                 font-medium text-white
-                ${isRecording ? `cursor-not-allowed bg-red-300` : `
-                  bg-red-500
-                  hover:bg-red-600
+                ${isRecording ? `cursor-not-allowed bg-destructive/60` : `
+                  bg-destructive
+                  hover:bg-destructive
                 `}
                 rounded-lg shadow-sm transition-colors
               `}
@@ -938,9 +939,9 @@ const Sidebar: React.FC = () => {
                 onClick={() => openImportDialog()}
                 className="
                   mt-1 flex w-full items-center justify-center rounded-lg
-                  bg-blue-600/15 px-3 py-2 text-sm font-medium text-foreground
+                  bg-info/15 px-3 py-2 text-sm font-medium text-foreground
                   shadow-sm transition-colors
-                  hover:bg-blue-600/25
+                  hover:bg-info/25
                 "
               >
                 <Upload className="mr-2 size-4" />
@@ -948,21 +949,18 @@ const Sidebar: React.FC = () => {
               </button>
             )}
 
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
               onClick={() => router.push("/settings")}
-              className="
-                my-1 flex w-full items-center justify-center rounded-lg bg-muted
-                px-3 py-1.5 text-sm font-medium text-foreground shadow-sm
-                transition-colors
-                hover:bg-muted
-              "
+              className="my-1 w-full"
             >
               <Settings className="mr-2 size-4" />
               <span>Settings</span>
-            </button>
+            </Button>
             <Info isCollapsed={isCollapsed} />
             <div className="
-              flex w-full items-center justify-center px-3 py-1 text-xs
+              flex w-full items-center justify-center px-3 py-1 text-sm
               text-muted-foreground/70
             ">
               v0.3.0
@@ -1013,7 +1011,7 @@ const Sidebar: React.FC = () => {
                   }}
                   className="
                     w-full rounded-md border border-border px-3 py-2
-                    focus:border-transparent focus:ring-2 focus:ring-blue-500
+                    focus:border-transparent focus:ring-2 focus:ring-info
                     focus:outline-none
                   "
                   placeholder="Enter meeting title"
@@ -1023,26 +1021,15 @@ const Sidebar: React.FC = () => {
             </div>
           </div>
           <DialogFooter>
-            <button
-              onClick={handleEditCancel}
-              className="
-                rounded-md bg-muted px-4 py-2 text-sm font-medium
-                text-foreground transition-colors
-                hover:bg-muted
-              "
-            >
+            <Button variant="secondary" onClick={handleEditCancel}>
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               onClick={handleEditConfirm}
-              className="
-                rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white
-                transition-colors
-                hover:bg-blue-700
-              "
+              className="bg-info text-white hover:bg-info/90"
             >
               Save
-            </button>
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

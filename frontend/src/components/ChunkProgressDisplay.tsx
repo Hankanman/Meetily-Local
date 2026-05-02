@@ -1,4 +1,5 @@
 import React from "react";
+import { Button } from "@/components/ui/button";
 
 export interface ChunkStatus {
   chunk_id: number;
@@ -77,11 +78,11 @@ export function ChunkProgressDisplay({
   const getChunkStatusColor = (status: ChunkStatus["status"]) => {
     switch (status) {
       case "completed":
-        return "text-green-600 bg-green-50 border-green-200";
+        return "text-success bg-success-muted border-success";
       case "processing":
-        return "text-blue-600 bg-blue-600/10 border-blue-500/30";
+        return "text-info bg-info/10 border-info/30";
       case "failed":
-        return "text-red-600 bg-red-50 border-red-200";
+        return "text-destructive bg-destructive/10 border-destructive/30";
       case "pending":
       default:
         return "text-muted-foreground bg-muted border-border";
@@ -103,8 +104,8 @@ export function ChunkProgressDisplay({
           </h3>
           {isPaused && (
             <span className="
-              rounded-full bg-yellow-100 px-2 py-1 text-xs font-medium
-              text-yellow-800
+              rounded-full bg-warning-muted px-2 py-1 text-sm font-medium
+              text-warning
             ">
               Paused
             </span>
@@ -113,43 +114,34 @@ export function ChunkProgressDisplay({
 
         <div className="flex items-center space-x-2">
           {!isPaused ? (
-            <button
+            <Button
+              size="sm"
               onClick={onPause}
-              className="
-                rounded-sm bg-yellow-500 px-3 py-1 text-sm text-white
-                transition-colors
-                hover:bg-yellow-600
-              "
+              className="bg-warning text-white hover:bg-warning/90"
               disabled={
                 progress.processing_chunks === 0 &&
                 progress.completed_chunks === progress.total_chunks
               }
             >
               Pause
-            </button>
+            </Button>
           ) : (
-            <button
+            <Button
+              size="sm"
               onClick={onResume}
-              className="
-                rounded-sm bg-green-500 px-3 py-1 text-sm text-white
-                transition-colors
-                hover:bg-green-600
-              "
+              className="bg-success text-white hover:bg-success/90"
             >
               Resume
-            </button>
+            </Button>
           )}
 
-          <button
+          <Button
+            size="sm"
+            variant="destructive"
             onClick={onCancel}
-            className="
-              rounded-sm bg-red-500 px-3 py-1 text-sm text-white
-              transition-colors
-              hover:bg-red-600
-            "
           >
             Cancel
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -168,7 +160,7 @@ export function ChunkProgressDisplay({
         <div className="h-2 w-full rounded-full bg-muted">
           <div
             className="
-              h-2 rounded-full bg-blue-600 transition-all duration-300 ease-out
+              h-2 rounded-full bg-info transition-all duration-300 ease-out
             "
             style={{ width: `${completionPercentage}%` }}
           />
@@ -178,14 +170,14 @@ export function ChunkProgressDisplay({
       {/* Processing Stats */}
       <div className="mb-4 grid grid-cols-4 gap-4 text-sm">
         <div className="text-center">
-          <div className="text-lg font-semibold text-green-600">
+          <div className="text-lg font-semibold text-success">
             {progress.completed_chunks}
           </div>
           <div className="text-muted-foreground">Completed</div>
         </div>
 
         <div className="text-center">
-          <div className="text-lg font-semibold text-blue-600">
+          <div className="text-lg font-semibold text-info">
             {progress.processing_chunks}
           </div>
           <div className="text-muted-foreground">Processing</div>
@@ -202,7 +194,7 @@ export function ChunkProgressDisplay({
         </div>
 
         <div className="text-center">
-          <div className="text-lg font-semibold text-red-600">
+          <div className="text-lg font-semibold text-destructive">
             {progress.failed_chunks}
           </div>
           <div className="text-muted-foreground">Failed</div>
@@ -213,11 +205,11 @@ export function ChunkProgressDisplay({
       {progress.estimated_remaining_ms &&
         progress.estimated_remaining_ms > 0 && (
           <div className="
-            mb-4 rounded-lg border border-blue-500/30 bg-blue-600/10 p-3
+            mb-4 rounded-lg border border-info/30 bg-info/10 p-3
           ">
             <div className="flex items-center space-x-2">
-              <span className="text-blue-600">⏱️</span>
-              <span className="text-sm text-blue-800">
+              <span className="text-info">⏱️</span>
+              <span className="text-sm text-info">
                 Estimated time remaining:{" "}
                 {formatTimeRemaining(progress.estimated_remaining_ms)}
               </span>
@@ -240,7 +232,7 @@ export function ChunkProgressDisplay({
               <div
                 key={chunk.chunk_id}
                 className={`
-                  rounded-sm border p-2 text-xs
+                  rounded-md border p-2 text-sm
                   ${getChunkStatusColor(chunk.status)}
                 `}
               >
@@ -258,7 +250,7 @@ export function ChunkProgressDisplay({
                   {chunk.status === "processing" && (
                     <div className="flex items-center space-x-1">
                       <div className="
-                        size-3 animate-spin rounded-full border border-blue-600
+                        size-3 animate-spin rounded-full border border-info
                         border-t-transparent
                       "></div>
                     </div>
@@ -266,13 +258,13 @@ export function ChunkProgressDisplay({
                 </div>
 
                 {chunk.text_preview && (
-                  <div className="mt-1 truncate text-xs text-foreground">
+                  <div className="mt-1 truncate text-sm text-foreground">
                     &quot;{chunk.text_preview}&quot;
                   </div>
                 )}
 
                 {chunk.error_message && (
-                  <div className="mt-1 text-xs text-red-700">
+                  <div className="mt-1 text-sm text-destructive">
                     Error: {chunk.error_message}
                   </div>
                 )}
@@ -285,11 +277,11 @@ export function ChunkProgressDisplay({
       {progress.completed_chunks === progress.total_chunks &&
         progress.total_chunks > 0 && (
           <div className="
-            mt-4 rounded-lg border border-green-200 bg-green-50 p-3
+            mt-4 rounded-lg border border-success bg-success-muted p-3
           ">
             <div className="flex items-center space-x-2">
-              <span className="text-green-600">🎉</span>
-              <span className="text-sm font-medium text-green-800">
+              <span className="text-success">🎉</span>
+              <span className="text-sm font-medium text-success">
                 Processing completed! All {progress.total_chunks} chunks have
                 been transcribed.
               </span>
@@ -329,15 +321,15 @@ export function ChunkProgressMini({
 
       <div className="mb-2 h-1.5 w-full rounded-full bg-muted">
         <div
-          className="h-1.5 rounded-full bg-blue-600 transition-all duration-300"
+          className="h-1.5 rounded-full bg-info transition-all duration-300"
           style={{ width: `${completionPercentage}%` }}
         />
       </div>
 
-      <div className="text-xs text-muted-foreground">
+      <div className="text-sm text-muted-foreground">
         {progress.completed_chunks} / {progress.total_chunks} chunks
         {progress.processing_chunks > 0 && (
-          <span className="ml-2 text-blue-600">
+          <span className="ml-2 text-info">
             ({progress.processing_chunks} processing)
           </span>
         )}

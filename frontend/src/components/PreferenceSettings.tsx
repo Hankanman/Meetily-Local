@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Switch } from "./ui/switch";
+import { Button } from "./ui/button";
 import { FolderOpen } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext";
@@ -174,7 +175,7 @@ export function PreferenceSettings() {
           {/* Database Location */}
           {/* <div className="p-4 border rounded-lg bg-muted">
             <div className="font-medium mb-2">Database</div>
-            <div className="text-sm text-muted-foreground mb-3 break-all font-mono text-xs">
+            <div className="text-sm text-muted-foreground mb-3 break-all font-mono text-sm">
               {storageLocations?.database || 'Loading...'}
             </div>
             <button
@@ -189,7 +190,7 @@ export function PreferenceSettings() {
           {/* Models Location */}
           {/* <div className="p-4 border rounded-lg bg-muted">
             <div className="font-medium mb-2">Whisper Models</div>
-            <div className="text-sm text-muted-foreground mb-3 break-all font-mono text-xs">
+            <div className="text-sm text-muted-foreground mb-3 break-all font-mono text-sm">
               {storageLocations?.models || 'Loading...'}
             </div>
             <button
@@ -211,22 +212,19 @@ export function PreferenceSettings() {
             >
               {storageLocations?.recordings || "Loading..."}
             </div>
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => handleOpenFolder("recordings")}
-              className="
-                flex items-center gap-2 rounded-md border border-border px-3
-                py-2 text-sm transition-colors
-                hover:bg-muted
-              "
             >
               <FolderOpen className="size-4" />
               Open Folder
-            </button>
+            </Button>
           </div>
         </div>
 
-        <div className="mt-4 rounded-md bg-blue-600/10 p-3">
-          <p className="text-xs text-blue-800">
+        <div className="mt-4 rounded-md bg-info/10 p-3">
+          <p className="text-sm text-info">
             <strong>Note:</strong> Database and models are stored together in
             your application data directory for unified management.
           </p>

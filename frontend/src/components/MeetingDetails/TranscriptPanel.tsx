@@ -114,7 +114,7 @@ export function TranscriptPanel({
             className="
               min-h-20 w-full resize-y rounded-md border border-border
               bg-background px-3 py-2 text-sm shadow-sm
-              focus:border-blue-500 focus:ring-1 focus:ring-blue-500
+              focus:border-info focus:ring-1 focus:ring-info
               focus:outline-none
             "
             value={customPrompt}

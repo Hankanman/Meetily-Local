@@ -1147,7 +1147,7 @@ export function ModelSettingsModal({
                 placeholder="http://localhost:8000/v1"
                 className="mt-1"
               />
-              <p className="mt-1 text-xs text-muted-foreground">
+              <p className="mt-1 text-sm text-muted-foreground">
                 Base URL of the OpenAI-compatible API
               </p>
             </div>
@@ -1161,7 +1161,7 @@ export function ModelSettingsModal({
                 placeholder="gpt-4, llama-3-70b, etc."
                 className="mt-1"
               />
-              <p className="mt-1 text-xs text-muted-foreground">
+              <p className="mt-1 text-sm text-muted-foreground">
                 Model identifier to use for requests
               </p>
             </div>
@@ -1303,7 +1303,7 @@ export function ModelSettingsModal({
                     onClick={() => setIsApiKeyLocked(!isApiKeyLocked)}
                     className={
                       isLockButtonVibrating
-                        ? "animate-vibrate text-red-500"
+                        ? "animate-vibrate text-destructive"
                         : ""
                     }
                     title={
@@ -1371,19 +1371,19 @@ export function ModelSettingsModal({
                       className={cn(
                         "pr-10",
                         endpointValidationState === "invalid" &&
-                          "border-red-500",
+                          "border-destructive/30",
                       )}
                     />
                     {endpointValidationState === "valid" && (
                       <CheckCircle2 className="
                         absolute top-1/2 right-3 size-5 -translate-y-1/2
-                        text-green-500
+                        text-success
                       " />
                     )}
                     {endpointValidationState === "invalid" && (
                       <XCircle className="
                         absolute top-1/2 right-3 size-5 -translate-y-1/2
-                        text-red-500
+                        text-destructive
                       " />
                     )}
                   </div>
@@ -1409,8 +1409,8 @@ export function ModelSettingsModal({
                   </Button>
                 </div>
                 {ollamaEndpointChanged && !error && (
-                  <Alert className="mt-3 border-yellow-500 bg-yellow-50">
-                    <AlertDescription className="text-yellow-800">
+                  <Alert className="mt-3 border-warning/30 bg-warning-muted">
+                    <AlertDescription className="text-warning">
                       Endpoint changed. Please click &quot;Fetch Models&quot; to load
                       models from the new endpoint before saving.
                     </AlertDescription>
@@ -1428,7 +1428,7 @@ export function ModelSettingsModal({
               {lastFetchedEndpoint && models.length > 0 && (
                 <div className="flex items-center gap-2 text-sm">
                   <span className="text-muted-foreground">Using:</span>
-                  <code className="rounded-sm bg-muted px-2 py-1 text-xs">
+                  <code className="rounded-md bg-muted px-2 py-1 text-sm">
                     {lastFetchedEndpoint || "http://localhost:11434"}
                   </code>
                 </div>
@@ -1469,8 +1469,8 @@ export function ModelSettingsModal({
                         })
                       }
                       className="
-                        w-full bg-blue-600
-                        hover:bg-blue-700
+                        w-full bg-info
+                        hover:bg-info
                       "
                     >
                       <ExternalLink className="mr-2 size-4" />
@@ -1521,12 +1521,12 @@ export function ModelSettingsModal({
                                 mb-2 flex items-center justify-between
                               ">
                                 <span className="
-                                  text-sm font-medium text-blue-600
+                                  text-sm font-medium text-info
                                 ">
                                   Downloading gemma3:1b
                                 </span>
                                 <span className="
-                                  text-sm font-semibold text-blue-600
+                                  text-sm font-semibold text-info
                                 ">
                                   {Math.round(getProgress("gemma3:1b")!)}%
                                 </span>
@@ -1580,8 +1580,8 @@ export function ModelSettingsModal({
                               `,
                               modelConfig.model === model.name
                                 ? `
-                                  background-blue-100 border-blue-500 ring-1
-                                  ring-blue-500
+                                  background-blue-100 border-info ring-1
+                                  ring-info
                                 `
                                 : "hover:bg-muted/50",
                               !modelIsDownloading && "cursor-pointer",
@@ -1612,12 +1612,12 @@ export function ModelSettingsModal({
                                   mb-2 flex items-center justify-between
                                 ">
                                   <span className="
-                                    text-sm font-medium text-blue-600
+                                    text-sm font-medium text-info
                                   ">
                                     Downloading...
                                   </span>
                                   <span className="
-                                    text-sm font-semibold text-blue-600
+                                    text-sm font-semibold text-info
                                   ">
                                     {Math.round(progress)}%
                                   </span>
@@ -1665,7 +1665,7 @@ export function ModelSettingsModal({
       {/* <div className="mt-6 pt-6 border-t border-border">
         <div className="flex items-center justify-between">
           <div className="flex-1">
-            <Label htmlFor="auto-generate" className="text-base font-medium">
+            <Label htmlFor="auto-generate" className="text-sm font-medium">
               Auto-generate summaries
             </Label>
             <p className="text-sm text-muted-foreground mt-1">
@@ -1685,14 +1685,14 @@ export function ModelSettingsModal({
           className={cn(
             `
               rounded-md px-4 text-sm font-medium text-white
-              focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
+              focus:ring-2 focus:ring-info focus:ring-offset-2
               focus:outline-none
             `,
             isDoneDisabled
               ? "cursor-not-allowed bg-muted"
               : `
-                bg-blue-600
-                hover:bg-blue-700
+                bg-info
+                hover:bg-info
               `,
           )}
           onClick={handleSave}

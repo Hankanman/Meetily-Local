@@ -2,7 +2,8 @@
 
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
-import { Copy, Save, Loader2, Search, FolderOpen } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
+import { Copy, Save, Search, FolderOpen } from "lucide-react";
 
 interface SummaryUpdaterButtonGroupProps {
   isSaving: boolean;
@@ -31,7 +32,7 @@ export function SummaryUpdaterButtonGroup({
         size="sm"
         className={
           isDirty
-            ? "border-green-600 bg-green-600 text-white hover:bg-green-700"
+            ? "border-success bg-success text-white hover:bg-success"
             : ""
         }
         title={isSaving ? "Saving" : "Save Changes"}
@@ -40,7 +41,7 @@ export function SummaryUpdaterButtonGroup({
       >
         {isSaving ? (
           <>
-            <Loader2 className="animate-spin" />
+            <Spinner size="sm" />
             <span className="
               hidden
               lg:inline

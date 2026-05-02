@@ -74,7 +74,7 @@ export function OnboardingContainer({
                     canGoPrevious && step !== 1
                       ? `
                         text-foreground
-                        hover:scale-110 hover:bg-muted hover:shadow-md
+                        hover:scale-110 hover:bg-muted hover:shadow-sm
                       `
                       : "cursor-not-allowed opacity-0",
                   )}
@@ -94,7 +94,7 @@ export function OnboardingContainer({
                     canGoNext && step !== totalSteps
                       ? `
                         text-foreground
-                        hover:scale-110 hover:bg-muted hover:shadow-md
+                        hover:scale-110 hover:bg-muted hover:shadow-sm
                       `
                       : "cursor-not-allowed opacity-0",
                   )}
@@ -116,13 +116,13 @@ export function OnboardingContainer({
         {/* Header - Fixed */}
         <div className="mb-4 shrink-0 space-y-3 text-center">
           <h1 className="
-            animate-fade-in-up text-4xl font-semibold text-foreground
+            animate-fade-in-up text-2xl font-semibold text-foreground
           ">
             {title}
           </h1>
           {description && (
             <p className="
-              animate-fade-in-up mx-auto max-w-md text-base
+              animate-fade-in-up mx-auto max-w-md text-sm
               text-muted-foreground delay-75
             ">
               {description}

@@ -13,6 +13,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useTranscriptStreaming } from "@/hooks/useTranscriptStreaming";
 import { ConfidenceIndicator } from "./ConfidenceIndicator";
+import { Spinner } from "./ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
@@ -86,7 +87,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
         <Tooltip>
           <TooltipTrigger>
             <span className="
-              mt-1 min-w-12.5 shrink-0 text-xs text-muted-foreground/70
+              mt-1 min-w-12.5 shrink-0 text-sm text-muted-foreground/70
             ">
               {formatRecordingTime(timestamp)}
             </span>
@@ -103,12 +104,12 @@ const TranscriptSegment = memo(function TranscriptSegment({
         <div className="flex-1">
           {isStreaming ? (
             <div className="rounded-lg border border-border bg-muted px-3 py-2">
-              <p className="text-base/relaxed text-foreground">
+              <p className="text-sm/relaxed text-foreground">
                 {displayText}
               </p>
             </div>
           ) : (
-            <p className="text-base/relaxed text-foreground">
+            <p className="text-sm/relaxed text-foreground">
               {displayText}
             </p>
           )}
@@ -271,14 +272,14 @@ export const VirtualizedTranscriptView: React.FC<
                   <div
                     className={`
                       size-3 rounded-full
-                      ${isPaused ? `bg-orange-500` : "animate-pulse bg-blue-500"}
+                      ${isPaused ? `bg-orange-500` : "animate-pulse bg-info"}
                     `}
                   ></div>
                 </div>
                 <p className="text-sm text-muted-foreground">
                   {isPaused ? "Recording paused" : "Listening for speech..."}
                 </p>
-                <p className="mt-1 text-xs text-muted-foreground/70">
+                <p className="mt-1 text-sm text-muted-foreground/70">
                   {isPaused
                     ? "Click resume to continue recording"
                     : "Speak to see live transcription"}
@@ -287,7 +288,7 @@ export const VirtualizedTranscriptView: React.FC<
             ) : (
               <>
                 <p className="text-lg font-semibold">Welcome to meetily!</p>
-                <p className="mt-1 text-xs">
+                <p className="mt-1 text-sm">
                   Start recording to see live transcription
                 </p>
               </>
@@ -345,10 +346,7 @@ export const VirtualizedTranscriptView: React.FC<
                     <div className="
                       flex items-center gap-2 text-muted-foreground
                     ">
-                      <div className="
-                        size-4 animate-spin rounded-full border-2 border-border
-                        border-t-gray-600
-                      " />
+                      <Spinner size="sm" />
                       <span className="text-sm">Loading more...</span>
                     </div>
                   ) : hasMore && totalCount > 0 ? (
@@ -371,7 +369,7 @@ export const VirtualizedTranscriptView: React.FC<
                   exit={{ opacity: 0 }}
                   className="mt-4 flex items-center gap-2 text-muted-foreground"
                 >
-                  <div className="size-2 animate-pulse rounded-full bg-blue-500"></div>
+                  <div className="size-2 animate-pulse rounded-full bg-info"></div>
                   <span className="text-sm">Listening...</span>
                 </motion.div>
               )}
@@ -415,10 +413,7 @@ export const VirtualizedTranscriptView: React.FC<
                     <div className="
                       flex items-center gap-2 text-muted-foreground
                     ">
-                      <div className="
-                        size-4 animate-spin rounded-full border-2 border-border
-                        border-t-gray-600
-                      " />
+                      <Spinner size="sm" />
                       <span className="text-sm">Loading more...</span>
                     </div>
                   ) : hasMore && totalCount > 0 ? (
@@ -441,7 +436,7 @@ export const VirtualizedTranscriptView: React.FC<
                   exit={{ opacity: 0 }}
                   className="mt-4 flex items-center gap-2 text-muted-foreground"
                 >
-                  <div className="size-2 animate-pulse rounded-full bg-blue-500"></div>
+                  <div className="size-2 animate-pulse rounded-full bg-info"></div>
                   <span className="text-sm">Listening...</span>
                 </motion.div>
               )}

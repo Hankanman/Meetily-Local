@@ -41,7 +41,7 @@ export function TitleBar() {
     >
       <div
         data-tauri-drag-region
-        className="flex flex-1 items-center px-3 text-xs text-muted-foreground"
+        className="flex flex-1 items-center px-3 text-sm text-muted-foreground"
       >
         Meetily
       </div>
@@ -50,7 +50,7 @@ export function TitleBar() {
           ariaLabel="Minimize"
           onClick={() => win().minimize()}
         >
-          <Minus className="size-3.5" />
+          <Minus className="size-3" />
         </TitleBarButton>
         <TitleBarButton
           ariaLabel={isMaximized ? "Restore" : "Maximize"}
@@ -67,7 +67,7 @@ export function TitleBar() {
           onClick={() => win().close()}
           variant="danger"
         >
-          <X className="size-3.5" />
+          <X className="size-3" />
         </TitleBarButton>
       </div>
     </div>
@@ -94,7 +94,7 @@ function TitleBarButton({
         flex h-full w-11 items-center justify-center text-muted-foreground
         transition-colors
         ${variant === "danger"
-          ? "hover:bg-red-600 hover:text-white"
+          ? "hover:bg-destructive hover:text-white"
           : "hover:bg-muted hover:text-foreground"
         }
       `}

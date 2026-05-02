@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Mic, Sparkles, Check, Loader2, Download } from "lucide-react";
+import { Mic, Sparkles, Check, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { OnboardingContainer } from "../OnboardingContainer";
 import { useOnboarding } from "@/contexts/OnboardingContext";
 import { toast } from "sonner";
@@ -403,7 +404,7 @@ export function DownloadProgressStep() {
     state: DownloadState,
     modelSize: string,
   ) => (
-    <div className="rounded-xl border border-border bg-background p-5">
+    <div className="rounded-lg border border-border bg-background p-5">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="
@@ -421,17 +422,17 @@ export function DownloadProgressStep() {
             <span className="text-sm text-muted-foreground">Waiting...</span>
           )}
           {state.status === "downloading" && (
-            <Loader2 className="size-5 animate-spin text-foreground" />
+            <Spinner size="md" className="text-foreground" />
           )}
           {state.status === "completed" && (
             <div className="
-              flex size-6 items-center justify-center rounded-full bg-green-100
+              flex size-6 items-center justify-center rounded-full bg-success-muted
             ">
-              <Check className="size-4 text-green-600" />
+              <Check className="size-4 text-success" />
             </div>
           )}
           {state.status === "error" && (
-            <span className="text-sm text-red-500">Failed</span>
+            <span className="text-sm text-destructive">Failed</span>
           )}
         </div>
       </div>
@@ -467,22 +468,17 @@ export function DownloadProgressStep() {
       )}
 
       {state.status === "error" && state.error && (
-        <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-3">
-          <p className="text-sm font-medium text-red-600">Download Error</p>
-          <p className="mt-1 text-xs text-red-500">{state.error}</p>
+        <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 p-3">
+          <p className="text-sm font-medium text-destructive">Download Error</p>
+          <p className="mt-1 text-sm text-destructive">{state.error}</p>
           {(title === "Transcription Engine" || title === "Summary Engine") && (
-            <button
+            <Button
               onClick={
                 title === "Transcription Engine"
                   ? handleRetryDownload
                   : handleRetrySummaryDownload
               }
-              className="
-                mt-3 flex h-9 w-full items-center justify-center gap-2
-                rounded-md bg-gray-900 px-4 text-sm font-medium text-white
-                transition-colors
-                hover:bg-gray-800
-              "
+              className="mt-3 w-full bg-foreground text-white hover:bg-foreground/90"
             >
               <svg
                 className="size-4"
@@ -498,7 +494,7 @@ export function DownloadProgressStep() {
                 />
               </svg>
               Try Again
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -565,13 +561,13 @@ export function DownloadProgressStep() {
             onClick={handleContinue}
             disabled={!parakeetDownloaded || isCompleting}
             className="
-              h-11 w-full bg-gray-900 text-white
-              hover:bg-gray-800
+              h-11 w-full bg-foreground text-white
+              hover:bg-foreground/90
               disabled:cursor-not-allowed disabled:opacity-50
             "
           >
             {isCompleting || !parakeetDownloaded ? (
-              <Loader2 className="mr-2 size-4 animate-spin" />
+              <Spinner size="sm" className="mr-2" />
             ) : (
               "Continue"
             )}

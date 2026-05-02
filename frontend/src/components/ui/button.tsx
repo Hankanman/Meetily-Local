@@ -40,26 +40,24 @@ const buttonVariants = cva(
           text-primary underline-offset-4
           hover:underline
         `,
-        green: `
-          bg-green-600 text-white
-          hover:bg-green-600
+        // Semantic action variants — use these instead of the legacy
+        // green/blue/red names so the colors track the .dark theme flip.
+        success: `
+          bg-success text-success-foreground shadow-sm
+          hover:bg-success/90
         `,
-        blue: `
-          bg-blue-500 text-white
-          hover:bg-blue-600
+        info: `
+          bg-info text-info-foreground shadow-sm
+          hover:bg-info/90
         `,
-        red: `
-          bg-red-500 text-white
-          hover:bg-red-600
-        `,
-        gray: `
-          border border-input bg-muted shadow-sm
-          hover:bg-muted hover:text-accent-foreground
+        warning: `
+          bg-warning text-warning-foreground shadow-sm
+          hover:bg-warning/90
         `,
       },
       size: {
         default: "h-9 px-4 py-2",
-        sm: "h-8 rounded-md px-3 text-xs",
+        sm: "h-8 rounded-md px-3 text-sm",
         lg: "h-10 rounded-md px-8",
         icon: "size-9",
       },

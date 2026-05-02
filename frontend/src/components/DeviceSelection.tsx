@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 
 export interface AudioDevice {
   name: string;
@@ -197,9 +198,9 @@ export function DeviceSelection({
     return (
       <div className="space-y-4 p-4">
         <div className="animate-pulse">
-          <div className="mb-4 h-4 w-1/3 rounded-sm bg-muted"></div>
-          <div className="mb-3 h-10 rounded-sm bg-muted"></div>
-          <div className="h-10 rounded-sm bg-muted"></div>
+          <div className="mb-4 h-4 w-1/3 rounded-md bg-muted"></div>
+          <div className="mb-3 h-10 rounded-md bg-muted"></div>
+          <div className="h-10 rounded-md bg-muted"></div>
         </div>
       </div>
     );
@@ -214,24 +215,21 @@ export function DeviceSelection({
           {/* <button */}
           {/*   onClick={toggleAudioLevelMonitoring} */}
           {/*   disabled={disabled || inputDevices.length === 0} */}
-          {/*   className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${ */}
+          {/*   className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${ */}
           {/*     isMonitoring */}
-          {/*       ? 'bg-red-100 text-red-700 hover:bg-red-200' */}
-          {/*       : 'bg-green-100 text-green-700 hover:bg-green-200' */}
+          {/*       ? 'bg-destructive/10 text-destructive hover:bg-destructive/10' */}
+          {/*       : 'bg-success-muted text-success hover:bg-success-muted' */}
           {/*   } disabled:pointer-events-none disabled:opacity-50`} */}
           {/*   title={inputDevices.length === 0 ? 'No microphones available to test' : ''} */}
           {/* > */}
           {/*   {isMonitoring ? 'Stop Test' : 'Test Mic'} */}
           {/* </button> */}
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={handleRefresh}
             disabled={refreshing || disabled}
-            className="
-              inline-flex size-8 items-center justify-center rounded-md p-0
-              text-sm font-medium transition-colors
-              hover:bg-muted
-              disabled:pointer-events-none disabled:opacity-50
-            "
+            className="size-8"
           >
             <RefreshCw
               className={`
@@ -239,14 +237,14 @@ export function DeviceSelection({
                 ${refreshing ? "animate-spin" : ""}
               `}
             />
-          </button>
+          </Button>
         </div>
       </div>
 
       {error && (
         <div
           className="
-          rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700
+          rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive
         "
         >
           {error}
@@ -286,15 +284,15 @@ export function DeviceSelection({
             </SelectContent>
           </Select>
           {inputDevices.length === 0 && (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-sm text-muted-foreground">
               No microphone devices found
             </p>
           )}
 
           {/* Audio Level Meters for Input Devices */}
           {showLevels && inputDevices.length > 0 && (
-            <div className="space-y-2 border-t border-gray-100 pt-2">
-              <p className="text-xs font-medium text-muted-foreground">
+            <div className="space-y-2 border-t border-border pt-2">
+              <p className="text-sm font-medium text-muted-foreground">
                 Microphone Levels:
               </p>
               {inputDevices.map((device) => {
@@ -304,7 +302,7 @@ export function DeviceSelection({
                     <div className="flex items-center justify-between">
                       <span
                         className="
-                        max-w-50 truncate text-xs text-muted-foreground
+                        max-w-50 truncate text-sm text-muted-foreground
                       "
                       >
                         {device.name}
@@ -367,14 +365,14 @@ export function DeviceSelection({
           </Select>
 
           {outputDevices.length === 0 && (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-sm text-muted-foreground">
               No system audio devices found
             </p>
           )}
 
           {/* Backend Selection - available on all platforms */}
           {!disabled && (
-            <div className="border-t border-gray-100 pt-3">
+            <div className="border-t border-border pt-3">
               <AudioBackendSelector disabled={disabled} />
             </div>
           )}
@@ -382,7 +380,7 @@ export function DeviceSelection({
       </div>
 
       {/* Info text */}
-      <div className="space-y-1 text-xs text-muted-foreground">
+      <div className="space-y-1 text-sm text-muted-foreground">
         <p>
           • <strong>Microphone:</strong> Records your voice and ambient sound
         </p>

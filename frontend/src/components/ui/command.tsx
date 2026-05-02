@@ -106,7 +106,7 @@ const CommandGroup = React.forwardRef<
       `
         overflow-hidden p-1 text-foreground
         **:[[cmdk-group-heading]]:px-2 **:[[cmdk-group-heading]]:py-1.5
-        **:[[cmdk-group-heading]]:text-xs **:[[cmdk-group-heading]]:font-medium
+        **:[[cmdk-group-heading]]:text-sm **:[[cmdk-group-heading]]:font-medium
         **:[[cmdk-group-heading]]:text-muted-foreground
       `,
       className,
@@ -159,7 +159,7 @@ const CommandShortcut = ({
   return (
     <span
       className={cn(
-        "ml-auto text-xs tracking-widest text-muted-foreground",
+        "ml-auto text-sm tracking-widest text-muted-foreground",
         className,
       )}
       {...props}

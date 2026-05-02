@@ -181,7 +181,7 @@ export function TranscriptRecovery({
                           {meeting.title}
                         </p>
                         <p className="
-                          mt-1 flex items-center gap-1 text-xs
+                          mt-1 flex items-center gap-1 text-sm
                           text-muted-foreground
                         ">
                           <Clock className="size-3" />
@@ -190,7 +190,7 @@ export function TranscriptRecovery({
                           })}
                         </p>
                         <p className="
-                          mt-1 flex items-center gap-1 text-xs
+                          mt-1 flex items-center gap-1 text-sm
                           text-muted-foreground
                         ">
                           <FileText className="size-3" />
@@ -201,13 +201,13 @@ export function TranscriptRecovery({
                       {meeting.folderPath ? (
                         <span title="Audio available">
                           <CheckCircle2 className="
-                            size-4 shrink-0 text-green-500
+                            size-4 shrink-0 text-success
                           " />
                         </span>
                       ) : (
                         <span title="No audio">
                           <AlertCircle className="
-                            size-4 shrink-0 text-yellow-500
+                            size-4 shrink-0 text-warning
                           " />
                         </span>
                       )}
@@ -239,13 +239,13 @@ export function TranscriptRecovery({
                         {selectedMeeting.transcriptCount} transcripts
                       </span>
                       {selectedMeeting.folderPath ? (
-                        <span className="flex items-center gap-1 text-green-600">
+                        <span className="flex items-center gap-1 text-success">
                           <CheckCircle2 className="size-4" />
                           Audio available
                         </span>
                       ) : (
                         <span className="
-                          flex items-center gap-1 text-yellow-600
+                          flex items-center gap-1 text-warning
                         ">
                           <AlertCircle className="size-4" />
                           No audio

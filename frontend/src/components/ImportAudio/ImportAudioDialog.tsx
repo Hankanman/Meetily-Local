@@ -8,7 +8,6 @@ import React, {
 import {
   Upload,
   Globe,
-  Loader2,
   AlertCircle,
   CheckCircle2,
   X,
@@ -28,6 +27,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
 import { Input } from "../ui/input";
 import {
   Select,
@@ -260,22 +260,22 @@ export function ImportAudioDialog({
           <DialogTitle className="flex items-center gap-2">
             {isProcessing ? (
               <>
-                <Loader2 className="size-5 animate-spin text-blue-600" />
+                <Spinner size="md" className="text-info" />
                 Importing Audio...
               </>
             ) : error ? (
               <>
-                <AlertCircle className="size-5 text-red-600" />
+                <AlertCircle className="size-5 text-destructive" />
                 Import Failed
               </>
             ) : status === "complete" ? (
               <>
-                <CheckCircle2 className="size-5 text-green-600" />
+                <CheckCircle2 className="size-5 text-success" />
                 Import Complete
               </>
             ) : (
               <>
-                <Upload className="size-5 text-blue-600" />
+                <Upload className="size-5 text-info" />
                 Import Audio File
               </>
             )}
@@ -296,7 +296,7 @@ export function ImportAudioDialog({
               {fileInfo ? (
                 <div className="space-y-3 rounded-lg bg-muted p-4">
                   <div className="flex items-start gap-3">
-                    <FileAudio className="size-8 shrink-0 text-blue-600" />
+                    <FileAudio className="size-8 shrink-0 text-info" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-medium text-foreground">
                         {fileInfo.filename}
@@ -308,14 +308,14 @@ export function ImportAudioDialog({
                       "
                       >
                         <span className="flex items-center gap-1">
-                          <Clock className="size-3.5" />
+                          <Clock className="size-3" />
                           {formatDuration(fileInfo.duration_seconds)}
                         </span>
                         <span className="flex items-center gap-1">
-                          <HardDrive className="size-3.5" />
+                          <HardDrive className="size-3" />
                           {formatFileSize(fileInfo.size_bytes)}
                         </span>
-                        <span className="font-medium text-blue-600">
+                        <span className="font-medium text-info">
                           {fileInfo.format}
                         </span>
                       </div>
@@ -364,7 +364,7 @@ export function ImportAudioDialog({
                   >
                     {status === "validating" ? (
                       <>
-                        <Loader2 className="mr-2 size-4 animate-spin" />
+                        <Spinner size="sm" className="mr-2" />
                         Validating...
                       </>
                     ) : (
@@ -434,7 +434,7 @@ export function ImportAudioDialog({
                               Language
                             </span>
                           </div>
-                          <p className="text-xs text-muted-foreground">
+                          <p className="text-sm text-muted-foreground">
                             Language selection isn&apos;t supported for
                             Parakeet. It always uses automatic detection.
                           </p>
@@ -490,7 +490,7 @@ export function ImportAudioDialog({
                 <div className="h-3 w-full rounded-full bg-muted">
                   <div
                     className="
-                      h-3 rounded-full bg-blue-600 transition-all duration-300
+                      h-3 rounded-full bg-info transition-all duration-300
                       ease-out
                     "
                     style={{
@@ -500,7 +500,7 @@ export function ImportAudioDialog({
                 </div>
                 <div
                   className="
-                  mt-1 flex justify-between text-xs text-muted-foreground
+                  mt-1 flex justify-between text-sm text-muted-foreground
                 "
                 >
                   <span>{progress.stage}</span>
@@ -515,8 +515,8 @@ export function ImportAudioDialog({
 
           {/* Error display */}
           {error && (
-            <div className="rounded-lg border border-red-200 bg-red-50 p-3">
-              <p className="text-sm text-red-800">{error}</p>
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3">
+              <p className="text-sm text-destructive">{error}</p>
             </div>
           )}
         </div>
@@ -530,8 +530,8 @@ export function ImportAudioDialog({
               <Button
                 onClick={handleStartImport}
                 className="
-                  bg-blue-600
-                  hover:bg-blue-700
+                  bg-info
+                  hover:bg-info
                 "
                 disabled={!fileInfo}
               >

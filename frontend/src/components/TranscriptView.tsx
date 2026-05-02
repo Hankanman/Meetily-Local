@@ -311,7 +311,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
               <Tooltip>
                 <TooltipTrigger>
                   <span className="
-                    mt-1 min-w-12.5 shrink-0 text-xs text-muted-foreground/70
+                    mt-1 min-w-12.5 shrink-0 text-sm text-muted-foreground/70
                   ">
                     {transcript.audio_start_time !== undefined
                       ? formatRecordingTime(transcript.audio_start_time)
@@ -320,7 +320,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
                 </TooltipTrigger>
                 <TooltipContent>
                   {transcript.duration !== undefined && (
-                    <span className="text-xs text-muted-foreground/70">
+                    <span className="text-sm text-muted-foreground/70">
                       {transcript.duration.toFixed(1)}s
                       {transcript.confidence !== undefined && (
                         <ConfidenceIndicator
@@ -340,13 +340,13 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
                   ">
                     <div className="relative">
                       <p
-                        className="text-base/relaxed text-foreground"
+                        className="text-sm/relaxed text-foreground"
                         style={{ visibility: "hidden" }}
                       >
                         {sizerText}
                       </p>
                       <p className="
-                        absolute top-0 left-0 text-base/relaxed text-foreground
+                        absolute top-0 left-0 text-sm/relaxed text-foreground
                       ">
                         {displayText}
                       </p>
@@ -356,13 +356,13 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
                   // Regular transcript - simple text
                   <div className="relative">
                     <p
-                      className="text-base/relaxed text-foreground"
+                      className="text-sm/relaxed text-foreground"
                       style={{ visibility: "hidden" }}
                     >
                       {sizerText}
                     </p>
                     <p className="
-                      absolute top-0 left-0 text-base/relaxed text-foreground
+                      absolute top-0 left-0 text-sm/relaxed text-foreground
                     ">
                       {displayText}
                     </p>
@@ -386,7 +386,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
             exit={{ opacity: 0 }}
             className="mt-4 flex items-center gap-2 text-muted-foreground"
           >
-            <div className="size-2 animate-pulse rounded-full bg-blue-500"></div>
+            <div className="size-2 animate-pulse rounded-full bg-info"></div>
             <span className="text-sm">Listening...</span>
           </motion.div>
         )}
@@ -404,14 +404,14 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
                 <div
                   className={`
                     size-3 rounded-full
-                    ${isPaused ? "bg-orange-500" : `animate-pulse bg-blue-500`}
+                    ${isPaused ? "bg-orange-500" : `animate-pulse bg-info`}
                   `}
                 ></div>
               </div>
               <p className="text-sm text-muted-foreground">
                 {isPaused ? "Recording paused" : "Listening for speech..."}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground/70">
+              <p className="mt-1 text-sm text-muted-foreground/70">
                 {isPaused
                   ? "Click resume to continue recording"
                   : "Speak to see live transcription"}
@@ -420,7 +420,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
           ) : (
             <>
               <p className="text-lg font-semibold">Welcome to meetily!</p>
-              <p className="mt-1 text-xs">
+              <p className="mt-1 text-sm">
                 Start recording to see live transcription
               </p>
             </>

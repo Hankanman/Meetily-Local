@@ -192,7 +192,7 @@ export function LanguageSelection({
           className="
             w-full rounded-md border border-border bg-background px-3 py-2
             text-sm shadow-sm
-            focus:border-blue-500 focus:ring-1 focus:ring-blue-500
+            focus:border-info focus:ring-1 focus:ring-info
             focus:outline-none
             disabled:bg-muted disabled:text-muted-foreground
           "
@@ -210,10 +210,10 @@ export function LanguageSelection({
         {/* Parakeet language limitation warning */}
         {isParakeet && (
           <div className="
-            rounded-sm border border-amber-200 bg-amber-50 p-2 text-amber-800
+            rounded-md border border-warning/30 bg-warning-muted p-2 text-warning
           ">
             <p className="font-medium">ℹ️ Parakeet Language Support</p>
-            <p className="mt-1 text-xs">
+            <p className="mt-1 text-sm">
               Parakeet currently only supports automatic language detection.
               Manual language selection is not available. Use Whisper if you
               need to specify a particular language.
@@ -222,14 +222,14 @@ export function LanguageSelection({
         )}
 
         {/* Info text */}
-        <div className="space-y-2 pt-2 text-xs">
+        <div className="space-y-2 pt-2 text-sm">
           <p className="text-muted-foreground">
             <strong>Current:</strong> {selectedLanguageName}
           </p>
           {selectedLanguage === "auto" && (
             <div className="
-              rounded-sm border border-yellow-200 bg-yellow-50 p-2
-              text-yellow-800
+              rounded-md border border-warning/30 bg-warning-muted p-2
+              text-warning
             ">
               <p className="font-medium">
                 ⚠️ Auto Detect may produce incorrect results
@@ -242,8 +242,8 @@ export function LanguageSelection({
           )}
           {selectedLanguage === "auto-translate" && (
             <div className="
-              rounded-sm border border-blue-500/30 bg-blue-600/10 p-2
-              text-blue-800
+              rounded-md border border-info/30 bg-info/10 p-2
+              text-info
             ">
               <p className="font-medium">🌐 Translation Mode Active</p>
               <p className="mt-1">

@@ -50,9 +50,9 @@ export const EditableTitle: React.FC<EditableTitleProps> = ({
           }
         }}
         className="
-          w-full resize-none overflow-hidden rounded-sm border border-border
+          w-full resize-none overflow-hidden rounded-md border border-border
           bg-muted px-3 py-1 text-2xl font-bold
-          focus:ring-2 focus:ring-blue-500 focus:outline-none
+          focus:ring-2 focus:ring-info focus:outline-none
         "
         style={{ minWidth: "300px", minHeight: "40px" }}
         autoFocus
@@ -63,7 +63,7 @@ export const EditableTitle: React.FC<EditableTitleProps> = ({
     <div className="group flex flex-1 items-center space-x-2">
       <h1
         className="
-          flex-1 cursor-pointer rounded-sm px-1 text-2xl font-bold
+          flex-1 cursor-pointer rounded-md px-1 text-2xl font-bold
           whitespace-pre-wrap
           hover:bg-muted
         "
@@ -75,7 +75,7 @@ export const EditableTitle: React.FC<EditableTitleProps> = ({
         <button
           onClick={onStartEditing}
           className="
-            rounded-sm p-1 opacity-0 transition-opacity duration-200
+            rounded-md p-1 opacity-0 transition-opacity duration-200
             group-hover:opacity-100
             hover:bg-muted
           "
@@ -99,7 +99,7 @@ export const EditableTitle: React.FC<EditableTitleProps> = ({
           <button
             onClick={onDelete}
             className="
-              rounded-sm p-1 text-red-600 opacity-0 transition-opacity
+              rounded-md p-1 text-destructive opacity-0 transition-opacity
               duration-200
               group-hover:opacity-100
               hover:bg-muted

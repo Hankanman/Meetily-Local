@@ -1,4 +1,13 @@
 import React from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 interface ConfirmationModalProps {
   onConfirm: () => void;
@@ -13,37 +22,27 @@ export function ConfirmationModal({
   text,
   isOpen,
 }: ConfirmationModalProps) {
-  if (!isOpen) return null;
-
   return (
-    <div className="
-      fixed inset-0 z-50 flex items-center justify-center
-      bg-foreground/50
-    ">
-      <div className="mx-4 w-full max-w-md rounded-lg bg-background p-6">
-        <h2 className="mb-4 text-xl font-semibold">Confirm Delete</h2>
-        <p className="mb-6 text-muted-foreground">{text}</p>
-        <div className="flex justify-end space-x-4">
-          <button
-            onClick={onCancel}
-            className="
-              rounded-md px-4 py-2 text-muted-foreground transition-colors
-              hover:bg-muted
-            "
-          >
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Confirm Delete</DialogTitle>
+          <DialogDescription>{text}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onCancel}>
             Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            className="
-              rounded-md bg-red-600 px-4 py-2 text-white transition-colors
-              hover:bg-red-700
-            "
-          >
+          </Button>
+          <Button variant="destructive" onClick={onConfirm}>
             Delete
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

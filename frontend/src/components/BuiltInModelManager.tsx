@@ -311,7 +311,7 @@ export function BuiltInModelManager({
                 "rounded-lg border p-4 transition-colors",
                 modelIsDownloading ? "border-border bg-background" : "bg-card",
                 selectedModel === model.name
-                  ? "border-gray-800 ring-2 ring-gray-800"
+                  ? "border-foreground ring-2 ring-foreground"
                   : `
                     border-border
                     hover:border-border
@@ -327,22 +327,22 @@ export function BuiltInModelManager({
               <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="mb-1 flex items-center gap-2">
-                    <span className="text-base font-bold text-foreground">
+                    <span className="text-sm font-bold text-foreground">
                       {model.display_name || model.name}
                     </span>
                     {isAvailable && (
                       <>
                         <span className="
-                          flex items-center gap-1 text-xs font-medium
-                          text-green-600
+                          flex items-center gap-1 text-sm font-medium
+                          text-success
                         ">
-                          <span className="size-2 rounded-full bg-green-600"></span>
+                          <span className="size-2 rounded-full bg-success"></span>
                           Ready
                         </span>
                         {selectedModel === model.name && (
                           <span className="
-                            rounded-sm bg-blue-600/15 px-2 py-0.5 text-xs
-                            font-medium text-blue-700
+                            rounded-md bg-info/15 px-2 py-0.5 text-sm
+                            font-medium text-info
                           ">
                             Selected
                           </span>
@@ -351,8 +351,8 @@ export function BuiltInModelManager({
                     )}
                     {isCorrupted && (
                       <span className="
-                        flex items-center gap-1 rounded-sm bg-red-100 px-2
-                        py-0.5 text-xs font-medium text-red-700
+                        flex items-center gap-1 rounded-md bg-destructive/10 px-2
+                        py-0.5 text-sm font-medium text-destructive
                       ">
                         <BadgeAlert className="size-3" />
                         Corrupted
@@ -360,15 +360,15 @@ export function BuiltInModelManager({
                     )}
                     {isError && (
                       <span className="
-                        rounded-sm bg-red-100 px-2 py-0.5 text-xs font-medium
-                        text-red-700
+                        rounded-md bg-destructive/10 px-2 py-0.5 text-sm font-medium
+                        text-destructive
                       ">
                         Error
                       </span>
                     )}
                     {isNotDownloaded && !modelIsDownloading && (
                       <span className="
-                        text-xs font-medium text-muted-foreground
+                        text-sm font-medium text-muted-foreground
                       ">
                         Not Downloaded
                       </span>
@@ -379,7 +379,7 @@ export function BuiltInModelManager({
                       <p className="mb-1">{model.description}</p>
                     )}
                     {(isError || isCorrupted) && (
-                      <p className="mb-1 text-xs text-red-600">
+                      <p className="mb-1 text-sm text-destructive">
                         {isError &&
                         typeof model.status === "object" &&
                         "Error" in model.status
@@ -389,7 +389,7 @@ export function BuiltInModelManager({
                             : "An error occurred"}
                       </p>
                     )}
-                    <div className="text-xs text-muted-foreground">
+                    <div className="text-sm text-muted-foreground">
                       <span>
                         {model.size_mb}MB • {model.context_size} tokens
                       </span>
@@ -479,8 +479,8 @@ export function BuiltInModelManager({
                     selectedModel !== model.name && (
                       <button
                         className="
-                          rounded-sm p-2 text-muted-foreground transition-colors
-                          hover:bg-muted hover:text-red-600
+                          rounded-md p-2 text-muted-foreground transition-colors
+                          hover:bg-muted hover:text-destructive
                         "
                         onClick={(e) => {
                           e.stopPropagation();

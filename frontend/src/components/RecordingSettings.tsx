@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
 import { FolderOpen } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { DeviceSelection, SelectedDevices } from "@/components/DeviceSelection";
@@ -137,8 +138,8 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   if (loading) {
     return (
       <div className="animate-pulse">
-        <div className="mb-4 h-4 w-1/4 rounded-sm bg-muted"></div>
-        <div className="mb-4 h-8 rounded-sm bg-muted"></div>
+        <div className="mb-4 h-4 w-1/4 rounded-md bg-muted"></div>
+        <div className="mb-4 h-8 rounded-md bg-muted"></div>
       </div>
     );
   }
@@ -175,25 +176,22 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
             <div className="mb-3 text-sm break-all text-muted-foreground">
               {preferences.save_folder || "Default folder"}
             </div>
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               onClick={handleOpenFolder}
-              className="
-                flex items-center gap-2 rounded-md border border-border px-3
-                py-2 text-sm transition-colors
-                hover:bg-muted
-              "
             >
               <FolderOpen className="size-4" />
               Open Folder
-            </button>
+            </Button>
           </div>
 
-          <div className="rounded-lg border bg-blue-600/10 p-4">
-            <div className="text-sm text-blue-800">
+          <div className="rounded-lg border bg-info/10 p-4">
+            <div className="text-sm text-info">
               <strong>File Format:</strong>{" "}
               {preferences.file_format.toUpperCase()} files
             </div>
-            <div className="mt-1 text-xs text-blue-600">
+            <div className="mt-1 text-sm text-info">
               Recordings are saved with timestamp: recording_YYYYMMDD_HHMMSS.
               {preferences.file_format}
             </div>
@@ -203,8 +201,8 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
 
       {/* Info when auto_save is disabled */}
       {!preferences.auto_save && (
-        <div className="rounded-lg border bg-yellow-50 p-4">
-          <div className="text-sm text-yellow-800">
+        <div className="rounded-lg border bg-warning-muted p-4">
+          <div className="text-sm text-warning">
             Audio recording is disabled. Enable &quot;Save Audio Recordings&quot; to
             automatically save your meeting audio.
           </div>
@@ -228,7 +226,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       {/* Device Preferences */}
       <div className="space-y-4">
         <div className="border-t pt-6">
-          <h4 className="mb-4 text-base font-medium text-foreground">
+          <h4 className="mb-4 text-sm font-medium text-foreground">
             Default Audio Devices
           </h4>
           <p className="mb-4 text-sm text-muted-foreground">

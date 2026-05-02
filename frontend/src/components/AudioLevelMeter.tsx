@@ -31,9 +31,9 @@ export function AudioLevelMeter({
 
   // Color coding based on level
   const getLevelColor = (level: number) => {
-    if (level < 0.3) return "bg-green-500";
-    if (level < 0.7) return "bg-yellow-500";
-    return "bg-red-500";
+    if (level < 0.3) return "bg-success";
+    if (level < 0.7) return "bg-warning";
+    return "bg-destructive";
   };
 
   const rmsColor = getLevelColor(logRms);
@@ -43,7 +43,7 @@ export function AudioLevelMeter({
   const sizeClasses = {
     small: {
       container: "h-2",
-      text: "text-xs",
+      text: "text-sm",
       meter: "h-1.5",
     },
     medium: {
@@ -53,7 +53,7 @@ export function AudioLevelMeter({
     },
     large: {
       container: "h-4",
-      text: "text-base",
+      text: "text-sm",
       meter: "h-3",
     },
   };
@@ -83,13 +83,13 @@ export function AudioLevelMeter({
         relative
       `}>
         {/* Background */}
-        <div className="size-full overflow-hidden rounded-sm bg-muted">
+        <div className="size-full overflow-hidden rounded-md bg-muted">
           {/* RMS level bar (main level) */}
           <div
             className={`
               ${sizes.meter}
               ${rmsColor}
-              rounded-sm transition-all duration-150 ease-out
+              rounded-md transition-all duration-150 ease-out
             `}
             style={{ width: `${rmsPercent}%` }}
           />
@@ -183,7 +183,7 @@ export function CompactAudioLevelMeter({
       />
 
       {/* Mini meter */}
-      <div className="h-1.5 w-8 overflow-hidden rounded-sm bg-muted">
+      <div className="h-1.5 w-8 overflow-hidden rounded-md bg-muted">
         <div
           className={`
             h-full

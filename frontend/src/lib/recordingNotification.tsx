@@ -1,4 +1,5 @@
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 
 /**
  * Shows the recording notification toast with compliance message.
@@ -27,9 +28,9 @@ export async function showRecordingNotification(): Promise<void> {
             </p>
             <label
               className="
-              flex cursor-pointer items-center gap-2 rounded-sm p-2 text-xs
+              flex cursor-pointer items-center gap-2 rounded-md p-2 text-sm
               transition-colors
-              hover:bg-blue-600/15
+              hover:bg-info/15
             "
             >
               <input
@@ -38,15 +39,16 @@ export async function showRecordingNotification(): Promise<void> {
                   dontShowAgain = e.target.checked;
                 }}
                 className="
-                  rounded-sm border-border text-blue-600
-                  focus:ring-2 focus:ring-blue-500
+                  rounded-md border-border text-info
+                  focus:ring-2 focus:ring-info
                 "
               />
               <span className="text-foreground select-none">
                 Don&apos;t show this again
               </span>
             </label>
-            <button
+            <Button
+              size="sm"
               onClick={async () => {
                 if (dontShowAgain) {
                   const { Store } = await import("@tauri-apps/plugin-store");
@@ -56,14 +58,10 @@ export async function showRecordingNotification(): Promise<void> {
                 }
                 toast.dismiss(toastId);
               }}
-              className="
-                w-full rounded-sm bg-gray-900 px-3 py-1.5 text-xs font-medium
-                text-white transition-colors
-                hover:bg-gray-800
-              "
+              className="w-full bg-foreground text-white hover:bg-foreground/90"
             >
               I&apos;ve Notified Participants
-            </button>
+            </Button>
           </div>
         ),
         duration: 10000,

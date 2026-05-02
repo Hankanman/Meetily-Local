@@ -1,4 +1,5 @@
 import { FloatingBottomDock } from "@/components/layout/Page";
+import { Spinner } from "@/components/ui/spinner";
 
 interface StatusOverlaysProps {
   isProcessing: boolean; // Processing transcription after recording stops
@@ -13,9 +14,7 @@ function StatusOverlay({ show, message }: { show: boolean; message: string }) {
         flex items-center space-x-2 rounded-lg bg-background px-4 py-2
         shadow-lg
       ">
-        <div className="
-          size-4 animate-spin rounded-full border-b-2 border-foreground
-        " />
+        <Spinner size="sm" className="text-foreground" />
         <span className="text-sm text-foreground">{message}</span>
       </div>
     </FloatingBottomDock>

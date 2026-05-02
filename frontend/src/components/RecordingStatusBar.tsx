@@ -34,7 +34,7 @@ export const RecordingStatusBar: React.FC<RecordingStatusBarProps> = ({
       <div
         className={`
           size-2 rounded-full
-          ${isPaused ? "bg-orange-500" : `animate-pulse bg-red-500`}
+          ${isPaused ? "bg-orange-500" : `animate-pulse bg-destructive`}
         `}
       />
       <span

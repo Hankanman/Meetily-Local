@@ -76,7 +76,7 @@ export function TranscriptButtonGroup({
               size="sm"
               variant="outline"
               className="
-                border-blue-500/30 bg-linear-to-r from-blue-600/10
+                border-info/30 bg-linear-to-r from-blue-600/10
                 to-purple-600/10
                 hover:from-blue-600/20 hover:to-purple-600/20
                 xl:px-4

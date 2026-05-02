@@ -7,6 +7,7 @@ import { Play, Pause, Square, Mic, AlertCircle, X } from "lucide-react";
 import { ProcessRequest, SummaryResponse } from "@/types/summary";
 import { listen } from "@tauri-apps/api/event";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Tooltip,
   TooltipContent,
@@ -400,9 +401,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         ">
           {isProcessing && !isParentProcessing ? (
             <div className="flex items-center space-x-2">
-              <div className="
-                size-5 animate-spin rounded-full border-b-2 border-gray-900
-              "></div>
+              <Spinner size="md" className="text-foreground" />
               <span className="text-sm text-muted-foreground">
                 Processing recording...
               </span>
@@ -415,8 +414,8 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                     onClick={handleStartRecording}
                     className="
                       flex size-10 items-center justify-center rounded-full
-                      bg-red-500 text-white transition-colors
-                      hover:bg-red-600
+                      bg-destructive text-white transition-colors
+                      hover:bg-destructive
                     "
                   >
                     <Mic size={16} />
@@ -430,7 +429,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                     </div>
                     <div className="relative h-1 w-24 rounded-full bg-muted">
                       <div
-                        className="absolute h-full rounded-full bg-blue-500"
+                        className="absolute h-full rounded-full bg-info"
                         style={{ width: `${progress}%` }}
                       />
                     </div>
@@ -469,18 +468,15 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             isStarting || isProcessing || isValidatingModel
                               ? "bg-muted"
                               : `
-                                bg-red-500
-                                hover:bg-red-600
+                                bg-destructive
+                                hover:bg-destructive
                               `
                           }
                             relative rounded-full text-white transition-colors
                           `}
                         >
                           {isValidatingModel ? (
-                            <div className="
-                              size-5 animate-spin rounded-full border-b-2
-                              border-background
-                            "></div>
+                            <Spinner size="md" className="text-background" />
                           ) : (
                             <Mic size={20} />
                           )}
@@ -528,7 +524,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             )}
                             {(isPausing || isResuming) && (
                               <div className="
-                                absolute -top-8 text-xs font-medium
+                                absolute -top-8 text-sm font-medium
                                 text-muted-foreground
                               ">
                                 {isPausing ? "Pausing..." : "Resuming..."}
@@ -554,8 +550,8 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                               isStopping || isPausing || isResuming
                                 ? "bg-muted"
                                 : `
-                                  bg-red-500
-                                  hover:bg-red-600
+                                  bg-destructive
+                                  hover:bg-destructive
                                 `
                             }
                               relative rounded-full text-white transition-colors
@@ -564,7 +560,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                             <Square size={16} />
                             {isStopping && (
                               <div className="
-                                absolute -top-8 text-xs font-medium
+                                absolute -top-8 text-sm font-medium
                                 text-muted-foreground
                               ">
                                 Stopping...
@@ -586,7 +582,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                         className={`
                           w-1 rounded-full transition-all duration-200
                           ${
-                          isPaused ? "bg-orange-500" : "bg-red-500"
+                          isPaused ? "bg-orange-500" : "bg-destructive"
                         }
                         `}
                         style={{
@@ -604,7 +600,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
 
         {/* Show validation status only */}
         {isValidatingModel && (
-          <div className="mt-2 text-center text-xs text-muted-foreground">
+          <div className="mt-2 text-center text-sm text-muted-foreground">
             Validating speech recognition...
           </div>
         )}
@@ -613,23 +609,23 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         {deviceError && (
           <Alert
             variant="destructive"
-            className="mt-4 border-red-300 bg-red-50"
+            className="mt-4 border-destructive/30 bg-destructive/10"
           >
-            <AlertCircle className="size-5 text-red-600" />
+            <AlertCircle className="size-5 text-destructive" />
             <button
               onClick={() => setDeviceError(null)}
               className="
-                absolute top-3 right-3 text-red-600 transition-colors
-                hover:text-red-800
+                absolute top-3 right-3 text-destructive transition-colors
+                hover:text-destructive
               "
               aria-label="Close alert"
             >
               <X className="size-4" />
             </button>
-            <AlertTitle className="mb-2 font-semibold text-red-800">
+            <AlertTitle className="mb-2 font-semibold text-destructive">
               {deviceError.title}
             </AlertTitle>
-            <AlertDescription className="text-red-700">
+            <AlertDescription className="text-destructive">
               {deviceError.message.split("\n").map((line, i) => (
                 <div key={i} className={i > 0 ? "ml-2" : ""}>
                   {line}

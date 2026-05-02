@@ -47,14 +47,14 @@ export function ProgressIndicator({
                   duration-300
                   ${
                   isCompleted
-                    ? "size-7 rounded-full bg-green-600"
+                    ? "size-7 rounded-full bg-success"
                     : isActive
-                      ? "size-8 rounded-full bg-gray-900"
+                      ? "size-8 rounded-full bg-foreground"
                       : "size-6 rounded-full bg-muted"
                 }
                   ${isClickable ? `
                     cursor-pointer
-                    hover:scale-110 hover:shadow-md
+                    hover:scale-110 hover:shadow-sm
                   ` : `cursor-default`}
                 `}
               >
@@ -80,7 +80,7 @@ export function ProgressIndicator({
                   className={`
                     h-0.5 w-6 transition-all duration-300
                     ${
-                    isCompleted ? "bg-green-600" : "bg-muted"
+                    isCompleted ? "bg-success" : "bg-muted"
                   }
                   `}
                 />

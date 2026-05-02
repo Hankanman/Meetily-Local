@@ -19,6 +19,7 @@ import { SummaryModelSettings } from "@/components/SummaryModelSettings";
 import { BetaSettings } from "@/components/BetaSettings";
 import { useConfig } from "@/contexts/ConfigContext";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
 import { Page, PageBody } from "@/components/layout/Page";
 
 // Tabs configuration (constant)
@@ -76,17 +77,15 @@ export default function SettingsPage() {
       <div className="shrink-0 border-b border-border bg-muted">
         <div className="mx-auto max-w-6xl px-8 py-6">
           <div className="flex items-center gap-4">
-            <button
+            <Button
+              variant="ghost"
               onClick={() => router.back()}
-              className="
-                flex items-center gap-2 text-muted-foreground transition-colors
-                hover:text-foreground
-              "
+              className="text-muted-foreground hover:text-foreground"
             >
               <ArrowLeft className="size-5" />
               <span>Back</span>
-            </button>
-            <h1 className="text-3xl font-bold">Settings</h1>
+            </Button>
+            <h1 className="text-2xl font-bold">Settings</h1>
           </div>
         </div>
       </div>
@@ -113,7 +112,7 @@ export default function SettingsPage() {
                       border-0 bg-transparent px-6 py-4 text-muted-foreground
                       hover:text-foreground
                       data-[state=active]:bg-transparent
-                      data-[state=active]:text-blue-600
+                      data-[state=active]:text-info
                       data-[state=active]:shadow-none
                     "
                   >
@@ -124,7 +123,7 @@ export default function SettingsPage() {
               })}
 
               <motion.div
-                className="absolute bottom-0 z-20 h-0.5 bg-blue-600"
+                className="absolute bottom-0 z-20 h-0.5 bg-info"
                 layoutId="underline"
                 style={{
                   left: underlineStyle.left,

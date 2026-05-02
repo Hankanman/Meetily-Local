@@ -19,10 +19,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Sparkles,
   Settings,
-  Loader2,
   FileText,
   Check,
   Square,
@@ -268,7 +268,7 @@ export function SummaryGeneratorButtonGroup({
           variant="outline"
           size="sm"
           className="
-            border-red-200 bg-linear-to-r from-red-50 to-orange-50
+            border-destructive/30 bg-linear-to-r from-red-50 to-orange-50
             hover:from-red-100 hover:to-orange-100
             xl:px-4
           "
@@ -287,7 +287,7 @@ export function SummaryGeneratorButtonGroup({
           variant="outline"
           size="sm"
           className="
-            border-blue-500/30 bg-linear-to-r from-blue-600/10 to-purple-600/10
+            border-info/30 bg-linear-to-r from-blue-600/10 to-purple-600/10
             hover:from-blue-600/20 hover:to-purple-600/20
             xl:px-4
           "
@@ -303,10 +303,7 @@ export function SummaryGeneratorButtonGroup({
         >
           {isCheckingModels || isModelConfigLoading ? (
             <>
-              <Loader2 className="
-                animate-spin
-                xl:mr-2
-              " size={18} />
+              <Spinner size="sm" className="xl:mr-2" />
               <span className="
                 hidden
                 xl:inline
@@ -376,7 +373,7 @@ export function SummaryGeneratorButtonGroup({
               >
                 <span>{template.name}</span>
                 {selectedTemplate === template.id && (
-                  <Check className="size-4 text-green-600" />
+                  <Check className="size-4 text-success" />
                 )}
               </DropdownMenuItem>
             ))}

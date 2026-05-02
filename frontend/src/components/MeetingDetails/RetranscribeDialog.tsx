@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   RefreshCw,
   Globe,
-  Loader2,
   AlertCircle,
   CheckCircle2,
   X,
@@ -17,6 +16,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
 import {
   Select,
   SelectContent,
@@ -283,17 +283,17 @@ export function RetranscribeDialog({
           <DialogTitle className="flex items-center gap-2">
             {isProcessing ? (
               <>
-                <Loader2 className="size-5 animate-spin text-blue-600" />
+                <Spinner size="md" className="text-info" />
                 Retranscribing...
               </>
             ) : error ? (
               <>
-                <AlertCircle className="size-5 text-red-600" />
+                <AlertCircle className="size-5 text-destructive" />
                 Retranscription Failed
               </>
             ) : (
               <>
-                <RefreshCw className="size-5 text-blue-600" />
+                <RefreshCw className="size-5 text-info" />
                 Retranscribe Meeting
               </>
             )}
@@ -328,7 +328,7 @@ export function RetranscribeDialog({
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-sm text-muted-foreground">
                   Select a specific language to improve accuracy, or use
                   auto-detect
                 </p>
@@ -339,7 +339,7 @@ export function RetranscribeDialog({
                   <Globe className="size-4 text-muted-foreground" />
                   <span className="text-sm font-medium">Language</span>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-sm text-muted-foreground">
                   Language selection isn&apos;t supported for Parakeet. It
                   always uses automatic detection.
                 </p>
@@ -375,7 +375,7 @@ export function RetranscribeDialog({
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">
+              <p className="text-sm text-muted-foreground">
                 Choose a transcription model
               </p>
             </div>
@@ -387,7 +387,7 @@ export function RetranscribeDialog({
                 <div className="h-3 w-full rounded-full bg-muted">
                   <div
                     className="
-                      h-3 rounded-full bg-blue-600 transition-all duration-300
+                      h-3 rounded-full bg-info transition-all duration-300
                       ease-out
                     "
                     style={{
@@ -397,7 +397,7 @@ export function RetranscribeDialog({
                 </div>
                 <div
                   className="
-                  mt-1 flex justify-between text-xs text-muted-foreground
+                  mt-1 flex justify-between text-sm text-muted-foreground
                 "
                 >
                   <span>{progress.stage}</span>
@@ -411,8 +411,8 @@ export function RetranscribeDialog({
           )}
 
           {error && (
-            <div className="rounded-lg border border-red-200 bg-red-50 p-3">
-              <p className="text-sm text-red-800">{error}</p>
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3">
+              <p className="text-sm text-destructive">{error}</p>
             </div>
           )}
         </div>
@@ -426,8 +426,8 @@ export function RetranscribeDialog({
               <Button
                 onClick={handleStartRetranscription}
                 className="
-                  bg-blue-600
-                  hover:bg-blue-700
+                  bg-info
+                  hover:bg-info
                 "
                 disabled={!meetingFolderPath}
               >

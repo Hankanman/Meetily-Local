@@ -79,8 +79,8 @@ export function AudioBackendSelector({
   if (loading) {
     return (
       <div className="animate-pulse">
-        <div className="mb-2 h-4 w-32 rounded-sm bg-muted"></div>
-        <div className="h-10 rounded-sm bg-muted"></div>
+        <div className="mb-2 h-4 w-32 rounded-md bg-muted"></div>
+        <div className="h-10 rounded-md bg-muted"></div>
       </div>
     );
   }
@@ -110,7 +110,7 @@ export function AudioBackendSelector({
           </button>
           {showTooltip && (
             <div className="
-              absolute top-0 left-6 z-10 w-64 rounded-lg bg-gray-900 p-3 text-xs
+              absolute top-0 left-6 z-10 w-64 rounded-lg bg-foreground p-3 text-sm
               text-white shadow-lg
             ">
               <p className="mb-1 font-semibold">Audio Capture Methods:</p>
@@ -132,7 +132,7 @@ export function AudioBackendSelector({
 
       {error && (
         <div className="
-          rounded-md border border-red-200 bg-red-50 p-2 text-xs text-red-700
+          rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive
         ">
           {error}
         </div>
@@ -151,7 +151,7 @@ export function AudioBackendSelector({
                 flex items-start rounded-lg border p-3 transition-all
                 ${
                 currentBackend === backend.id
-                  ? "border-blue-500 bg-blue-600/10"
+                  ? "border-info bg-info/10"
                   : `
                     border-border bg-background
                     hover:border-border
@@ -170,8 +170,8 @@ export function AudioBackendSelector({
                 onChange={() => handleBackendChange(backend.id)}
                 disabled={isDisabled}
                 className="
-                  mt-1 size-4 border-border text-blue-600
-                  focus:ring-blue-500
+                  mt-1 size-4 border-border text-info
+                  focus:ring-info
                 "
               />
               <div className="ml-3 flex-1">
@@ -181,22 +181,22 @@ export function AudioBackendSelector({
                   </span>
                   {currentBackend === backend.id && (
                     <span className="
-                      rounded-sm bg-blue-600/15 px-2 py-0.5 text-xs font-medium
-                      text-blue-600
+                      rounded-md bg-info/15 px-2 py-0.5 text-sm font-medium
+                      text-info
                     ">
                       Active
                     </span>
                   )}
                   {isCoreAudio && (
                     <span className="
-                      rounded-sm bg-muted px-2 py-0.5 text-xs font-medium
+                      rounded-md bg-muted px-2 py-0.5 text-sm font-medium
                       text-muted-foreground
                     ">
                       Disabled
                     </span>
                   )}
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground">
+                <p className="mt-1 text-sm text-muted-foreground">
                   {backend.description}
                 </p>
               </div>
@@ -205,7 +205,7 @@ export function AudioBackendSelector({
         })}
       </div>
 
-      <div className="space-y-1 text-xs text-muted-foreground">
+      <div className="space-y-1 text-sm text-muted-foreground">
         <p>• Backend selection only affects system audio capture</p>
         <p>• Microphone always uses the default method</p>
         <p>• Changes apply to new recording sessions</p>
