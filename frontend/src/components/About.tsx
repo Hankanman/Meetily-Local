@@ -3,17 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import Image from "next/image";
 import AnalyticsConsentSwitch from "./AnalyticsConsentSwitch";
-import { UpdateDialog } from "./UpdateDialog";
-import { updateService, UpdateInfo } from "@/services/updateService";
-import { Button } from "./ui/button";
-import { Loader2, CheckCircle2 } from "lucide-react";
-import { toast } from "sonner";
 
 export function About() {
   const [currentVersion, setCurrentVersion] = useState<string>("0.3.0");
-  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
-  const [isChecking, setIsChecking] = useState(false);
-  const [showUpdateDialog, setShowUpdateDialog] = useState(false);
 
   useEffect(() => {
     // Get current version on mount
@@ -27,26 +19,6 @@ export function About() {
       });
     } catch (error) {
       console.error("Failed to open link:", error);
-    }
-  };
-
-  const handleCheckForUpdates = async () => {
-    setIsChecking(true);
-    try {
-      const info = await updateService.checkForUpdates(true);
-      setUpdateInfo(info);
-      if (info.available) {
-        setShowUpdateDialog(true);
-      } else {
-        toast.success("You are running the latest version");
-      }
-    } catch (error: any) {
-      console.error("Failed to check for updates:", error);
-      toast.error(
-        "Failed to check for updates: " + (error.message || "Unknown error"),
-      );
-    } finally {
-      setIsChecking(false);
     }
   };
 
@@ -71,32 +43,6 @@ export function About() {
         <p className="text-medium mt-1 text-muted-foreground">
           Real-time notes and summaries that never leave your machine.
         </p>
-        <div className="mt-3">
-          <Button
-            onClick={handleCheckForUpdates}
-            disabled={isChecking}
-            variant="outline"
-            size="sm"
-            className="text-xs"
-          >
-            {isChecking ? (
-              <>
-                <Loader2 className="mr-2 size-3 animate-spin" />
-                Checking...
-              </>
-            ) : (
-              <>
-                <CheckCircle2 className="mr-2 size-3" />
-                Check for Updates
-              </>
-            )}
-          </Button>
-          {updateInfo?.available && (
-            <div className="mt-2 text-xs text-blue-600">
-              Update available: v{updateInfo.version}
-            </div>
-          )}
-        </div>
       </div>
 
       {/* Features Grid - Compact */}
@@ -192,13 +138,6 @@ export function About() {
         </p>
       </div>
       <AnalyticsConsentSwitch />
-
-      {/* Update Dialog */}
-      <UpdateDialog
-        open={showUpdateDialog}
-        onOpenChange={setShowUpdateDialog}
-        updateInfo={updateInfo}
-      />
     </div>
   );
 }

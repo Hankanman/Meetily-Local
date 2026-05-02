@@ -21,7 +21,6 @@ import { OnboardingProvider } from "@/contexts/OnboardingContext";
 import { OnboardingFlow } from "@/components/onboarding";
 import { loadBetaFeatures } from "@/types/betaFeatures";
 import { DownloadProgressToastProvider } from "@/components/shared/DownloadProgressToast";
-import { UpdateCheckProvider } from "@/components/UpdateCheckProvider";
 import { RecordingPostProcessingProvider } from "@/contexts/RecordingPostProcessingProvider";
 import { ImportAudioDialog, ImportDropOverlay } from "@/components/ImportAudio";
 import { ImportDialogProvider } from "@/contexts/ImportDialogContext";
@@ -261,8 +260,7 @@ export default function RootLayout({
                 <ConfigProvider>
                   <OllamaDownloadProvider>
                     <OnboardingProvider>
-                      <UpdateCheckProvider>
-                        <SidebarProvider>
+                      <SidebarProvider>
                           <TooltipProvider>
                             <RecordingPostProcessingProvider>
                               <ImportDialogProvider
@@ -295,7 +293,6 @@ export default function RootLayout({
                             </RecordingPostProcessingProvider>
                           </TooltipProvider>
                         </SidebarProvider>
-                      </UpdateCheckProvider>
                     </OnboardingProvider>
                   </OllamaDownloadProvider>
                 </ConfigProvider>
