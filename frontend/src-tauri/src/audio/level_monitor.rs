@@ -77,14 +77,14 @@ impl AudioLevelMonitor {
         app_handle: AppHandle<R>,
         device_names: Vec<String>,
     ) -> Result<()> {
-        if AUDIO_LEVEL_STATE.is_monitoring.load(Ordering::SeqCst) {
+        if AUDIO_LEVEL_STATE_IS_MONITORING.load(Ordering::SeqCst) {
             // Stop any existing monitoring
-            AUDIO_LEVEL_STATE.is_monitoring.store(false, Ordering::SeqCst);
+            AUDIO_LEVEL_STATE_IS_MONITORING.store(false, Ordering::SeqCst);
         }
 
         info!("Starting audio level monitoring for devices: {:?}", device_names);
 
-        AUDIO_LEVEL_STATE.is_monitoring.store(true, Ordering::SeqCst);
+        AUDIO_LEVEL_STATE_IS_MONITORING.store(true, Ordering::SeqCst);
         *self.monitored_devices.lock().await = device_names.clone();
 
         // Clear existing streams
@@ -117,7 +117,7 @@ impl AudioLevelMonitor {
         tokio::spawn(async move {
             let mut interval = interval(Duration::from_millis(100)); // Update every 100ms
 
-            while AUDIO_LEVEL_STATE.is_monitoring.load(Ordering::SeqCst) {
+            while AUDIO_LEVEL_STATE_IS_MONITORING.load(Ordering::SeqCst) {
                 interval.tick().await;
 
                 let levels = {
@@ -150,7 +150,7 @@ impl AudioLevelMonitor {
     pub async fn stop_monitoring(&self) -> Result<()> {
         info!("Stopping audio level monitoring");
 
-        AUDIO_LEVEL_STATE.is_monitoring.store(false, Ordering::SeqCst);
+        AUDIO_LEVEL_STATE_IS_MONITORING.store(false, Ordering::SeqCst);
 
         // Stop all streams
         {
@@ -165,7 +165,7 @@ impl AudioLevelMonitor {
 
     /// Check if currently monitoring
     pub fn is_monitoring(&self) -> bool {
-        AUDIO_LEVEL_STATE.is_monitoring.load(Ordering::SeqCst)
+        AUDIO_LEVEL_STATE_IS_MONITORING.load(Ordering::SeqCst)
     }
 
     /// Find a CPAL device by name
@@ -369,27 +369,16 @@ fn process_audio_levels(
     }
 }
 
-// Global state for audio level monitoring
-
-struct AudioLevelState {
-    is_monitoring: AtomicBool,
-    // We'll manage streams differently to avoid Send issues
-}
-
-lazy_static::lazy_static! {
-    static ref AUDIO_LEVEL_STATE: AudioLevelState = AudioLevelState {
-        is_monitoring: AtomicBool::new(false),
-    };
-}
+static AUDIO_LEVEL_STATE_IS_MONITORING: AtomicBool = AtomicBool::new(false);
 
 /// Global function to check if monitoring is active
 pub fn is_monitoring() -> bool {
-    AUDIO_LEVEL_STATE.is_monitoring.load(Ordering::SeqCst)
+    AUDIO_LEVEL_STATE_IS_MONITORING.load(Ordering::SeqCst)
 }
 
 /// Global function to stop monitoring
 pub async fn stop_monitoring() -> Result<()> {
-    AUDIO_LEVEL_STATE.is_monitoring.store(false, Ordering::SeqCst);
+    AUDIO_LEVEL_STATE_IS_MONITORING.store(false, Ordering::SeqCst);
     info!("Audio level monitoring stopped globally");
     Ok(())
 }

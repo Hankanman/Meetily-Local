@@ -1,17 +1,17 @@
 use anyhow::{anyhow, Result};
-use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::atomic::AtomicU64;
+use std::sync::LazyLock;
 
-lazy_static! {
-    pub static ref LAST_AUDIO_CAPTURE: AtomicU64 = AtomicU64::new(
+pub static LAST_AUDIO_CAPTURE: LazyLock<AtomicU64> = LazyLock::new(|| {
+    AtomicU64::new(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs()
-    );
-}
+            .as_secs(),
+    )
+});
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AudioTranscriptionEngine {

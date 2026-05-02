@@ -7,9 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use std::sync::RwLock;
+use std::sync::{LazyLock, RwLock};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -47,14 +46,12 @@ enum Response {
 // Global Sidecar Manager
 // ============================================================================
 
-lazy_static::lazy_static! {
-    static ref SIDECAR_MANAGER: Arc<Mutex<Option<Arc<SidecarManager>>>> = Arc::new(Mutex::new(None));
-}
+static SIDECAR_MANAGER: LazyLock<Arc<Mutex<Option<Arc<SidecarManager>>>>> =
+    LazyLock::new(|| Arc::new(Mutex::new(None)));
 
 // Model path cache to avoid repeated filesystem I/O and model lookups
-static MODEL_PATH_CACHE: Lazy<RwLock<HashMap<String, PathBuf>>> = Lazy::new(|| {
-    RwLock::new(HashMap::new())
-});
+static MODEL_PATH_CACHE: LazyLock<RwLock<HashMap<String, PathBuf>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Initialize the global sidecar manager
 pub async fn init_sidecar_manager(app_data_dir: PathBuf) -> Result<()> {
