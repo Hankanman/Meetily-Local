@@ -2,7 +2,69 @@
 
 import type { Editor } from "@tiptap/core";
 import { useEditorState } from "@tiptap/react";
+import {
+  Bold,
+  Italic,
+  Strikethrough,
+  Code,
+  RemoveFormatting,
+  Eraser,
+  Pilcrow,
+  Heading1,
+  Heading2,
+  Heading3,
+  Heading4,
+  Heading5,
+  Heading6,
+  List,
+  ListOrdered,
+  ListChecks,
+  SquareCode,
+  Quote,
+  Minus,
+  CornerDownLeft,
+  Undo2,
+  Redo2,
+  Table,
+  ArrowLeftToLine,
+  ArrowRightToLine,
+  ArrowUpToLine,
+  ArrowDownToLine,
+  TableColumnsSplit,
+  TableRowsSplit,
+  TableCellsMerge,
+  TableCellsSplit,
+  Rows3,
+  Columns3,
+  TableProperties,
+  Trash2,
+} from "lucide-react";
 import { menuBarStateSelector } from "./menuBarState";
+
+const ICON_SIZE = 16;
+
+interface ToolButtonProps {
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+  disabled?: boolean;
+  children: React.ReactNode;
+}
+
+function ToolButton({ label, onClick, active, disabled, children }: ToolButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+      className={active ? "is-active" : ""}
+    >
+      {children}
+    </button>
+  );
+}
 
 export function MenuBar({ editor }: { editor: Editor | null }) {
   const editorState = useEditorState({
@@ -17,138 +79,150 @@ export function MenuBar({ editor }: { editor: Editor | null }) {
   return (
     <div className="control-group">
       <div className="button-group">
-        <button
-          type="button"
+        <ToolButton
+          label="Bold"
           onClick={() => editor.chain().focus().toggleBold().run()}
           disabled={!editorState.canBold}
-          className={editorState.isBold ? "is-active" : ""}
+          active={editorState.isBold}
         >
-          Bold
-        </button>
-        <button
-          type="button"
+          <Bold size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Italic"
           onClick={() => editor.chain().focus().toggleItalic().run()}
           disabled={!editorState.canItalic}
-          className={editorState.isItalic ? "is-active" : ""}
+          active={editorState.isItalic}
         >
-          Italic
-        </button>
-        <button
-          type="button"
+          <Italic size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Strike"
           onClick={() => editor.chain().focus().toggleStrike().run()}
           disabled={!editorState.canStrike}
-          className={editorState.isStrike ? "is-active" : ""}
+          active={editorState.isStrike}
         >
-          Strike
-        </button>
-        <button
-          type="button"
+          <Strikethrough size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Inline code"
           onClick={() => editor.chain().focus().toggleCode().run()}
           disabled={!editorState.canCode}
-          className={editorState.isCode ? "is-active" : ""}
+          active={editorState.isCode}
         >
-          Code
-        </button>
-        <button type="button" onClick={() => editor.chain().focus().unsetAllMarks().run()}>
-          Clear marks
-        </button>
-        <button type="button" onClick={() => editor.chain().focus().clearNodes().run()}>
-          Clear nodes
-        </button>
-        <button
-          type="button"
+          <Code size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Clear marks"
+          onClick={() => editor.chain().focus().unsetAllMarks().run()}
+        >
+          <RemoveFormatting size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Clear nodes"
+          onClick={() => editor.chain().focus().clearNodes().run()}
+        >
+          <Eraser size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Paragraph"
           onClick={() => editor.chain().focus().setParagraph().run()}
-          className={editorState.isParagraph ? "is-active" : ""}
+          active={editorState.isParagraph}
         >
-          Paragraph
-        </button>
-        <button
-          type="button"
+          <Pilcrow size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Heading 1"
           onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-          className={editorState.isHeading1 ? "is-active" : ""}
+          active={editorState.isHeading1}
         >
-          H1
-        </button>
-        <button
-          type="button"
+          <Heading1 size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Heading 2"
           onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-          className={editorState.isHeading2 ? "is-active" : ""}
+          active={editorState.isHeading2}
         >
-          H2
-        </button>
-        <button
-          type="button"
+          <Heading2 size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Heading 3"
           onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-          className={editorState.isHeading3 ? "is-active" : ""}
+          active={editorState.isHeading3}
         >
-          H3
-        </button>
-        <button
-          type="button"
+          <Heading3 size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Heading 4"
           onClick={() => editor.chain().focus().toggleHeading({ level: 4 }).run()}
-          className={editorState.isHeading4 ? "is-active" : ""}
+          active={editorState.isHeading4}
         >
-          H4
-        </button>
-        <button
-          type="button"
+          <Heading4 size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Heading 5"
           onClick={() => editor.chain().focus().toggleHeading({ level: 5 }).run()}
-          className={editorState.isHeading5 ? "is-active" : ""}
+          active={editorState.isHeading5}
         >
-          H5
-        </button>
-        <button
-          type="button"
+          <Heading5 size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Heading 6"
           onClick={() => editor.chain().focus().toggleHeading({ level: 6 }).run()}
-          className={editorState.isHeading6 ? "is-active" : ""}
+          active={editorState.isHeading6}
         >
-          H6
-        </button>
-        <button
-          type="button"
+          <Heading6 size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Bullet list"
           onClick={() => editor.chain().focus().toggleBulletList().run()}
-          className={editorState.isBulletList ? "is-active" : ""}
+          active={editorState.isBulletList}
         >
-          Bullet list
-        </button>
-        <button
-          type="button"
+          <List size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Ordered list"
           onClick={() => editor.chain().focus().toggleOrderedList().run()}
-          className={editorState.isOrderedList ? "is-active" : ""}
+          active={editorState.isOrderedList}
         >
-          Ordered list
-        </button>
-        <button
-          type="button"
+          <ListOrdered size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Task list"
           onClick={() => editor.chain().focus().toggleTaskList().run()}
-          className={editorState.isTaskList ? "is-active" : ""}
+          active={editorState.isTaskList}
         >
-          Task list
-        </button>
-        <button
-          type="button"
+          <ListChecks size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Code block"
           onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-          className={editorState.isCodeBlock ? "is-active" : ""}
+          active={editorState.isCodeBlock}
         >
-          Code block
-        </button>
-        <button
-          type="button"
+          <SquareCode size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Blockquote"
           onClick={() => editor.chain().focus().toggleBlockquote().run()}
-          className={editorState.isBlockquote ? "is-active" : ""}
+          active={editorState.isBlockquote}
         >
-          Blockquote
-        </button>
-        <button type="button" onClick={() => editor.chain().focus().setHorizontalRule().run()}>
-          Horizontal rule
-        </button>
-        <button type="button" onClick={() => editor.chain().focus().setHardBreak().run()}>
-          Hard break
-        </button>
+          <Quote size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Horizontal rule"
+          onClick={() => editor.chain().focus().setHorizontalRule().run()}
+        >
+          <Minus size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Hard break"
+          onClick={() => editor.chain().focus().setHardBreak().run()}
+        >
+          <CornerDownLeft size={ICON_SIZE} />
+        </ToolButton>
       </div>
       <div className="button-group">
-        <button
-          type="button"
+        <ToolButton
+          label="Insert table"
           onClick={() =>
             editor
               .chain()
@@ -157,108 +231,108 @@ export function MenuBar({ editor }: { editor: Editor | null }) {
               .run()
           }
         >
-          Insert table
-        </button>
-        <button
-          type="button"
+          <Table size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Add column before"
           onClick={() => editor.chain().focus().addColumnBefore().run()}
           disabled={!editorState.canAddColumnBefore}
         >
-          Add column before
-        </button>
-        <button
-          type="button"
+          <ArrowLeftToLine size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Add column after"
           onClick={() => editor.chain().focus().addColumnAfter().run()}
           disabled={!editorState.canAddColumnAfter}
         >
-          Add column after
-        </button>
-        <button
-          type="button"
+          <ArrowRightToLine size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Delete column"
           onClick={() => editor.chain().focus().deleteColumn().run()}
           disabled={!editorState.canDeleteColumn}
         >
-          Delete column
-        </button>
-        <button
-          type="button"
+          <TableColumnsSplit size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Add row before"
           onClick={() => editor.chain().focus().addRowBefore().run()}
           disabled={!editorState.canAddRowBefore}
         >
-          Add row before
-        </button>
-        <button
-          type="button"
+          <ArrowUpToLine size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Add row after"
           onClick={() => editor.chain().focus().addRowAfter().run()}
           disabled={!editorState.canAddRowAfter}
         >
-          Add row after
-        </button>
-        <button
-          type="button"
+          <ArrowDownToLine size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Delete row"
           onClick={() => editor.chain().focus().deleteRow().run()}
           disabled={!editorState.canDeleteRow}
         >
-          Delete row
-        </button>
-        <button
-          type="button"
+          <TableRowsSplit size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Merge cells"
           onClick={() => editor.chain().focus().mergeCells().run()}
           disabled={!editorState.canMergeCells}
         >
-          Merge cells
-        </button>
-        <button
-          type="button"
+          <TableCellsMerge size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Split cell"
           onClick={() => editor.chain().focus().splitCell().run()}
           disabled={!editorState.canSplitCell}
         >
-          Split cell
-        </button>
-        <button
-          type="button"
+          <TableCellsSplit size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Toggle header row"
           onClick={() => editor.chain().focus().toggleHeaderRow().run()}
           disabled={!editorState.canToggleHeaderRow}
         >
-          Toggle header row
-        </button>
-        <button
-          type="button"
+          <Rows3 size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Toggle header column"
           onClick={() => editor.chain().focus().toggleHeaderColumn().run()}
           disabled={!editorState.canToggleHeaderColumn}
         >
-          Toggle header column
-        </button>
-        <button
-          type="button"
+          <Columns3 size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Toggle header cell"
           onClick={() => editor.chain().focus().toggleHeaderCell().run()}
           disabled={!editorState.canToggleHeaderCell}
         >
-          Toggle header cell
-        </button>
-        <button
-          type="button"
+          <TableProperties size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Delete table"
           onClick={() => editor.chain().focus().deleteTable().run()}
           disabled={!editorState.canDeleteTable}
         >
-          Delete table
-        </button>
+          <Trash2 size={ICON_SIZE} />
+        </ToolButton>
       </div>
       <div className="button-group">
-        <button
-          type="button"
+        <ToolButton
+          label="Undo"
           onClick={() => editor.chain().focus().undo().run()}
           disabled={!editorState.canUndo}
         >
-          Undo
-        </button>
-        <button
-          type="button"
+          <Undo2 size={ICON_SIZE} />
+        </ToolButton>
+        <ToolButton
+          label="Redo"
           onClick={() => editor.chain().focus().redo().run()}
           disabled={!editorState.canRedo}
         >
-          Redo
-        </button>
+          <Redo2 size={ICON_SIZE} />
+        </ToolButton>
       </div>
     </div>
   );
