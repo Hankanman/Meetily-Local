@@ -16,6 +16,18 @@ export function getErrorMessage(error: unknown, fallback = 'Unknown error'): str
 }
 
 /**
+ * Format a duration in seconds as a recording-relative timestamp `[MM:SS]`.
+ * Returns `[--:--]` when the duration is undefined.
+ */
+export function formatRecordingTime(seconds: number | undefined): string {
+  if (seconds === undefined) return '[--:--]';
+  const totalSeconds = Math.floor(seconds);
+  const minutes = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `[${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}]`;
+}
+
+/**
  * Detects if an error message indicates that Ollama is not installed or not running
  * @param errorMessage - The error message to check
  * @returns true if the error indicates Ollama is not installed/running
