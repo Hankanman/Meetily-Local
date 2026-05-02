@@ -7,11 +7,11 @@ import {
   SetupOverviewStep,
 } from "./steps";
 
-interface OnboardingFlowProps {
-  onComplete: () => void;
-}
-
-export function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
+// Onboarding completion is propagated through OnboardingContext (the
+// `completed` flag flips to true via `completeOnboarding()`); RootContent
+// re-renders into the main app on the next tick. No completion callback
+// needed at this layer.
+export function OnboardingFlow() {
   const { currentStep } = useOnboarding();
   const [isMac, setIsMac] = React.useState(false);
 

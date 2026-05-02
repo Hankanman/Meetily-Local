@@ -43,6 +43,12 @@ interface ParakeetProgressInfo {
 }
 
 interface OnboardingContextType {
+  // Onboarding completion status (single source of truth — read by RootLayout
+  // to decide between OnboardingFlow and the main app).
+  completed: boolean;
+  // True until we've finished checking the persisted status. Lets consumers
+  // avoid showing a flash of the wrong UI on cold start.
+  isStatusLoading: boolean;
   currentStep: number;
   parakeetDownloaded: boolean;
   parakeetProgress: number;
@@ -86,6 +92,7 @@ export function OnboardingProvider({
 }) {
   const [currentStep, setCurrentStep] = useState(1);
   const [completed, setCompleted] = useState(false);
+  const [isStatusLoading, setIsStatusLoading] = useState(true);
   const [parakeetDownloaded, setParakeetDownloaded] = useState(false);
   const [parakeetProgress, setParakeetProgress] = useState(0);
   const [parakeetProgressInfo, setParakeetProgressInfo] =
@@ -335,6 +342,8 @@ export function OnboardingProvider({
         "[OnboardingContext] Failed to load onboarding status:",
         error,
       );
+    } finally {
+      setIsStatusLoading(false);
     }
   }, [verifyModelStatus, checkActiveDownloads]);
 
@@ -642,6 +651,8 @@ export function OnboardingProvider({
     <OnboardingContext.Provider
       value={{
         currentStep,
+        completed,
+        isStatusLoading,
         parakeetDownloaded,
         parakeetProgress,
         parakeetProgressInfo,
