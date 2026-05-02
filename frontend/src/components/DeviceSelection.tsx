@@ -12,7 +12,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import Analytics from "@/lib/analytics";
 
 export interface AudioDevice {
   name: string;
@@ -144,31 +143,6 @@ export function DeviceSelection({
     await fetchDevices();
   };
 
-  // Helper function to detect device category and Bluetooth status
-  const getDeviceMetadata = (deviceName: string) => {
-    const nameLower = deviceName.toLowerCase();
-
-    // Detect if it's Bluetooth
-    const isBluetooth =
-      nameLower.includes("airpods") ||
-      nameLower.includes("bluetooth") ||
-      nameLower.includes("wireless") ||
-      nameLower.includes("wh-") || // Sony WH-* series
-      nameLower.includes("bt ");
-
-    // Categorize device
-    let category = "wired";
-    if (deviceName === "default") {
-      category = "default";
-    } else if (nameLower.includes("airpods")) {
-      category = "airpods";
-    } else if (isBluetooth) {
-      category = "bluetooth";
-    }
-
-    return { isBluetooth, category };
-  };
-
   // Handle microphone device selection
   const handleMicDeviceChange = (deviceName: string) => {
     const newDevices = {
@@ -176,17 +150,6 @@ export function DeviceSelection({
       micDevice: deviceName === "default" ? null : deviceName,
     };
     onDeviceChange(newDevices);
-
-    // Track device selection analytics with enhanced metadata
-    const metadata = getDeviceMetadata(deviceName);
-    Analytics.track("microphone_selected", {
-      device_name: deviceName,
-      device_category: metadata.category,
-      is_bluetooth: metadata.isBluetooth.toString(),
-      has_system_audio: (!!selectedDevices.systemDevice).toString(),
-    }).catch((err) =>
-      console.error("Failed to track microphone selection:", err),
-    );
   };
 
   // Handle system audio device selection
@@ -196,17 +159,6 @@ export function DeviceSelection({
       systemDevice: deviceName === "default" ? null : deviceName,
     };
     onDeviceChange(newDevices);
-
-    // Track device selection analytics with enhanced metadata
-    const metadata = getDeviceMetadata(deviceName);
-    Analytics.track("system_audio_selected", {
-      device_name: deviceName,
-      device_category: metadata.category,
-      is_bluetooth: metadata.isBluetooth.toString(),
-      has_microphone: (!!selectedDevices.micDevice).toString(),
-    }).catch((err) =>
-      console.error("Failed to track system audio selection:", err),
-    );
   };
 
   // Start audio level monitoring

@@ -27,7 +27,6 @@ import {
   Check,
   Square,
 } from "lucide-react";
-import Analytics from "@/lib/analytics";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
@@ -273,13 +272,7 @@ export function SummaryGeneratorButtonGroup({
             hover:from-red-100 hover:to-orange-100
             xl:px-4
           "
-          onClick={() => {
-            Analytics.trackButtonClick(
-              "stop_summary_generation",
-              "meeting_details",
-            );
-            onStopGeneration();
-          }}
+          onClick={onStopGeneration}
           title="Stop summary generation"
         >
           <Square className="xl:mr-2" size={18} fill="currentColor" />
@@ -298,10 +291,7 @@ export function SummaryGeneratorButtonGroup({
             hover:from-blue-600/20 hover:to-purple-600/20
             xl:px-4
           "
-          onClick={() => {
-            Analytics.trackButtonClick("generate_summary", "meeting_details");
-            checkOllamaModelsAndGenerate();
-          }}
+          onClick={checkOllamaModelsAndGenerate}
           disabled={isCheckingModels || isModelConfigLoading}
           title={
             isModelConfigLoading

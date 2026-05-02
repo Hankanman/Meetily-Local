@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, useMemo, Suspense } from "react";
 import { Transcript, Summary } from "@/types";
 import PageContent from "./page-content";
 import { useRouter, useSearchParams } from "next/navigation";
-import Analytics from "@/lib/analytics";
 import { invoke } from "@tauri-apps/api/core";
 import { LoaderIcon } from "lucide-react";
 import { useConfig } from "@/contexts/ConfigContext";
@@ -195,7 +194,6 @@ function MeetingDetailsContent() {
       console.warn("No valid meeting ID in URL - meetingId:", meetingId);
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsLoading(false);
-      Analytics.trackPageView("meeting_details");
       return;
     }
 

@@ -13,7 +13,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import Analytics from "@/lib/analytics";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
 import { getErrorMessage } from "@/lib/utils";
 
@@ -181,8 +180,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       setRecordingPath(savePath);
       // setShowPlayback(true);
       setIsProcessing(false);
-      // Track successful transcription
-      Analytics.trackTranscriptionSuccess();
       onRecordingStop(true);
     } catch (error) {
       console.error("Failed to stop recording:", error);
@@ -301,9 +298,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
             console.error("Transcription error received:", event.payload);
             const errorMessage = event.payload as string;
 
-            Analytics.trackTranscriptionError(errorMessage);
-            console.log("Tracked transcription error:", errorMessage);
-
             setTranscriptionErrors((prev) => {
               const newCount = prev + 1;
               console.log("Transcription error count incremented:", newCount);
@@ -341,9 +335,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
             } else {
               errorMessage = String(event.payload);
             }
-
-            Analytics.trackTranscriptionError(errorMessage);
-            console.log("Tracked transcription error:", errorMessage);
 
             setTranscriptionErrors((prev) => {
               const newCount = prev + 1;
@@ -465,13 +456,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
-                          onClick={() => {
-                            Analytics.trackButtonClick(
-                              "start_recording",
-                              "recording_controls",
-                            );
-                            handleStartRecording();
-                          }}
+                          onClick={handleStartRecording}
                           disabled={
                             isStarting ||
                             isProcessing ||
@@ -513,16 +498,8 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                           <button
                             onClick={() => {
                               if (isPaused) {
-                                Analytics.trackButtonClick(
-                                  "resume_recording",
-                                  "recording_controls",
-                                );
                                 handleResumeRecording();
                               } else {
-                                Analytics.trackButtonClick(
-                                  "pause_recording",
-                                  "recording_controls",
-                                );
                                 handlePauseRecording();
                               }
                             }}
@@ -569,13 +546,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <button
-                            onClick={() => {
-                              Analytics.trackButtonClick(
-                                "stop_recording",
-                                "recording_controls",
-                              );
-                              handleStopRecording();
-                            }}
+                            onClick={handleStopRecording}
                             disabled={isStopping || isPausing || isResuming}
                             className={`
                               flex size-10 items-center justify-center

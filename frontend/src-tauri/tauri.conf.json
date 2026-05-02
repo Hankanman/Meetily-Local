@@ -59,6 +59,7 @@
                         "core:resources:default",
                         "core:menu:default",
                         "core:tray:default",
+                        "core:webview:default",
                         "core:window:allow-set-title",
                         "store:default",
                         "notification:default",

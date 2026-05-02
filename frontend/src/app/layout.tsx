@@ -5,7 +5,6 @@ import { Source_Sans_3 } from "next/font/google";
 import Sidebar from "@/components/Sidebar";
 import { SidebarProvider } from "@/components/Sidebar/SidebarProvider";
 import MainContent from "@/components/MainContent";
-import AnalyticsProvider from "@/components/AnalyticsProvider";
 import { Toaster, toast } from "sonner";
 import "sonner/dist/styles.css";
 import { ThemeProvider } from "next-themes";
@@ -254,51 +253,49 @@ export default function RootLayout({
           tracking live changes (Pure-Adwaita ↔ Pure-Adwaita-Dark, etc.).
         */}
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
-          <AnalyticsProvider>
-            <RecordingStateProvider>
-              <TranscriptProvider>
-                <ConfigProvider>
-                  <OllamaDownloadProvider>
-                    <OnboardingProvider>
-                      <SidebarProvider>
-                          <TooltipProvider>
-                            <RecordingPostProcessingProvider>
-                              <ImportDialogProvider
-                                onOpen={handleOpenImportDialog}
-                              >
-                                {/* Download progress toast provider - listens for background downloads */}
-                                <DownloadProgressToastProvider />
+          <RecordingStateProvider>
+            <TranscriptProvider>
+              <ConfigProvider>
+                <OllamaDownloadProvider>
+                  <OnboardingProvider>
+                    <SidebarProvider>
+                        <TooltipProvider>
+                          <RecordingPostProcessingProvider>
+                            <ImportDialogProvider
+                              onOpen={handleOpenImportDialog}
+                            >
+                              {/* Download progress toast provider - listens for background downloads */}
+                              <DownloadProgressToastProvider />
 
-                                {/* Show onboarding or main app */}
-                                {showOnboarding ? (
-                                  <OnboardingFlow
-                                    onComplete={handleOnboardingComplete}
-                                  />
-                                ) : (
-                                  <div className="flex">
-                                    <Sidebar />
-                                    <MainContent>{children}</MainContent>
-                                  </div>
-                                )}
-                                {/* Import audio overlay and dialog */}
-                                <ImportDropOverlay visible={showDropOverlay} />
-                                <ConditionalImportDialog
-                                  showImportDialog={showImportDialog}
-                                  handleImportDialogClose={
-                                    handleImportDialogClose
-                                  }
-                                  importFilePath={importFilePath}
+                              {/* Show onboarding or main app */}
+                              {showOnboarding ? (
+                                <OnboardingFlow
+                                  onComplete={handleOnboardingComplete}
                                 />
-                              </ImportDialogProvider>
-                            </RecordingPostProcessingProvider>
-                          </TooltipProvider>
-                        </SidebarProvider>
-                    </OnboardingProvider>
-                  </OllamaDownloadProvider>
-                </ConfigProvider>
-              </TranscriptProvider>
-            </RecordingStateProvider>
-          </AnalyticsProvider>
+                              ) : (
+                                <div className="flex">
+                                  <Sidebar />
+                                  <MainContent>{children}</MainContent>
+                                </div>
+                              )}
+                              {/* Import audio overlay and dialog */}
+                              <ImportDropOverlay visible={showDropOverlay} />
+                              <ConditionalImportDialog
+                                showImportDialog={showImportDialog}
+                                handleImportDialogClose={
+                                  handleImportDialogClose
+                                }
+                                importFilePath={importFilePath}
+                              />
+                            </ImportDialogProvider>
+                          </RecordingPostProcessingProvider>
+                        </TooltipProvider>
+                      </SidebarProvider>
+                  </OnboardingProvider>
+                </OllamaDownloadProvider>
+              </ConfigProvider>
+            </TranscriptProvider>
+          </RecordingStateProvider>
         </ThemeProvider>
 
         <Toaster position="bottom-center" richColors closeButton />

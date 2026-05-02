@@ -29,7 +29,6 @@ import { ConfirmationModal } from "../ConfirmationModel/confirmation-modal";
 import { ModelConfig } from "@/components/ModelSettingsModal";
 import { SettingTabs } from "../SettingTabs";
 import { TranscriptModelProps } from "@/components/TranscriptSettings";
-import Analytics from "@/lib/analytics";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Tooltip,
@@ -223,12 +222,6 @@ const Sidebar: React.FC = () => {
       // Emit event to sync other components
       const { emit } = await import("@tauri-apps/api/event");
       await emit("model-config-updated", config);
-
-      // Track settings change
-      await Analytics.trackSettingsChanged(
-        "model_config",
-        `${config.provider}_${config.model}`,
-      );
     } catch (error) {
       console.error("Error saving model config:", error);
       setSettingsSaveSuccess(false);
@@ -254,13 +247,6 @@ const Sidebar: React.FC = () => {
       });
 
       setSettingsSaveSuccess(true);
-
-      // Track settings change
-      const transcriptConfigToSave = updatedConfig || transcriptModelConfig;
-      await Analytics.trackSettingsChanged(
-        "transcript_config",
-        `${transcriptConfigToSave.provider}_${transcriptConfigToSave.model}`,
-      );
     } catch (error) {
       console.error("Failed to save transcript config:", error);
       setSettingsSaveSuccess(false);
@@ -374,9 +360,6 @@ const Sidebar: React.FC = () => {
       );
       setMeetings(updatedMeetings);
 
-      // Track meeting deletion
-      Analytics.trackMeetingDeleted(itemId);
-
       // Show success toast
       toast.success("Meeting deleted successfully", {
         description: "All associated data has been removed",
@@ -440,9 +423,6 @@ const Sidebar: React.FC = () => {
       if (currentMeeting?.id === meetingId) {
         setCurrentMeeting({ id: meetingId, title: newTitle });
       }
-
-      // Track the edit
-      Analytics.trackButtonClick("edit_meeting_title", "sidebar");
 
       toast.success("Meeting title updated successfully");
 

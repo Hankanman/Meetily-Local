@@ -7,7 +7,6 @@ import {
 } from "@/components/Sidebar/SidebarProvider";
 import { invoke as invokeTauri } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import Analytics from "@/lib/analytics";
 import { getErrorMessage, isOllamaNotInstalledError } from "@/lib/utils";
 import { BuiltInModelInfo } from "@/lib/builtin-ai";
 
@@ -92,23 +91,6 @@ export function useSummaryGeneration({
         }
 
         console.log("Processing transcript with template:", selectedTemplate);
-
-        // Calculate time since recording
-        const timeSinceRecording =
-          (Date.now() - new Date(meeting.created_at).getTime()) / 60000; // minutes
-
-        // Track summary generation started
-        await Analytics.trackSummaryGenerationStarted(
-          modelConfig.provider,
-          modelConfig.model,
-          transcriptText.length,
-          timeSinceRecording,
-        );
-
-        // Track custom prompt usage if present
-        if (customPrompt.trim().length > 0) {
-          await Analytics.trackCustomPromptUsed(customPrompt.trim().length);
-        }
 
         // Show toast notification for generation start
         toast.info(
@@ -197,13 +179,6 @@ export function useSummaryGeneration({
                     description: `${errorMessage}. Your previous summary has been restored.`,
                   });
 
-                  await Analytics.trackSummaryGenerationCompleted(
-                    modelConfig.provider,
-                    modelConfig.model,
-                    false,
-                    undefined,
-                    errorMessage,
-                  );
                   return;
                 }
               } catch (error) {
@@ -237,13 +212,6 @@ export function useSummaryGeneration({
               onOpenModelSettings();
             }
 
-            await Analytics.trackSummaryGenerationCompleted(
-              modelConfig.provider,
-              modelConfig.model,
-              false,
-              undefined,
-              errorMessage,
-            );
             return;
           }
 
@@ -271,11 +239,6 @@ export function useSummaryGeneration({
                 await onMeetingUpdated();
               }
 
-              await Analytics.trackSummaryGenerationCompleted(
-                modelConfig.provider,
-                modelConfig.model,
-                true,
-              );
               return;
             }
 
@@ -296,13 +259,6 @@ export function useSummaryGeneration({
               );
               setSummaryStatus("error");
 
-              await Analytics.trackSummaryGenerationCompleted(
-                modelConfig.provider,
-                modelConfig.model,
-                false,
-                undefined,
-                "Empty summary generated",
-              );
               return;
             }
 
@@ -358,12 +314,6 @@ export function useSummaryGeneration({
               duration: 4000,
             });
 
-            await Analytics.trackSummaryGenerationCompleted(
-              modelConfig.provider,
-              modelConfig.model,
-              true,
-            );
-
             if (meetingName && onMeetingUpdated) {
               await onMeetingUpdated();
             }
@@ -385,19 +335,10 @@ export function useSummaryGeneration({
             description: errorMessage,
           },
         );
-
-        await Analytics.trackSummaryGenerationCompleted(
-          modelConfig.provider,
-          modelConfig.model,
-          false,
-          undefined,
-          errorMessage,
-        );
       }
     },
     [
       meeting.id,
-      meeting.created_at,
       modelConfig,
       selectedTemplate,
       startSummaryPolling,
