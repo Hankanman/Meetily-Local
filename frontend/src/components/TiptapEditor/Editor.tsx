@@ -100,7 +100,7 @@ export default function Editor({
   return (
     <EditorContent
       editor={editor}
-      className="tiptap-editor prose max-w-none focus:outline-none"
+      className="tiptap-editor prose dark:prose-invert max-w-none focus:outline-none"
     />
   );
 }
