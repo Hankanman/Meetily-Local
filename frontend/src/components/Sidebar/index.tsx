@@ -4,10 +4,9 @@ import React, { useState, useMemo, useEffect, useCallback } from "react";
 import {
   ChevronDown,
   ChevronRight,
-  File,
   Settings,
-  ChevronLeftCircle,
-  ChevronRightCircle,
+  PanelLeftClose,
+  PanelLeftOpen,
   Calendar,
   StickyNote,
   Home,
@@ -67,6 +66,33 @@ interface SidebarItem {
   title: string;
   type: "folder" | "file";
   children?: SidebarItem[];
+}
+
+// Single chevron-y toggle that lives inside the sidebar header. The icon
+// always points in the direction it would move the panel: left (collapse)
+// when expanded, right (expand) when collapsed.
+function SidebarToggleButton({
+  isCollapsed,
+  onClick,
+}: {
+  isCollapsed: boolean;
+  onClick: () => void;
+}) {
+  const Icon = isCollapsed ? PanelLeftOpen : PanelLeftClose;
+  return (
+    <button
+      type="button"
+      aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+      onClick={onClick}
+      className="
+        flex size-8 items-center justify-center rounded-md text-muted-foreground
+        transition-colors
+        hover:bg-muted hover:text-foreground
+      "
+    >
+      <Icon className="size-5" />
+    </button>
+  );
 }
 
 const Sidebar: React.FC = () => {
@@ -475,8 +501,9 @@ const Sidebar: React.FC = () => {
     return (
       <TooltipProvider>
         <div className="mt-4 flex flex-col items-center space-y-4">
-          <Logo isCollapsed={isCollapsed} />
-
+          {/* About-dialog logo intentionally omitted here — the Info button
+              at the bottom of the collapsed sidebar already opens the same
+              dialog. */}
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -598,7 +625,9 @@ const Sidebar: React.FC = () => {
 
   const renderItem = (item: SidebarItem, depth = 0) => {
     const isExpanded = expandedFolders.has(item.id);
-    const paddingLeft = `${depth * 12 + 12}px`;
+    // Tighter than before — meetings are always depth 1, so this evaluates to
+    // 8px of indent inside the row (plus the row's own px-2 = 16px from edge).
+    const paddingLeft = `${depth * 8}px`;
     const isActive = item.type === "file" && currentMeeting?.id === item.id;
     const isMeetingItem =
       item.id.includes("-") && !item.id.startsWith("intro-call");
@@ -667,64 +696,75 @@ const Sidebar: React.FC = () => {
               )}
             </>
           ) : (
-            <div className="flex w-full flex-col">
-              <div className="flex w-full items-center">
-                {isMeetingItem ? (
+            // `relative` anchors the absolute hover-action overlay below.
+            // `min-w-0` is required so the title can truncate inside flex.
+            <div className="relative flex w-full min-w-0 flex-col">
+              <div className="flex w-full min-w-0 items-center">
+                {!isMeetingItem && (
                   <div className="
-                    mr-2 flex size-6 shrink-0 items-center justify-center
-                    rounded-full bg-muted
-                  ">
-                    <File className="size-3.5 text-muted-foreground" />
-                  </div>
-                ) : (
-                  <div className="
-                    mr-2 flex size-6 shrink-0 items-center justify-center
+                    mr-2 flex size-5 shrink-0 items-center justify-center
                     rounded-full bg-blue-600/15
                   ">
-                    <Plus className="size-3.5 text-blue-600" />
+                    <Plus className="size-3 text-blue-600" />
                   </div>
                 )}
-                <span className="flex-1 wrap-break-word">{item.title}</span>
-                {isMeetingItem && (
-                  <div className="
-                    flex items-center gap-1 opacity-0 transition-opacity
-                    duration-150
-                    group-hover:opacity-100
-                  ">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleEditStart(item.id, item.title);
-                      }}
-                      className="
-                        shrink-0 rounded-md p-1
-                        hover:bg-blue-600/10 hover:text-blue-600
-                      "
-                      aria-label="Edit meeting title"
-                    >
-                      <Pencil className="size-4" />
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDeleteModalState({ isOpen: true, itemId: item.id });
-                      }}
-                      className="
-                        shrink-0 rounded-md p-1
-                        hover:bg-red-50 hover:text-red-600
-                      "
-                      aria-label="Delete meeting"
-                    >
-                      <Trash2 className="size-4" />
-                    </button>
-                  </div>
-                )}
+                {/* `min-w-0` + `truncate` so long titles ellipsize instead of
+                    forcing a horizontal scrollbar. The right padding leaves
+                    room for the (absolutely-positioned) hover actions to sit
+                    over the title's tail without overlapping its text. */}
+                <span
+                  className={`min-w-0 flex-1 truncate ${
+                    isMeetingItem ? "pr-12 group-hover:pr-12" : ""
+                  }`}
+                  title={item.title}
+                >
+                  {item.title}
+                </span>
               </div>
+
+              {/* Hover-only edit/delete actions. Absolute so they don't reserve
+                  space in the row's flex flow when hidden — the title can use
+                  the full width otherwise. */}
+              {isMeetingItem && (
+                <div className="
+                  pointer-events-none absolute inset-y-0 right-0 flex
+                  items-center gap-0.5 pr-1 opacity-0 transition-opacity
+                  duration-150
+                  group-hover:pointer-events-auto group-hover:opacity-100
+                ">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleEditStart(item.id, item.title);
+                    }}
+                    className="
+                      rounded-md p-1
+                      hover:bg-blue-600/10 hover:text-blue-600
+                    "
+                    aria-label="Edit meeting title"
+                  >
+                    <Pencil className="size-3.5" />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteModalState({ isOpen: true, itemId: item.id });
+                    }}
+                    className="
+                      rounded-md p-1
+                      hover:bg-red-50 hover:text-red-600
+                    "
+                    aria-label="Delete meeting"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                </div>
+              )}
 
               {/* Show transcript match snippet if available */}
               {hasTranscriptMatch && (
                 <div className="
-                  mt-1 ml-8 line-clamp-2 rounded-sm border border-yellow-100
+                  mt-1 line-clamp-2 rounded-sm border border-yellow-100
                   bg-yellow-50 p-1.5 text-xs text-muted-foreground
                 ">
                   <span className="font-medium text-yellow-600">Match:</span>{" "}
@@ -744,74 +784,53 @@ const Sidebar: React.FC = () => {
   };
 
   return (
-    // Normal flex item in AppShell — no `fixed` positioning. The width
-    // animates between `w-16` and `w-64`; the main region grows to fill the
-    // remainder automatically. `relative` so the floating collapse button
-    // (positioned absolutely on the right edge) anchors here.
-    <div className="relative h-full shrink-0">
-      {/* Floating collapse button */}
-      <button
-        onClick={toggleCollapse}
-        className="
-          absolute top-20 -right-6 z-50 rounded-full border bg-background p-1
-          shadow-lg
-          hover:bg-muted
-        "
-        style={{ transform: "translateX(50%)" }}
-      >
-        {isCollapsed ? (
-          <ChevronRightCircle className="size-6" />
-        ) : (
-          <ChevronLeftCircle className="size-6" />
-        )}
-      </button>
-
-      <div
-        className={`
-          flex h-full flex-col border-r bg-background shadow-sm transition-all
-          duration-300
-          ${
-          isCollapsed ? "w-16" : "w-64"
-        }
-        `}
-      >
-        {/*  Header with traffic light spacing */}
-        <div className="flex h-22 shrink-0 items-center">
-          {/* Title container */}
-
-          <div className="flex-1">
-            {!isCollapsed && (
-              <div className="p-3">
-                {/* <span className="text-lg text-center border rounded-full bg-blue-600/10 border-background font-semibold text-foreground mb-2 block items-center">
-                  <span>Meetily</span>
-                </span> */}
-                <Logo isCollapsed={isCollapsed} />
-
-                <div className="relative mb-1">
-                  <InputGroup>
-                    <InputGroupInput
-                      placeholder="Search meeting content..."
-                      value={searchQuery}
-                      onChange={(e) => handleSearchChange(e.target.value)}
-                    />
-                    <InputGroupAddon>
-                      <SearchIcon />
-                    </InputGroupAddon>
-                    {searchQuery && (
-                      <InputGroupAddon align={"inline-end"}>
-                        <InputGroupButton
-                          onClick={() => handleSearchChange("")}
-                        >
-                          <X />
-                        </InputGroupButton>
-                      </InputGroupAddon>
-                    )}
-                  </InputGroup>
-                </div>
-              </div>
-            )}
-          </div>
+    // Normal flex item in AppShell — no `fixed` positioning. Width snaps
+    // between w-16 and w-64 (no transition; the user found the animation
+    // distracting). The main region grows to fill the remainder automatically.
+    <div
+      className={`
+        flex h-full shrink-0 flex-col border-r bg-background shadow-sm
+        ${isCollapsed ? "w-16" : "w-64"}
+      `}
+    >
+      {/* Header. Same `p-3` padding in both states so the toggle button
+          sits at the same vertical position whether collapsed or expanded.
+          Horizontal anchor is the left edge in expanded mode and centered
+          in collapsed mode. */}
+      <div className="shrink-0 p-3">
+        <div
+          className={`flex items-center gap-2 ${
+            isCollapsed ? "justify-center" : ""
+          }`}
+        >
+          <SidebarToggleButton
+            isCollapsed={isCollapsed}
+            onClick={toggleCollapse}
+          />
+          {!isCollapsed && <Logo isCollapsed={isCollapsed} />}
         </div>
+        {!isCollapsed && (
+          <div className="relative mt-2 mb-1">
+            <InputGroup>
+              <InputGroupInput
+                placeholder="Search meeting content..."
+                value={searchQuery}
+                onChange={(e) => handleSearchChange(e.target.value)}
+              />
+              <InputGroupAddon>
+                <SearchIcon />
+              </InputGroupAddon>
+              {searchQuery && (
+                <InputGroupAddon align={"inline-end"}>
+                  <InputGroupButton onClick={() => handleSearchChange("")}>
+                    <X />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              )}
+            </InputGroup>
+          </div>
+        )}
+      </div>
 
         {/* Main content - scrollable area */}
         <div className="flex min-h-0 flex-1 flex-col">
@@ -876,7 +895,7 @@ const Sidebar: React.FC = () => {
                       item.children,
                   )
                   .map((item) => (
-                    <div key={`${item.id}-children`} className="mx-3">
+                    <div key={`${item.id}-children`} className="mx-2">
                       {item.children!.map((child) => renderItem(child, 1))}
                     </div>
                   ))}
@@ -950,7 +969,6 @@ const Sidebar: React.FC = () => {
             </div>
           </div>
         )}
-      </div>
 
       {/* Confirmation Modal for Delete */}
       <ConfirmationModal
