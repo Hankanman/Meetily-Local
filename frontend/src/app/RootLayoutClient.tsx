@@ -15,7 +15,7 @@ import { ImportDialogProvider } from "@/contexts/ImportDialogContext";
 import { TitleBar } from "@/components/TitleBar";
 import { TauriThemeSync } from "@/components/TauriThemeSync";
 import { ProviderStack } from "@/components/ProviderStack";
-import { RootContent } from "@/components/RootContent";
+import { AppShell } from "@/components/layout/AppShell";
 import { DownloadProgressToastProvider } from "@/components/shared/DownloadProgressToast";
 
 import { ProductionContextMenuBlocker } from "@/components/bridges/ProductionContextMenuBlocker";
@@ -61,7 +61,7 @@ export default function RootLayoutClient({
           <TrayRecordingBridge />
           <FileDropBridge />
           <DownloadProgressToastProvider />
-          <RootContent>{children}</RootContent>
+          <AppShell>{children}</AppShell>
         </ProviderStack>
       </div>
 

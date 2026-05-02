@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { LoaderIcon } from "lucide-react";
 import { useConfig } from "@/contexts/ConfigContext";
 import { usePaginatedTranscripts } from "@/hooks/usePaginatedTranscripts";
+import { PageLoading } from "@/components/layout/Page";
 
 interface MeetingDetailsResponse {
   id: string;
@@ -358,7 +359,7 @@ function MeetingDetailsContent() {
 
   if (error) {
     return (
-      <div className="flex h-screen items-center justify-center">
+      <PageLoading>
         <div className="text-center">
           <p className="mb-4 text-red-500">{error}</p>
           <button
@@ -371,16 +372,16 @@ function MeetingDetailsContent() {
             Go Back
           </button>
         </div>
-      </div>
+      </PageLoading>
     );
   }
 
   // Show loading spinner while initial data loads
   if (isLoading || isLoadingTranscripts || !meetingDetails) {
     return (
-      <div className="flex h-screen items-center justify-center">
+      <PageLoading>
         <LoaderIcon className="size-6 animate-spin" />
-      </div>
+      </PageLoading>
     );
   }
 
@@ -412,9 +413,9 @@ export default function MeetingDetails() {
   return (
     <Suspense
       fallback={
-        <div className="flex h-screen items-center justify-center">
+        <PageLoading>
           <LoaderIcon className="size-6 animate-spin" />
-        </div>
+        </PageLoading>
       }
     >
       <MeetingDetailsContent />

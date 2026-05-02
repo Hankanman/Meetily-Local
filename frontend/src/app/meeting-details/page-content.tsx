@@ -15,6 +15,7 @@ import { useTemplates } from "@/hooks/meeting-details/useTemplates";
 import { useCopyOperations } from "@/hooks/meeting-details/useCopyOperations";
 import { useMeetingOperations } from "@/hooks/meeting-details/useMeetingOperations";
 import { useConfig } from "@/contexts/ConfigContext";
+import { Page } from "@/components/layout/Page";
 
 export default function PageContent({
   meeting,
@@ -159,13 +160,13 @@ export default function PageContent({
   ]);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: "easeOut" }}
-      className="flex h-screen flex-col bg-muted"
-    >
-      <div className="flex flex-1 overflow-hidden">
+    <Page>
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, ease: "easeOut" }}
+        className="flex flex-1 min-h-0 overflow-hidden"
+      >
         <TranscriptPanel
           transcripts={meetingData.transcripts}
           customPrompt={customPrompt}
@@ -223,7 +224,7 @@ export default function PageContent({
           isModelConfigLoading={false}
           onOpenModelSettings={handleRegisterModalOpen}
         />
-      </div>
-    </motion.div>
+      </motion.div>
+    </Page>
   );
 }

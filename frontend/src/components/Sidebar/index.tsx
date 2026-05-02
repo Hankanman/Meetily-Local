@@ -744,7 +744,11 @@ const Sidebar: React.FC = () => {
   };
 
   return (
-    <div className="fixed top-0 left-0 z-40 h-screen">
+    // Normal flex item in AppShell — no `fixed` positioning. The width
+    // animates between `w-16` and `w-64`; the main region grows to fill the
+    // remainder automatically. `relative` so the floating collapse button
+    // (positioned absolutely on the right edge) anchors here.
+    <div className="relative h-full shrink-0">
       {/* Floating collapse button */}
       <button
         onClick={toggleCollapse}
@@ -764,7 +768,7 @@ const Sidebar: React.FC = () => {
 
       <div
         className={`
-          flex h-screen flex-col border-r bg-background shadow-sm transition-all
+          flex h-full flex-col border-r bg-background shadow-sm transition-all
           duration-300
           ${
           isCollapsed ? "w-16" : "w-64"

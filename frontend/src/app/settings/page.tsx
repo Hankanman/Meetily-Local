@@ -19,6 +19,7 @@ import { SummaryModelSettings } from "@/components/SummaryModelSettings";
 import { BetaSettings } from "@/components/BetaSettings";
 import { useConfig } from "@/contexts/ConfigContext";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Page, PageBody } from "@/components/layout/Page";
 
 // Tabs configuration (constant)
 const TABS = [
@@ -70,9 +71,9 @@ export default function SettingsPage() {
   }, [activeTab]);
 
   return (
-    <div className="flex h-screen flex-col bg-muted">
+    <Page>
       {/* Fixed Header */}
-      <div className="sticky top-0 z-10 border-b border-border bg-muted">
+      <div className="shrink-0 border-b border-border bg-muted">
         <div className="mx-auto max-w-6xl px-8 py-6">
           <div className="flex items-center gap-4">
             <button
@@ -90,8 +91,7 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Scrollable Content */}
-      <div className="flex-1 overflow-y-auto">
+      <PageBody>
         <div className="mx-auto max-w-6xl p-8 pt-6">
           {/* Tabs */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -154,7 +154,7 @@ export default function SettingsPage() {
             </TabsContent>
           </Tabs>
         </div>
-      </div>
-    </div>
+      </PageBody>
+    </Page>
   );
 }

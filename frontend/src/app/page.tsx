@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { RecordingControls } from "@/components/RecordingControls";
 import { useSidebar } from "@/components/Sidebar/SidebarProvider";
+import { Page, FloatingBottomDock } from "@/components/layout/Page";
 import { usePermissionCheck } from "@/hooks/usePermissionCheck";
 import {
   useRecordingState,
@@ -41,11 +42,7 @@ export default function Home() {
 
   // Hooks
   const { hasMicrophone } = usePermissionCheck();
-  const {
-    setIsMeetingActive,
-    isCollapsed: sidebarCollapsed,
-    refetchMeetings,
-  } = useSidebar();
+  const { setIsMeetingActive, refetchMeetings } = useSidebar();
   const { modals, messages, showModal, hideModal } = useModalState(
     transcriptModelConfig,
   );
@@ -205,17 +202,15 @@ export default function Home() {
   const isProcessingStop =
     status === RecordingStatus.PROCESSING_TRANSCRIPTS || isProcessing;
 
+  const showRecordingControls =
+    (hasMicrophone || isRecording) &&
+    status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
+    status !== RecordingStatus.SAVING;
+
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, ease: "easeOut" }}
-      className="flex h-screen flex-col bg-muted"
-    >
-      {/* All Modals supported*/}
+    <Page>
       <SettingsModals modals={modals} messages={messages} onClose={hideModal} />
 
-      {/* Recovery Dialog */}
       <TranscriptRecovery
         isOpen={showRecoveryDialog}
         onClose={handleDialogClose}
@@ -224,63 +219,49 @@ export default function Home() {
         onDelete={deleteRecoverableMeeting}
         onLoadPreview={loadMeetingTranscripts}
       />
-      <div className="flex flex-1 overflow-hidden">
+
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, ease: "easeOut" }}
+        className="flex flex-1 min-h-0 overflow-hidden"
+      >
         <TranscriptPanel
           isProcessingStop={isProcessingStop}
           isStopping={isStopping}
           showModal={showModal}
         />
+      </motion.div>
 
-        {/* Recording controls - only show when permissions are granted or already recording and not showing status messages */}
-        {(hasMicrophone || isRecording) &&
-          status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
-          status !== RecordingStatus.SAVING && (
-            <div className="fixed inset-x-0 bottom-12 z-10">
-              <div
-                className="
-                  flex justify-center pl-8 transition-[margin] duration-300
-                "
-                style={{
-                  marginLeft: sidebarCollapsed ? "4rem" : "16rem",
-                }}
-              >
-                <div className="flex w-2/3 max-w-187.5 justify-center">
-                  <div className="
-                    flex items-center rounded-full bg-background shadow-lg
-                  ">
-                    <RecordingControls
-                      isRecording={recordingState.isRecording}
-                      onRecordingStop={(callApi = true) =>
-                        handleRecordingStop(callApi)
-                      }
-                      onRecordingStart={handleRecordingStart}
-                      onTranscriptReceived={() => {}} // Not actually used by RecordingControls
-                      onStopInitiated={() => setIsStopping(true)}
-                      barHeights={barHeights}
-                      onTranscriptionError={(message) => {
-                        showModal("errorAlert", message);
-                      }}
-                      isRecordingDisabled={isRecordingDisabled}
-                      isParentProcessing={isProcessingStop}
-                      selectedDevices={selectedDevices}
-                      meetingName={meetingTitle}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+      {showRecordingControls && (
+        <FloatingBottomDock>
+          <div className="flex items-center rounded-full bg-background shadow-lg">
+            <RecordingControls
+              isRecording={recordingState.isRecording}
+              onRecordingStop={(callApi = true) => handleRecordingStop(callApi)}
+              onRecordingStart={handleRecordingStart}
+              onTranscriptReceived={() => {}}
+              onStopInitiated={() => setIsStopping(true)}
+              barHeights={barHeights}
+              onTranscriptionError={(message) => {
+                showModal("errorAlert", message);
+              }}
+              isRecordingDisabled={isRecordingDisabled}
+              isParentProcessing={isProcessingStop}
+              selectedDevices={selectedDevices}
+              meetingName={meetingTitle}
+            />
+          </div>
+        </FloatingBottomDock>
+      )}
 
-        {/* Status Overlays - Processing and Saving */}
-        <StatusOverlays
-          isProcessing={
-            status === RecordingStatus.PROCESSING_TRANSCRIPTS &&
-            !recordingState.isRecording
-          }
-          isSaving={status === RecordingStatus.SAVING}
-          sidebarCollapsed={sidebarCollapsed}
-        />
-      </div>
-    </motion.div>
+      <StatusOverlays
+        isProcessing={
+          status === RecordingStatus.PROCESSING_TRANSCRIPTS &&
+          !recordingState.isRecording
+        }
+        isSaving={status === RecordingStatus.SAVING}
+      />
+    </Page>
   );
 }
