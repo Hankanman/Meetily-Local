@@ -19,7 +19,7 @@ import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptSegmentData } from "@/types";
 import { formatRecordingTime } from "@/lib/utils";
-import { speakerChipClass } from "@/lib/speaker-chip";
+import { EditableSpeakerChip } from "./EditableSpeakerChip";
 
 export interface VirtualizedTranscriptViewProps {
   /** Transcript segments to display */
@@ -45,6 +45,11 @@ export interface VirtualizedTranscriptViewProps {
   totalCount?: number;
   loadedCount?: number;
   onLoadMore?: () => void;
+
+  /** Fired after a speaker chip's name/email is saved. The parent should
+   *  reload transcripts so other rows showing the same speaker pick up the
+   *  rename. */
+  onSpeakerProfileChanged?: () => void;
 }
 
 // Threshold for enabling virtualization (below this, use simple rendering)
@@ -70,16 +75,20 @@ const TranscriptSegment = memo(function TranscriptSegment({
   text,
   confidence,
   speaker,
+  voiceProfileId,
   isStreaming,
   showConfidence,
+  onSpeakerSaved,
 }: {
   id: string;
   timestamp: number;
   text: string;
   confidence?: number;
   speaker?: string;
+  voiceProfileId?: string;
   isStreaming: boolean;
   showConfidence: boolean;
+  onSpeakerSaved?: () => void;
 }) {
   const displayText =
     cleanStopWords(text) || (text.trim() === "" ? "[Silence]" : text);
@@ -106,15 +115,11 @@ const TranscriptSegment = memo(function TranscriptSegment({
         </Tooltip>
         <div className="flex-1">
           {speaker && (
-            <span
-              className={`
-                mb-1 mr-2 inline-block rounded-full px-2 py-0.5 text-xs
-                font-medium
-                ${speakerChipClass(speaker)}
-              `}
-            >
-              {speaker}
-            </span>
+            <EditableSpeakerChip
+              speaker={speaker}
+              voiceProfileId={voiceProfileId}
+              onSaved={onSpeakerSaved}
+            />
           )}
           {isStreaming ? (
             <div className="rounded-lg border border-border bg-muted px-3 py-2">
@@ -149,6 +154,7 @@ export const VirtualizedTranscriptView: React.FC<
   totalCount = 0,
   loadedCount = 0,
   onLoadMore,
+  onSpeakerProfileChanged,
 }) => {
   // Create scroll ref first - shared between virtualizer and auto-scroll hook
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -341,8 +347,10 @@ export const VirtualizedTranscriptView: React.FC<
                       text={getDisplayText(segment)}
                       confidence={segment.confidence}
                       speaker={segment.speaker}
+                      voiceProfileId={segment.voice_profile_id}
                       isStreaming={isStreaming}
                       showConfidence={showConfidence}
+                      onSpeakerSaved={onSpeakerProfileChanged}
                     />
                   </div>
                 );
@@ -409,8 +417,10 @@ export const VirtualizedTranscriptView: React.FC<
                       text={getDisplayText(segment)}
                       confidence={segment.confidence}
                       speaker={segment.speaker}
+                      voiceProfileId={segment.voice_profile_id}
                       isStreaming={isStreaming}
                       showConfidence={showConfidence}
+                      onSpeakerSaved={onSpeakerProfileChanged}
                     />
                   </motion.div>
                 );

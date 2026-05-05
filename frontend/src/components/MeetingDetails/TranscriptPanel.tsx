@@ -107,6 +107,7 @@ export function TranscriptPanel({
           totalCount={totalCount}
           loadedCount={loadedCount}
           onLoadMore={onLoadMore}
+          onSpeakerProfileChanged={onRefetchTranscripts}
         />
       </div>
 
