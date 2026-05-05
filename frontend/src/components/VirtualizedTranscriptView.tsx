@@ -46,6 +46,9 @@ export interface VirtualizedTranscriptViewProps {
   loadedCount?: number;
   onLoadMore?: () => void;
 
+  /** Meeting these segments belong to. Required for the "Speaker N" → name
+   *  flow because the backend scopes the rename per-meeting. */
+  meetingId?: string;
   /** Fired after a speaker chip's name/email is saved. The parent should
    *  reload transcripts so other rows showing the same speaker pick up the
    *  rename. */
@@ -76,6 +79,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
   confidence,
   speaker,
   voiceProfileId,
+  meetingId,
   isStreaming,
   showConfidence,
   onSpeakerSaved,
@@ -86,6 +90,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
   confidence?: number;
   speaker?: string;
   voiceProfileId?: string;
+  meetingId?: string;
   isStreaming: boolean;
   showConfidence: boolean;
   onSpeakerSaved?: () => void;
@@ -118,6 +123,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
             <EditableSpeakerChip
               speaker={speaker}
               voiceProfileId={voiceProfileId}
+              meetingId={meetingId}
               onSaved={onSpeakerSaved}
             />
           )}
@@ -154,6 +160,7 @@ export const VirtualizedTranscriptView: React.FC<
   totalCount = 0,
   loadedCount = 0,
   onLoadMore,
+  meetingId,
   onSpeakerProfileChanged,
 }) => {
   // Create scroll ref first - shared between virtualizer and auto-scroll hook
@@ -348,6 +355,7 @@ export const VirtualizedTranscriptView: React.FC<
                       confidence={segment.confidence}
                       speaker={segment.speaker}
                       voiceProfileId={segment.voice_profile_id}
+                      meetingId={meetingId}
                       isStreaming={isStreaming}
                       showConfidence={showConfidence}
                       onSpeakerSaved={onSpeakerProfileChanged}
@@ -418,6 +426,7 @@ export const VirtualizedTranscriptView: React.FC<
                       confidence={segment.confidence}
                       speaker={segment.speaker}
                       voiceProfileId={segment.voice_profile_id}
+                      meetingId={meetingId}
                       isStreaming={isStreaming}
                       showConfidence={showConfidence}
                       onSpeakerSaved={onSpeakerProfileChanged}

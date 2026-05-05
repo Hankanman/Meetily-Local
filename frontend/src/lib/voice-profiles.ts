@@ -37,12 +37,23 @@ export interface PromoteSpeakerArgs {
   cluster_id: number;
   name: string;
   email?: string | null;
+  /** Meeting whose transcripts should be relabelled. Required because cluster
+   *  numbering is per-meeting; "Speaker 1" in different meetings is different
+   *  people. */
+  meeting_id: string;
+}
+
+export interface PromoteSpeakerResult {
+  /** New voice-profile id, or `null` when embeddings weren't reachable and
+   *  only the displayed labels were rewritten (no future auto-recognition). */
+  profile_id: string | null;
+  renamed_count: number;
 }
 
 export async function promoteSpeakerToProfile(
   args: PromoteSpeakerArgs,
-): Promise<string> {
-  return invoke<string>("promote_speaker_to_profile", { args });
+): Promise<PromoteSpeakerResult> {
+  return invoke<PromoteSpeakerResult>("promote_speaker_to_profile", { args });
 }
 
 /**

@@ -20,6 +20,10 @@ interface EditableSpeakerChipProps {
    *  unnamed cluster ("Speaker N") and editing routes through
    *  `promote_speaker_to_profile`. */
   voiceProfileId?: string;
+  /** Required when promoting an unnamed cluster — backends scopes the
+   *  rename of "Speaker N" → name to this meeting only. If omitted, the
+   *  chip falls back to a static (non-editable) span for unnamed clusters. */
+  meetingId?: string;
   /** Called after a successful save so the parent can refresh the transcript
    *  list (every row carrying the same speaker label / profile id should
    *  pick up the new name). */
@@ -35,6 +39,7 @@ const ME_LABEL = "Me";
 export function EditableSpeakerChip({
   speaker,
   voiceProfileId,
+  meetingId,
   onSaved,
 }: EditableSpeakerChipProps) {
   const [open, setOpen] = useState(false);
@@ -44,7 +49,15 @@ export function EditableSpeakerChip({
   const [error, setError] = useState<string | null>(null);
 
   const isMe = speaker === ME_LABEL;
-  const clusterId = voiceProfileId ? null : clusterIdFromSpeakerLabel(speaker);
+  const parsedClusterId = voiceProfileId
+    ? null
+    : clusterIdFromSpeakerLabel(speaker);
+  // Promoting an unnamed cluster needs both a parsed cluster id AND a
+  // meetingId scope. Without the latter the backend rejects the call (the
+  // rename of "Speaker N" → name has to be scoped per-meeting), so we fall
+  // back to a static chip.
+  const canPromoteCluster = parsedClusterId !== null && !!meetingId;
+  const clusterId = canPromoteCluster ? parsedClusterId : null;
   const isUnnamedCluster = clusterId !== null;
   const isNamedProfile = !!voiceProfileId;
 
@@ -104,11 +117,12 @@ export function EditableSpeakerChip({
     try {
       if (isNamedProfile && voiceProfileId) {
         await updateVoiceProfile(voiceProfileId, trimmedName, emailOrNull);
-      } else if (clusterId !== null) {
+      } else if (clusterId !== null && meetingId) {
         await promoteSpeakerToProfile({
           cluster_id: clusterId,
           name: trimmedName,
           email: emailOrNull,
+          meeting_id: meetingId,
         });
       }
       setOpen(false);

@@ -1,5 +1,6 @@
 //! Tauri commands for the speaker diarization layer.
 
+use crate::database::repositories::transcript::TranscriptsRepository;
 use crate::database::repositories::voice_profile::{bytes_to_floats, VoiceProfilesRepository};
 use crate::speaker_diarization::{
     current_diarizer, default_model_path, model::model_is_ready, model_download_url,
@@ -245,6 +246,23 @@ pub struct PromoteSpeakerArgs {
     /// that captures the name. `None` / empty string leaves it unset.
     #[serde(default)]
     pub email: Option<String>,
+    /// Meeting whose transcripts should have their `speaker` label rewritten
+    /// from "Speaker N" to the new name. Required because cluster numbering
+    /// is per-meeting — a "Speaker 1" rename without a meeting scope would
+    /// mis-attribute speech in other meetings.
+    pub meeting_id: String,
+}
+
+/// Result of `promote_speaker_to_profile`. `profile_id` is `None` when the
+/// embeddings for this cluster aren't reachable (most often: viewing an old
+/// meeting whose diarizer state has been dropped) — in that case we still
+/// rename the speaker in the meeting's transcripts so the user gets the
+/// named chip back, but no voice profile is created and future meetings
+/// won't auto-recognise this speaker.
+#[derive(Debug, Serialize)]
+pub struct PromoteSpeakerResult {
+    pub profile_id: Option<String>,
+    pub renamed_count: u64,
 }
 
 #[command]
@@ -326,10 +344,13 @@ pub async fn update_voice_profile<R: Runtime>(
 pub async fn promote_speaker_to_profile<R: Runtime>(
     app: AppHandle<R>,
     args: PromoteSpeakerArgs,
-) -> Result<String, String> {
+) -> Result<PromoteSpeakerResult, String> {
     let trimmed_name = args.name.trim();
     if trimmed_name.is_empty() {
         return Err("Profile name cannot be empty".into());
+    }
+    if args.meeting_id.trim().is_empty() {
+        return Err("meeting_id is required".into());
     }
     let normalised_email = args
         .email
@@ -337,44 +358,82 @@ pub async fn promote_speaker_to_profile<R: Runtime>(
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
-    let diarizer =
-        current_diarizer().ok_or_else(|| "No diarizer available — record a meeting first".to_string())?;
-
-    let embeddings = diarizer.embeddings_for_cluster(args.cluster_id);
-    if embeddings.is_empty() {
-        return Err(format!(
-            "No embeddings found for Speaker {} (cluster id {}). Has anyone in that cluster spoken yet?",
-            args.cluster_id + 1,
-            args.cluster_id,
-        ));
-    }
-
-    let centroid = average_and_normalize(&embeddings);
-
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| "AppState unavailable".to_string())?;
     let pool = state.db_manager.pool();
-    let id = VoiceProfilesRepository::create(
+
+    let old_label = format!("Speaker {}", args.cluster_id + 1);
+
+    // Try to grab the embeddings. They're reachable only when the diarizer
+    // that produced this meeting is still the in-memory singleton (a live
+    // recording or its just-finished retranscription). Older meetings
+    // degrade to rename-only.
+    let embeddings = current_diarizer()
+        .map(|d| d.embeddings_for_cluster(args.cluster_id))
+        .unwrap_or_default();
+
+    let profile_id = if embeddings.is_empty() {
+        log::warn!(
+            "No embeddings reachable for {} in meeting {} — renaming transcripts but skipping voice-profile creation",
+            old_label,
+            args.meeting_id,
+        );
+        None
+    } else {
+        let centroid = average_and_normalize(&embeddings);
+        let id = VoiceProfilesRepository::create(
+            pool,
+            trimmed_name,
+            normalised_email,
+            &centroid,
+            embeddings.len() as i64,
+        )
+        .await
+        .map_err(|e| format!("Failed to create voice profile: {}", e))?;
+        log::info!(
+            "Promoted {} to profile '{}' (email={:?}, id={}, samples={})",
+            old_label,
+            trimmed_name,
+            normalised_email,
+            id,
+            embeddings.len()
+        );
+        Some(id)
+    };
+
+    // Rewrite the displayed speaker label in this meeting's transcripts so
+    // every row that previously showed "Speaker N" now shows the new name.
+    // This runs in both the success and the rename-only fallback case.
+    let renamed_count = TranscriptsRepository::rename_speaker_in_meeting(
         pool,
+        &args.meeting_id,
+        &old_label,
         trimmed_name,
-        normalised_email,
-        &centroid,
-        embeddings.len() as i64,
+        profile_id.as_deref(),
     )
     .await
-    .map_err(|e| format!("Failed to create voice profile: {}", e))?;
+    .map_err(|e| format!("Failed to rename transcripts: {}", e))?;
 
     log::info!(
-        "Promoted Speaker {} (cluster {}) to profile '{}' (email={:?}, id={}, samples={})",
-        args.cluster_id + 1,
-        args.cluster_id,
+        "Renamed {} -> '{}' across {} transcript rows in meeting {}",
+        old_label,
         trimmed_name,
-        normalised_email,
-        id,
-        embeddings.len()
+        renamed_count,
+        args.meeting_id,
     );
-    Ok(id)
+
+    if profile_id.is_none() && renamed_count == 0 {
+        return Err(format!(
+            "Nothing to do: no embeddings reachable for {} and no transcripts in meeting {} carry that label",
+            old_label, args.meeting_id
+        ));
+    }
+
+    Ok(PromoteSpeakerResult {
+        profile_id,
+        renamed_count,
+    })
 }
 
 /// Run the post-recording 2-pass refinement and return refined speaker

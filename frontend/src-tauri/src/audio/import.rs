@@ -709,6 +709,17 @@ async fn run_import<R: Runtime>(
 
     emit_progress(&app, "complete", 100, "Import complete");
 
+    // Install the batch diarizer as current so the user can name "Speaker N"
+    // on the just-imported meeting and reach this batch's embeddings (see
+    // matching note in retranscription.rs for the full rationale).
+    if let Some(d) = diarizer {
+        crate::speaker_diarization::set_current_diarizer(Some(d));
+        info!(
+            "Installed import diarizer as current_diarizer for meeting {}",
+            meeting_id
+        );
+    }
+
     Ok(ImportResult {
         meeting_id,
         title,
