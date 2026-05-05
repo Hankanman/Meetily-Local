@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Pencil, Trash2, Users } from "lucide-react";
+import { GitMerge, Pencil, Trash2, Users } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -14,8 +14,16 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
+import {
   deleteVoiceProfile,
   listVoiceProfiles,
+  mergeVoiceProfiles,
   updateVoiceProfile,
   VoiceProfile,
 } from "@/lib/voice-profiles";
@@ -23,7 +31,8 @@ import {
 type EditingState =
   | { kind: "idle" }
   | { kind: "edit"; profile: VoiceProfile }
-  | { kind: "delete"; profile: VoiceProfile };
+  | { kind: "delete"; profile: VoiceProfile }
+  | { kind: "merge"; loser: VoiceProfile };
 
 function formatRelative(iso: string): string {
   // Best-effort relative date — falls back to the raw ISO string on parse fail.
@@ -132,6 +141,15 @@ export function SpeakerSettings() {
                       <Button
                         variant="ghost"
                         size="icon"
+                        aria-label={`Merge ${p.name} into another speaker`}
+                        disabled={profiles.length < 2}
+                        onClick={() => setEditing({ kind: "merge", loser: p })}
+                      >
+                        <GitMerge className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         aria-label={`Delete ${p.name}`}
                         onClick={() =>
                           setEditing({ kind: "delete", profile: p })
@@ -164,6 +182,18 @@ export function SpeakerSettings() {
           profile={editing.profile}
           onClose={() => setEditing({ kind: "idle" })}
           onDeleted={() => {
+            setEditing({ kind: "idle" });
+            void refresh();
+          }}
+        />
+      )}
+
+      {editing.kind === "merge" && profiles && (
+        <MergeDialog
+          loser={editing.loser}
+          candidates={profiles.filter((p) => p.id !== editing.loser.id)}
+          onClose={() => setEditing({ kind: "idle" })}
+          onMerged={() => {
             setEditing({ kind: "idle" });
             void refresh();
           }}
@@ -251,6 +281,87 @@ interface DeleteDialogProps {
   profile: VoiceProfile;
   onClose: () => void;
   onDeleted: () => void;
+}
+
+interface MergeDialogProps {
+  loser: VoiceProfile;
+  candidates: VoiceProfile[];
+  onClose: () => void;
+  onMerged: () => void;
+}
+
+function MergeDialog({
+  loser,
+  candidates,
+  onClose,
+  onMerged,
+}: MergeDialogProps) {
+  const [winnerId, setWinnerId] = useState<string>("");
+  const [merging, setMerging] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const winner = candidates.find((c) => c.id === winnerId) ?? null;
+  const canMerge = !!winner && !merging;
+
+  async function handleMerge() {
+    if (!winner) return;
+    setMerging(true);
+    setErr(null);
+    try {
+      await mergeVoiceProfiles(winner.id, loser.id);
+      onMerged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setMerging(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Merge speaker</DialogTitle>
+          <DialogDescription>
+            Folds &quot;{loser.name}&quot; into another speaker. The chosen
+            speaker keeps its name and email; samples from both profiles are
+            combined and every transcript currently linked to{" "}
+            &quot;{loser.name}&quot; is re-pointed at the chosen speaker.
+            This profile is then deleted.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label htmlFor="merge-target">Merge into</Label>
+            <Select value={winnerId} onValueChange={setWinnerId}>
+              <SelectTrigger id="merge-target">
+                <SelectValue placeholder="Choose a speaker..." />
+              </SelectTrigger>
+              <SelectContent>
+                {candidates.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                    {c.email ? (
+                      <span className="text-muted-foreground"> · {c.email}</span>
+                    ) : null}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {err && <p className="text-xs text-destructive">{err}</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={merging}>
+            Cancel
+          </Button>
+          <Button onClick={handleMerge} disabled={!canMerge}>
+            {merging ? "Merging…" : "Merge"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function DeleteDialog({ profile, onClose, onDeleted }: DeleteDialogProps) {

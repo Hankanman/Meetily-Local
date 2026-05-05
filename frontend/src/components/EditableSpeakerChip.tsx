@@ -5,13 +5,24 @@ import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
 import { speakerChipClass } from "@/lib/speaker-chip";
 import {
   clusterIdFromSpeakerLabel,
   listVoiceProfiles,
+  mergeClusterIntoProfile,
   promoteSpeakerToProfile,
   updateVoiceProfile,
+  VoiceProfile,
 } from "@/lib/voice-profiles";
+
+const MERGE_NEW_VALUE = "__new__";
 
 interface EditableSpeakerChipProps {
   speaker: string;
@@ -47,6 +58,11 @@ export function EditableSpeakerChip({
   const [email, setEmail] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // For unnamed-cluster chips: list of stored profiles the user can merge
+  // into instead of creating a new one. `MERGE_NEW_VALUE` ("create new")
+  // means "fall through to the name/email inputs".
+  const [profiles, setProfiles] = useState<VoiceProfile[]>([]);
+  const [mergeTargetId, setMergeTargetId] = useState<string>(MERGE_NEW_VALUE);
 
   const isMe = speaker === ME_LABEL;
   const parsedClusterId = voiceProfileId
@@ -60,32 +76,42 @@ export function EditableSpeakerChip({
   const clusterId = canPromoteCluster ? parsedClusterId : null;
   const isUnnamedCluster = clusterId !== null;
   const isNamedProfile = !!voiceProfileId;
+  const mergeTarget =
+    mergeTargetId !== MERGE_NEW_VALUE
+      ? profiles.find((p) => p.id === mergeTargetId) ?? null
+      : null;
 
-  // When the popover opens for a named profile, fetch its current email so
-  // the form prefills correctly (the transcript row only carries the label).
+  // When the popover opens, fetch the profile list. Used in two ways:
+  //  - Named profile: pluck this profile's email to prefill the form
+  //  - Unnamed cluster: populate the "merge into existing" select
   useEffect(() => {
     if (!open) return;
     setName(speaker);
     setError(null);
+    setMergeTargetId(MERGE_NEW_VALUE);
 
-    if (isNamedProfile) {
-      let cancelled = false;
-      (async () => {
-        try {
-          const profiles = await listVoiceProfiles();
-          if (cancelled) return;
-          const me = profiles.find((p) => p.id === voiceProfileId);
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await listVoiceProfiles();
+        if (cancelled) return;
+        setProfiles(list);
+        if (isNamedProfile) {
+          const me = list.find((p) => p.id === voiceProfileId);
           setEmail(me?.email ?? "");
-        } catch {
-          if (!cancelled) setEmail("");
+        } else {
+          setEmail("");
         }
-      })();
-      return () => {
-        cancelled = true;
-      };
-    } else {
-      setEmail("");
-    }
+      } catch {
+        if (!cancelled) {
+          setProfiles([]);
+          setEmail("");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [open, speaker, voiceProfileId, isNamedProfile]);
 
   const chipClass = `
@@ -104,7 +130,13 @@ export function EditableSpeakerChip({
     return <span className={chipClass}>{speaker}</span>;
   }
 
-  const canSave = name.trim().length > 0 && !saving;
+  // When merging into an existing profile, no new name/email input is
+  // required — we use the target profile's existing values.
+  const canSave = saving
+    ? false
+    : mergeTarget
+    ? true
+    : name.trim().length > 0;
 
   async function handleSave() {
     if (!canSave) return;
@@ -115,7 +147,14 @@ export function EditableSpeakerChip({
     const emailOrNull = trimmedEmail.length > 0 ? trimmedEmail : null;
 
     try {
-      if (isNamedProfile && voiceProfileId) {
+      if (mergeTarget && clusterId !== null && meetingId) {
+        // Merge unnamed cluster into an existing stored profile.
+        await mergeClusterIntoProfile({
+          meeting_id: meetingId,
+          cluster_id: clusterId,
+          profile_id: mergeTarget.id,
+        });
+      } else if (isNamedProfile && voiceProfileId) {
         await updateVoiceProfile(voiceProfileId, trimmedName, emailOrNull);
       } else if (clusterId !== null && meetingId) {
         await promoteSpeakerToProfile({
@@ -158,26 +197,67 @@ export function EditableSpeakerChip({
                 : "Save a voice profile so future meetings auto-tag this person."}
             </p>
           </div>
-          <div className="space-y-1">
-            <Label htmlFor="speaker-name">Name</Label>
-            <Input
-              id="speaker-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Alice Smith"
-              autoFocus
-            />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="speaker-email">Email (optional)</Label>
-            <Input
-              id="speaker-email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="alice@example.com"
-            />
-          </div>
+
+          {isUnnamedCluster && profiles.length > 0 && (
+            <div className="space-y-1">
+              <Label htmlFor="speaker-merge-target">Existing speaker</Label>
+              <Select value={mergeTargetId} onValueChange={setMergeTargetId}>
+                <SelectTrigger id="speaker-merge-target">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={MERGE_NEW_VALUE}>
+                    Create new speaker…
+                  </SelectItem>
+                  {profiles.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                      {p.email ? (
+                        <span className="text-muted-foreground"> · {p.email}</span>
+                      ) : null}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {!mergeTarget && (
+            <>
+              <div className="space-y-1">
+                <Label htmlFor="speaker-name">Name</Label>
+                <Input
+                  id="speaker-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Alice Smith"
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="speaker-email">Email (optional)</Label>
+                <Input
+                  id="speaker-email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="alice@example.com"
+                />
+              </div>
+            </>
+          )}
+
+          {mergeTarget && (
+            <p className="rounded-md bg-muted p-2 text-xs text-muted-foreground">
+              This cluster&apos;s samples will be folded into{" "}
+              <span className="font-medium text-foreground">
+                {mergeTarget.name}
+              </span>
+              {mergeTarget.email ? ` (${mergeTarget.email})` : ""}, and every
+              transcript from this meeting will be relabelled.
+            </p>
+          )}
+
           {error && (
             <p className="text-xs text-destructive">{error}</p>
           )}
@@ -197,7 +277,13 @@ export function EditableSpeakerChip({
               onClick={handleSave}
               disabled={!canSave}
             >
-              {saving ? "Saving…" : "Save"}
+              {saving
+                ? mergeTarget
+                  ? "Merging…"
+                  : "Saving…"
+                : mergeTarget
+                ? `Merge into ${mergeTarget.name}`
+                : "Save"}
             </Button>
           </div>
         </div>

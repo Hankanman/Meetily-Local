@@ -56,6 +56,34 @@ export async function promoteSpeakerToProfile(
   return invoke<PromoteSpeakerResult>("promote_speaker_to_profile", { args });
 }
 
+export interface MergeResult {
+  renamed_count: number;
+  /** True when the winner profile's centroid was rebuilt from the merged
+   *  samples; false on the degraded relabel-only path. */
+  centroid_updated: boolean;
+}
+
+export async function mergeVoiceProfiles(
+  winnerId: string,
+  loserId: string,
+): Promise<MergeResult> {
+  return invoke<MergeResult>("merge_voice_profiles", {
+    args: { winner_id: winnerId, loser_id: loserId },
+  });
+}
+
+export interface MergeClusterArgs {
+  meeting_id: string;
+  cluster_id: number;
+  profile_id: string;
+}
+
+export async function mergeClusterIntoProfile(
+  args: MergeClusterArgs,
+): Promise<MergeResult> {
+  return invoke<MergeResult>("merge_cluster_into_profile", { args });
+}
+
 /**
  * Parse a "Speaker N" label into a 0-indexed cluster_id, or `null` if the
  * label isn't an unnamed-cluster placeholder. The diarizer assigns
