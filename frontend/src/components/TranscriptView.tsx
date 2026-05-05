@@ -7,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
 import { formatRecordingTime } from "@/lib/utils";
+import { speakerChipClass } from "@/lib/speaker-chip";
 
 interface TranscriptViewProps {
   transcripts: Transcript[];
@@ -333,6 +334,17 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
                 </TooltipContent>
               </Tooltip>
               <div className="flex-1">
+                {transcript.speaker && (
+                  <span
+                    className={`
+                      mb-1 mr-2 inline-block rounded-full px-2 py-0.5 text-xs
+                      font-medium
+                      ${speakerChipClass(transcript.speaker)}
+                    `}
+                  >
+                    {transcript.speaker}
+                  </span>
+                )}
                 {isStreaming ? (
                   // Streaming transcript - show in bubble (full width)
                   <div className="

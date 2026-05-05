@@ -19,6 +19,7 @@ import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptSegmentData } from "@/types";
 import { formatRecordingTime } from "@/lib/utils";
+import { speakerChipClass } from "@/lib/speaker-chip";
 
 export interface VirtualizedTranscriptViewProps {
   /** Transcript segments to display */
@@ -68,6 +69,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
   timestamp,
   text,
   confidence,
+  speaker,
   isStreaming,
   showConfidence,
 }: {
@@ -75,6 +77,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
   timestamp: number;
   text: string;
   confidence?: number;
+  speaker?: string;
   isStreaming: boolean;
   showConfidence: boolean;
 }) {
@@ -102,6 +105,17 @@ const TranscriptSegment = memo(function TranscriptSegment({
           </TooltipContent>
         </Tooltip>
         <div className="flex-1">
+          {speaker && (
+            <span
+              className={`
+                mb-1 mr-2 inline-block rounded-full px-2 py-0.5 text-xs
+                font-medium
+                ${speakerChipClass(speaker)}
+              `}
+            >
+              {speaker}
+            </span>
+          )}
           {isStreaming ? (
             <div className="rounded-lg border border-border bg-muted px-3 py-2">
               <p className="text-sm/relaxed text-foreground">
@@ -326,6 +340,7 @@ export const VirtualizedTranscriptView: React.FC<
                       timestamp={segment.timestamp}
                       text={getDisplayText(segment)}
                       confidence={segment.confidence}
+                      speaker={segment.speaker}
                       isStreaming={isStreaming}
                       showConfidence={showConfidence}
                     />
@@ -393,6 +408,7 @@ export const VirtualizedTranscriptView: React.FC<
                       timestamp={segment.timestamp}
                       text={getDisplayText(segment)}
                       confidence={segment.confidence}
+                      speaker={segment.speaker}
                       isStreaming={isStreaming}
                       showConfidence={showConfidence}
                     />

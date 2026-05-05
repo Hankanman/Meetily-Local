@@ -7,8 +7,13 @@ use env_logger;
 use log;
 
 fn main() {
-    std::env::set_var("RUST_LOG", "info");
-    env_logger::init();
+    // Honor RUST_LOG from the environment (dev.sh sets `info,whisper_rs=warn`)
+    // and default to `info` if unset. The `filter_module` call clamps
+    // `whisper_rs` to Warn regardless — whisper.cpp emits ~1000 lines of
+    // per-decoder beam-search trace at INFO that drowns out everything else.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .filter_module("whisper_rs", log::LevelFilter::Warn)
+        .init();
 
     // On Linux, WebKitGTK's DMABUF renderer is unreliable on common GPU/driver
     // combinations (notably NVIDIA proprietary drivers and several Wayland

@@ -12,7 +12,7 @@ export interface RawModelInfo {
 }
 
 export interface ModelOption {
-  provider: "whisper" | "parakeet";
+  provider: "whisper";
   name: string;
   displayName: string;
   size_mb: number;
@@ -24,7 +24,7 @@ interface TranscriptModelConfig {
 }
 
 /**
- * Custom hook for fetching and managing transcription models (Whisper and Parakeet).
+ * Custom hook for fetching and managing local Whisper transcription models.
  *
  * This hook centralizes the model fetching logic that was previously duplicated
  * in ImportAudioDialog and RetranscribeDialog components.
@@ -69,40 +69,19 @@ export function useTranscriptionModels(
       console.error("Failed to fetch Whisper models:", err);
     }
 
-    // Fetch Parakeet models
-    try {
-      const parakeetModels = await invoke<RawModelInfo[]>(
-        "parakeet_get_available_models",
-      );
-      const availableParakeet = parakeetModels
-        .filter((m) => m.status === "Available")
-        .map((m) => ({
-          provider: "parakeet" as const,
-          name: m.name,
-          displayName: `⚡ Parakeet: ${m.name}`,
-          size_mb: m.size_mb,
-        }));
-      allModels.push(...availableParakeet);
-    } catch (err) {
-      console.error("Failed to fetch Parakeet models:", err);
-    }
-
     setAvailableModels(allModels);
 
     // Set default model based on user's saved configuration
     const configuredProvider = transcriptModelConfig?.provider || "";
     const configuredModel = transcriptModelConfig?.model || "";
 
-    // Try to match the configured model
-    // Note: 'localWhisper' in config maps to 'whisper' provider in model list
+    // Try to match the configured model.
+    // Note: 'localWhisper' in saved config maps to 'whisper' provider in model list.
     const configuredMatch = allModels.find(
       (m) =>
-        (configuredProvider === "localWhisper" &&
-          m.provider === "whisper" &&
-          m.name === configuredModel) ||
-        (configuredProvider === "parakeet" &&
-          m.provider === "parakeet" &&
-          m.name === configuredModel),
+        configuredProvider === "localWhisper" &&
+        m.provider === "whisper" &&
+        m.name === configuredModel,
     );
 
     // Only set default model if user hasn't manually selected one

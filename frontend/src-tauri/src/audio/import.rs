@@ -3,8 +3,7 @@
 use crate::api::TranscriptSegment;
 use crate::audio::decoder::{decode_audio_file, decode_audio_file_with_progress};
 use crate::audio::vad::get_speech_chunks_with_progress;
-use crate::config::{DEFAULT_PARAKEET_MODEL, DEFAULT_WHISPER_MODEL};
-use crate::parakeet_engine::ParakeetEngine;
+use crate::config::DEFAULT_WHISPER_MODEL;
 use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
 use anyhow::{anyhow, Result};
@@ -18,7 +17,9 @@ use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 use super::audio_processing::create_meeting_folder;
-use super::common::{create_transcript_segments, split_segment_at_silence, write_transcripts_json};
+use super::common::{
+    create_transcript_segments, split_segment_at_silence, write_transcripts_json, BatchTranscript,
+};
 use super::constants::AUDIO_EXTENSIONS;
 use super::recording_preferences::get_default_recordings_folder;
 
@@ -51,11 +52,10 @@ impl Drop for ImportGuard {
     }
 }
 
-/// VAD redemption time in milliseconds - bridges natural pauses in speech
-/// Batch processing needs longer redemption (2000ms) than live pipeline (400ms)
-/// because the entire file is processed at once by VAD, and 400ms fragments
-/// speech at every natural sentence/topic pause (500ms-2s)
-const VAD_REDEMPTION_TIME_MS: u32 = 2000;
+/// VAD redemption time in milliseconds. See retranscription.rs for the full
+/// rationale — 800ms cuts at natural meeting pauses without fragmenting
+/// breaths, and gives the diarizer one-speaker-per-segment material to embed.
+const VAD_REDEMPTION_TIME_MS: u32 = 800;
 
 /// Maximum file size: 20GB (prevents OOM and excessive processing time)
 const MAX_FILE_SIZE_BYTES: u64 = 20 * 1024 * 1024 * 1024; // 20GB
@@ -261,11 +261,10 @@ pub async fn start_import<R: Runtime>(
     // Reset cancellation flag
     IMPORT_CANCELLED.store(false, Ordering::SeqCst);
 
-    let use_parakeet = provider.as_deref() == Some("parakeet");
     let result = run_import(app.clone(), source_path, title, language, model, provider).await;
 
     // Unload the engine after the batch job (success, failure, or cancellation)
-    super::common::unload_engine_after_batch(use_parakeet).await;
+    super::common::unload_engine_after_batch().await;
 
     // Guard will automatically clear flag on drop
     // No need for manual: IMPORT_IN_PROGRESS.store(false, Ordering::SeqCst);
@@ -311,13 +310,13 @@ async fn run_import<R: Runtime>(
         return Err(anyhow!("Source file not found: {}", source.display()));
     }
 
+    // `provider` parameter is accepted for backward compatibility but only
+    // Whisper is supported now (Parakeet was removed).
+    let _ = provider;
     info!(
-        "Starting import for '{}' from {} with language {:?}, model {:?}, provider {:?}",
-        title, source_path, language, model, provider
+        "Starting import for '{}' from {} with language {:?}, model {:?}",
+        title, source_path, language, model
     );
-
-    // Determine which provider to use (default to whisper)
-    let use_parakeet = provider.as_deref() == Some("parakeet");
 
     emit_progress(&app, "copying", 5, "Creating meeting folder...");
 
@@ -506,17 +505,33 @@ async fn run_import<R: Runtime>(
 
     emit_progress(&app, "transcribing", 30, "Loading transcription engine...");
 
-    // Initialize the appropriate engine
-    let whisper_engine = if !use_parakeet && total_segments > 0 {
+    // Initialize Whisper for the import job (only if there's anything to transcribe).
+    let whisper_engine = if total_segments > 0 {
         Some(get_or_init_whisper(&app, model.as_deref()).await?)
     } else {
         None
     };
-    let parakeet_engine = if use_parakeet && total_segments > 0 {
-        Some(get_or_init_parakeet(&app, model.as_deref()).await?)
+
+    // Build a fresh diarizer for the batch (None if speaker model isn't on
+    // disk). Imported audio is a single mixed stream — the diarizer just
+    // clusters voices and matches stored profiles when available.
+    let diarizer = if total_segments > 0 {
+        match crate::speaker_diarization::commands::build_diarizer(&app).await {
+            Ok(d) => d,
+            Err(e) => {
+                warn!(
+                    "Speaker diarizer build failed: {} (continuing without speaker labels)",
+                    e
+                );
+                None
+            }
+        }
     } else {
         None
     };
+    if diarizer.is_some() {
+        info!("Speaker diarization enabled for import");
+    }
 
     // Split very long segments at silence boundaries for better transcription quality.
     // Hard cuts at arbitrary sample positions lose words at boundaries. Instead, scan
@@ -547,7 +562,7 @@ async fn run_import<R: Runtime>(
     );
 
     // Process each speech segment
-    let mut all_transcripts: Vec<(String, f64, f64)> = Vec::new();
+    let mut all_transcripts: Vec<BatchTranscript> = Vec::new();
     let mut total_confidence = 0.0f32;
 
     for (i, segment) in processable_segments.iter().enumerate() {
@@ -580,22 +595,12 @@ async fn run_import<R: Runtime>(
             continue;
         }
 
-        // Transcribe
-        let (text, conf) = if use_parakeet {
-            let engine = parakeet_engine.as_ref().unwrap();
-            let text = engine
-                .transcribe_audio(segment.samples.clone())
-                .await
-                .map_err(|e| anyhow!("Parakeet transcription failed on segment {}: {}", i, e))?;
-            (text, 0.9f32)
-        } else {
-            let engine = whisper_engine.as_ref().unwrap();
-            let (text, conf, _) = engine
-                .transcribe_audio_with_confidence(segment.samples.clone(), language.clone())
-                .await
-                .map_err(|e| anyhow!("Whisper transcription failed on segment {}: {}", i, e))?;
-            (text, conf)
-        };
+        // Transcribe with Whisper.
+        let engine = whisper_engine.as_ref().unwrap();
+        let (text, conf, _) = engine
+            .transcribe_audio_with_confidence(segment.samples.clone(), language.clone())
+            .await
+            .map_err(|e| anyhow!("Whisper transcription failed on segment {}: {}", i, e))?;
 
         let trimmed = text.trim();
         if !trimmed.is_empty() {
@@ -615,7 +620,28 @@ async fn run_import<R: Runtime>(
                     trimmed
                 }
             );
-            all_transcripts.push((text, segment.start_timestamp_ms, segment.end_timestamp_ms));
+            // Run the diarizer (if available) on the segment audio.
+            let (speaker, voice_profile_id) = match diarizer.as_ref() {
+                Some(d) => match d.process(i as u64, &segment.samples) {
+                    Ok(result) => (Some(result.label), result.voice_profile_id),
+                    Err(e) => {
+                        debug!(
+                            "Diarization fallback for import segment {}: {}",
+                            i, e
+                        );
+                        (None, None)
+                    }
+                },
+                None => (None, None),
+            };
+
+            all_transcripts.push(BatchTranscript {
+                text,
+                start_ms: segment.start_timestamp_ms,
+                end_ms: segment.end_timestamp_ms,
+                speaker,
+                voice_profile_id,
+            });
             total_confidence += conf;
         } else {
             debug!(
@@ -739,8 +765,8 @@ async fn create_meeting_with_transcripts(
     // Insert transcripts
     for segment in segments {
         sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, voice_profile_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&segment.id)
         .bind(&meeting_id)
@@ -749,6 +775,8 @@ async fn create_meeting_with_transcripts(
         .bind(segment.audio_start_time)
         .bind(segment.audio_end_time)
         .bind(segment.duration)
+        .bind(&segment.speaker)
+        .bind(&segment.voice_profile_id)
         .execute(&mut *tx)
         .await
         .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
@@ -783,7 +811,7 @@ async fn get_or_init_whisper<R: Runtime>(
         Some(e) => {
             let target_model = match requested_model {
                 Some(model) => model.to_string(),
-                None => get_configured_model(app, "whisper").await?,
+                None => get_configured_model(app).await?,
             };
 
             let current_model = e.get_current_model().await;
@@ -813,57 +841,10 @@ async fn get_or_init_whisper<R: Runtime>(
     }
 }
 
-/// Get or initialize the Parakeet engine
-async fn get_or_init_parakeet<R: Runtime>(
-    app: &AppHandle<R>,
-    requested_model: Option<&str>,
-) -> Result<Arc<ParakeetEngine>> {
-    use crate::parakeet_engine::commands::PARAKEET_ENGINE;
-
-    let engine = {
-        let guard = PARAKEET_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
-        guard.as_ref().cloned()
-    };
-
-    match engine {
-        Some(e) => {
-            let target_model = match requested_model {
-                Some(model) => model.to_string(),
-                None => get_configured_model(app, "parakeet").await?,
-            };
-
-            let current_model = e.get_current_model().await;
-            let needs_load = match &current_model {
-                Some(loaded) => loaded != &target_model,
-                None => true,
-            };
-
-            if needs_load {
-                info!(
-                    "Loading Parakeet model '{}' (current: {:?})",
-                    target_model, current_model
-                );
-
-                if let Err(e) = e.discover_models().await {
-                    warn!("Model discovery error (continuing): {}", e);
-                }
-
-                e.load_model(&target_model)
-                    .await
-                    .map_err(|e| anyhow!("Failed to load model '{}': {}", target_model, e))?;
-            }
-
-            Ok(e)
-        }
-        None => Err(anyhow!("Parakeet engine not initialized")),
-    }
-}
-
-/// Get the configured model from database
-async fn get_configured_model<R: Runtime>(
-    app: &AppHandle<R>,
-    provider_type: &str,
-) -> Result<String> {
+/// Get the configured Whisper model from database, defaulting to
+/// [`DEFAULT_WHISPER_MODEL`] if nothing is saved or the saved provider isn't
+/// Whisper.
+async fn get_configured_model<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
     let app_state = app
         .try_state::<AppState>()
         .ok_or_else(|| anyhow!("App state not available"))?;
@@ -875,25 +856,8 @@ async fn get_configured_model<R: Runtime>(
             .map_err(|e| anyhow!("Failed to query config: {}", e))?;
 
     match result {
-        Some((provider, model)) => {
-            if (provider_type == "whisper" && (provider == "localWhisper" || provider == "whisper"))
-                || (provider_type == "parakeet" && provider == "parakeet")
-            {
-                Ok(model)
-            } else {
-                // Return default model for the requested type
-                Ok(if provider_type == "parakeet" {
-                    DEFAULT_PARAKEET_MODEL.to_string()
-                } else {
-                    DEFAULT_WHISPER_MODEL.to_string()
-                })
-            }
-        }
-        None => Ok(if provider_type == "parakeet" {
-            DEFAULT_PARAKEET_MODEL.to_string()
-        } else {
-            DEFAULT_WHISPER_MODEL.to_string()
-        }),
+        Some((provider, model)) if provider == "localWhisper" || provider == "whisper" => Ok(model),
+        _ => Ok(DEFAULT_WHISPER_MODEL.to_string()),
     }
 }
 
@@ -1041,16 +1005,26 @@ mod tests {
         assert!(!AUDIO_EXTENSIONS.contains(&"txt"));
     }
 
+    fn bt(text: &str, start_ms: f64, end_ms: f64) -> BatchTranscript {
+        BatchTranscript {
+            text: text.to_string(),
+            start_ms,
+            end_ms,
+            speaker: None,
+            voice_profile_id: None,
+        }
+    }
+
     #[test]
     fn test_create_transcript_segments_empty() {
-        let transcripts: Vec<(String, f64, f64)> = vec![];
+        let transcripts: Vec<BatchTranscript> = vec![];
         let segments = create_transcript_segments(&transcripts);
         assert!(segments.is_empty());
     }
 
     #[test]
     fn test_create_transcript_segments_single() {
-        let transcripts = vec![("Hello world".to_string(), 0.0, 1500.0)];
+        let transcripts = vec![bt("Hello world", 0.0, 1500.0)];
         let segments = create_transcript_segments(&transcripts);
 
         assert_eq!(segments.len(), 1);
@@ -1149,6 +1123,7 @@ mod tests {
             start_timestamp_ms: 0.0,
             end_timestamp_ms: 1000.0,
             confidence: 0.9,
+            source: crate::audio::recording_state::DeviceType::Microphone,
         };
         let result = split_segment_at_silence(&segment, 25 * 16000);
         assert_eq!(result.len(), 1);
@@ -1168,6 +1143,7 @@ mod tests {
             start_timestamp_ms: 0.0,
             end_timestamp_ms: 60_000.0,
             confidence: 0.9,
+            source: crate::audio::recording_state::DeviceType::Microphone,
         };
 
         let result = split_segment_at_silence(&segment, 25 * 16000);
@@ -1198,6 +1174,7 @@ mod tests {
             start_timestamp_ms: 0.0,
             end_timestamp_ms: 60_000.0,
             confidence: 0.9,
+            source: crate::audio::recording_state::DeviceType::Microphone,
         };
 
         let result = split_segment_at_silence(&segment, 25 * 16000);
@@ -1222,6 +1199,8 @@ mod tests {
                 audio_start_time: Some(0.0),
                 audio_end_time: Some(1.5),
                 duration: Some(1.5),
+                speaker: None,
+                voice_profile_id: None,
             },
             TranscriptSegment {
                 id: "t-2".to_string(),
@@ -1230,6 +1209,8 @@ mod tests {
                 audio_start_time: Some(2.0),
                 audio_end_time: Some(3.5),
                 duration: Some(1.5),
+                speaker: None,
+                voice_profile_id: None,
             },
         ];
 

@@ -12,12 +12,10 @@ import { Button } from "./ui/button";
 import { Label } from "./ui/label";
 import { Eye, EyeOff, Lock, Unlock } from "lucide-react";
 import { ModelManager } from "./WhisperModelManager";
-import { ParakeetModelManager } from "./ParakeetModelManager";
 
 export interface TranscriptModelProps {
   provider:
     | "localWhisper"
-    | "parakeet"
     | "deepgram"
     | "elevenLabs"
     | "groq"
@@ -58,10 +56,7 @@ export function TranscriptSettings({
 
   // Clear API key when switching to a provider that doesn't use one
   useEffect(() => {
-    if (
-      transcriptModelConfig.provider === "localWhisper" ||
-      transcriptModelConfig.provider === "parakeet"
-    ) {
+    if (transcriptModelConfig.provider === "localWhisper") {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setApiKey(null);
     }
@@ -81,7 +76,6 @@ export function TranscriptSettings({
   };
   const modelOptions = {
     localWhisper: [], // Model selection handled by ModelManager component
-    parakeet: [], // Model selection handled by ParakeetModelManager component
     deepgram: ["nova-2-phonecall"],
     elevenLabs: ["eleven_multilingual_v2"],
     groq: ["llama-3.3-70b-versatile"],
@@ -114,20 +108,6 @@ export function TranscriptSettings({
     }
   };
 
-  const handleParakeetModelSelect = (modelName: string) => {
-    // Always update config when model is selected, regardless of current provider
-    // This ensures the model is set when user switches back
-    setTranscriptModelConfig({
-      ...transcriptModelConfig,
-      provider: "parakeet", // Ensure provider is set correctly
-      model: modelName,
-    });
-    // Close modal after selection
-    if (onModelSelect) {
-      onModelSelect();
-    }
-  };
-
   return (
     <div>
       <div>
@@ -145,7 +125,7 @@ export function TranscriptSettings({
                 onValueChange={(value) => {
                   const provider = value as TranscriptModelProps["provider"];
                   setUiProvider(provider);
-                  if (provider !== "localWhisper" && provider !== "parakeet") {
+                  if (provider !== "localWhisper") {
                     fetchApiKey(provider);
                   }
                 }}
@@ -156,20 +136,18 @@ export function TranscriptSettings({
                   <SelectValue placeholder="Select provider" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="parakeet">
-                    ⚡ Parakeet (Recommended - Real-time / Accurate)
-                  </SelectItem>
                   <SelectItem value="localWhisper">
                     🏠 Local Whisper (High Accuracy)
                   </SelectItem>
-                  {/* <SelectItem value="deepgram">☁️ Deepgram (Backup)</SelectItem>
-                                    <SelectItem value="elevenLabs">☁️ ElevenLabs</SelectItem>
-                                    <SelectItem value="groq">☁️ Groq</SelectItem>
-                                    <SelectItem value="openai">☁️ OpenAI</SelectItem> */}
+                  {/* Cloud providers can be re-enabled here once their flows are wired:
+                      <SelectItem value="deepgram">☁️ Deepgram</SelectItem>
+                      <SelectItem value="elevenLabs">☁️ ElevenLabs</SelectItem>
+                      <SelectItem value="groq">☁️ Groq</SelectItem>
+                      <SelectItem value="openai">☁️ OpenAI</SelectItem> */}
                 </SelectContent>
               </Select>
 
-              {uiProvider !== "localWhisper" && uiProvider !== "parakeet" && (
+              {uiProvider !== "localWhisper" && (
                 <Select
                   value={transcriptModelConfig.model}
                   onValueChange={(value) => {
@@ -207,20 +185,6 @@ export function TranscriptSettings({
                     : undefined
                 }
                 onModelSelect={handleWhisperModelSelect}
-                autoSave={true}
-              />
-            </div>
-          )}
-
-          {uiProvider === "parakeet" && (
-            <div className="mt-6">
-              <ParakeetModelManager
-                selectedModel={
-                  transcriptModelConfig.provider === "parakeet"
-                    ? transcriptModelConfig.model
-                    : undefined
-                }
-                onModelSelect={handleParakeetModelSelect}
                 autoSave={true}
               />
             </div>

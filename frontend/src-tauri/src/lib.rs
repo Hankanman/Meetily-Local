@@ -44,7 +44,7 @@ pub mod ollama;
 pub mod onboarding;
 pub mod openai;
 pub mod openrouter;
-pub mod parakeet_engine;
+pub mod speaker_diarization;
 pub mod state;
 pub mod summary;
 pub mod tray;
@@ -372,8 +372,231 @@ pub fn get_language_preference_internal() -> Option<String> {
     LANGUAGE_PREFERENCE.lock().ok().map(|lang| lang.clone())
 }
 
+/// Diagnostic startup audit — logs the on-disk state of every model the app
+/// depends on. Pure logging, no behavioural side effects: useful for ruling
+/// out missing-model interactions when investigating crashes (especially the
+/// sherpa-onnx / silero-rs / ort coexistence issue tracked in retranscription).
+async fn audit_models_at_startup<R: Runtime>(app: &AppHandle<R>) {
+    log::info!("───────────────── [startup-audit] models report ─────────────────");
+
+    // ── Whisper (ASR) ─────────────────────────────────────────────────────
+    match whisper_engine::commands::whisper_get_available_models().await {
+        Ok(models) if models.is_empty() => {
+            log::warn!("[startup-audit] whisper:  NO models in models directory");
+        }
+        Ok(models) => {
+            for m in &models {
+                log::info!(
+                    "[startup-audit] whisper:  {:<28} status={:?} size={}MB path={}",
+                    m.name,
+                    m.status,
+                    m.size_mb,
+                    m.path.display()
+                );
+            }
+            let n_available = models
+                .iter()
+                .filter(|m| matches!(m.status, whisper_engine::ModelStatus::Available))
+                .count();
+            log::info!(
+                "[startup-audit] whisper:  {} model(s) available, {} total catalog entries",
+                n_available,
+                models.len()
+            );
+        }
+        Err(e) => log::warn!("[startup-audit] whisper:  failed to enumerate models: {}", e),
+    }
+
+    // ── Speaker diarizer ──────────────────────────────────────────────────
+    let speaker_filename = speaker_diarization::model_filename();
+    match speaker_diarization::default_model_path() {
+        Some(path) => {
+            let size_mb = path
+                .metadata()
+                .map(|m| m.len() / (1024 * 1024))
+                .unwrap_or(0);
+            let ready = speaker_diarization::model::model_is_ready(&path);
+            let status = if ready { "PRESENT" } else { "MISSING" };
+            log::info!(
+                "[startup-audit] speaker:  {:<28} status={} size={}MB path={}",
+                speaker_filename,
+                status,
+                size_mb,
+                path.display()
+            );
+        }
+        None => log::warn!("[startup-audit] speaker:  models directory not configured"),
+    }
+
+    // ── VAD (silero via sherpa-onnx) ──────────────────────────────────────
+    match speaker_diarization::model::silero_vad_path() {
+        Some(path) => {
+            let size_mb = path
+                .metadata()
+                .map(|m| m.len() / (1024 * 1024))
+                .unwrap_or(0);
+            let ready = speaker_diarization::model::model_is_ready(&path);
+            let status = if ready { "PRESENT" } else { "MISSING" };
+            log::info!(
+                "[startup-audit] vad:      silero_vad.onnx              status={} size={}MB path={}",
+                status,
+                size_mb,
+                path.display()
+            );
+        }
+        None => log::warn!("[startup-audit] vad:      models directory not configured"),
+    }
+
+    // ── Summary (built-in AI) ─────────────────────────────────────────────
+    match summary::summary_engine::commands::builtin_ai_get_available_summary_model(
+        app.clone(),
+        app.state(),
+    )
+    .await
+    {
+        Ok(Some(name)) => {
+            log::info!("[startup-audit] summary:  {} (built-in AI, available)", name);
+        }
+        Ok(None) => {
+            log::warn!(
+                "[startup-audit] summary:  NO built-in AI model available (gemma3:1b/4b not downloaded)"
+            );
+        }
+        Err(e) => log::warn!("[startup-audit] summary:  status check failed: {}", e),
+    }
+
+    log::info!("─────────────────────────────────────────────────────────────────");
+}
+
+/// Background fetch of any built-in models that are missing on disk. Today
+/// fetches:
+/// - `silero_vad.onnx` — required for VAD (the audio pipeline can't function
+///   without it; this is the model sherpa-onnx's `VoiceActivityDetector` uses).
+/// - The speaker diarization model — required for "Speaker N" attribution
+///   on system audio; without it, system transcripts fall back to the
+///   "Speaker" placeholder.
+///
+/// Both are tiny (~2.3MB + ~28MB). Non-fatal: a failed download just leaves
+/// the corresponding feature degraded.
+async fn ensure_required_models_downloaded<R: Runtime>(app: &AppHandle<R>) {
+    // ── silero VAD ──
+    if let Some(silero_path) = speaker_diarization::model::silero_vad_path() {
+        if !speaker_diarization::model::model_is_ready(&silero_path) {
+            let url = speaker_diarization::model::silero_vad_download_url();
+            log::info!(
+                "[startup-download] silero-vad missing — fetching {} (~2.3MB, one-time)",
+                url
+            );
+            match download_file_to(url, &silero_path).await {
+                Ok(()) => log::info!(
+                    "[startup-download] silero-vad downloaded → {}",
+                    silero_path.display()
+                ),
+                Err(e) => log::warn!(
+                    "[startup-download] silero-vad download failed: {} \
+                     (VAD disabled until next launch — recording / retranscription will error)",
+                    e
+                ),
+            }
+        }
+    }
+
+    // ── Speaker embedding ──
+    let Some(speaker_path) = speaker_diarization::default_model_path() else {
+        log::warn!(
+            "[startup-download] speaker models dir not configured; cannot fetch speaker model"
+        );
+        return;
+    };
+
+    if speaker_diarization::model::model_is_ready(&speaker_path) {
+        log::debug!(
+            "[startup-download] speaker model already present at {}",
+            speaker_path.display()
+        );
+    } else {
+        log::info!(
+            "[startup-download] speaker model missing — fetching {} (~28MB, one-time)",
+            speaker_diarization::model_filename()
+        );
+        match speaker_diarization::commands::speaker_model_download(app.clone()).await {
+            Ok(()) => log::info!(
+                "[startup-download] speaker model downloaded → {}",
+                speaker_path.display()
+            ),
+            Err(e) => {
+                log::warn!(
+                    "[startup-download] speaker model download failed: {} \
+                     (speaker N attribution disabled)",
+                    e
+                );
+                return;
+            }
+        }
+    }
+
+    // Now that both models are on disk, build the diarizer and pin it in
+    // the global slot so the first recording / retranscription doesn't
+    // pay the load cost.
+    match speaker_diarization::commands::build_diarizer(app).await {
+        Ok(Some(diarizer)) => {
+            speaker_diarization::set_current_diarizer(Some(diarizer));
+            log::info!("✅ [startup-download] speaker diarizer initialized");
+        }
+        Ok(None) => log::warn!(
+            "[startup-download] speaker model present but diarizer build returned None"
+        ),
+        Err(e) => log::warn!("[startup-download] diarizer build failed: {}", e),
+    }
+}
+
+/// Plain HTTP-streaming download to a destination path. Used for built-in
+/// models that don't have their own dedicated downloader command. Cleans up
+/// partial files on error.
+async fn download_file_to(url: &str, dest: &std::path::Path) -> anyhow::Result<()> {
+    use anyhow::anyhow;
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let response = reqwest::get(url)
+        .await
+        .map_err(|e| anyhow!("HTTP error fetching {}: {}", url, e))?;
+    if !response.status().is_success() {
+        return Err(anyhow!("HTTP {} fetching {}", response.status(), url));
+    }
+
+    let mut file = tokio::fs::File::create(dest)
+        .await
+        .map_err(|e| anyhow!("Cannot create {}: {}", dest.display(), e))?;
+
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| anyhow!("Download stream error: {}", e))?;
+        if let Err(e) = file.write_all(&chunk).await {
+            let _ = std::fs::remove_file(dest);
+            return Err(anyhow!("Write error: {}", e));
+        }
+    }
+    if let Err(e) = file.flush().await {
+        let _ = std::fs::remove_file(dest);
+        return Err(anyhow!("Flush error: {}", e));
+    }
+    Ok(())
+}
+
 pub fn run() {
     log::set_max_level(log::LevelFilter::Info);
+
+    // Route whisper.cpp's internal logs (beam search traces, decoder
+    // diagnostics, etc.) through Rust's `log` crate. Without this they
+    // bypass log filtering entirely and dump to stderr at every decode
+    // step. With it, they're filterable via RUST_LOG (e.g.
+    // `whisper_rs=warn` keeps warnings/errors only).
+    whisper_rs::install_logging_hooks();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
@@ -437,13 +660,27 @@ pub fn run() {
                 }
             });
 
-            // Set Parakeet models directory
-            parakeet_engine::commands::set_models_directory(&_app.handle());
+            // Set speaker-diarization models directory (separate from ASR models
+            // so the speaker model can be downloaded independently).
+            speaker_diarization::model::set_models_dir(&_app.handle());
 
-            // Initialize Parakeet engine on startup
-            tauri::async_runtime::spawn(async {
-                if let Err(e) = parakeet_engine::commands::parakeet_init().await {
-                    log::error!("Failed to initialize Parakeet engine on startup: {}", e);
+            // Pre-warm the speaker diarizer at startup (if model is on disk)
+            // so the first recording / retranscription doesn't pay the model
+            // load latency. Async + non-blocking. Stores in the global slot;
+            // recording start replaces it with a fresh instance to reset
+            // cluster IDs per session.
+            let app_handle_for_diarizer = _app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match speaker_diarization::commands::build_diarizer(&app_handle_for_diarizer).await
+                {
+                    Ok(Some(diarizer)) => {
+                        speaker_diarization::set_current_diarizer(Some(diarizer));
+                        log::info!("✅ Speaker diarizer pre-initialized at startup");
+                    }
+                    Ok(None) => log::info!(
+                        "Speaker diarizer pre-init skipped (model not downloaded yet)"
+                    ),
+                    Err(e) => log::warn!("Speaker diarizer pre-init failed: {}", e),
                 }
             });
 
@@ -461,6 +698,33 @@ pub fn run() {
                         log::warn!("ModelManager will be lazy-initialized on first use");
                     }
                 }
+            });
+
+            // Startup model audit — logs the on-disk state of every model the
+            // app uses (Whisper / speaker diarizer / summary builtin-AI / VAD).
+            // Pure diagnostic, non-fatal: helps rule out missing-model side
+            // effects when investigating crashes. Runs after the engines have
+            // had a moment to scan their directories.
+            let app_handle_for_audit = _app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                // Small delay so the other startup tasks have logged first
+                // and the audit shows the steady-state, not the racing init.
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                audit_models_at_startup(&app_handle_for_audit).await;
+            });
+
+            // Auto-download missing built-in models. Only the speaker diarization
+            // model is fetched here today — Whisper is user-selectable so we leave
+            // it to onboarding / settings, and summary models are picked by the
+            // existing built-in AI flow. The speaker model is small (~28MB) and
+            // diarization won't work without it, so silent background fetch is
+            // the right UX. Failures are non-fatal (the diarizer just stays
+            // disabled and labels fall back to the "Speaker" placeholder).
+            let app_handle_for_dl = _app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                // Run after the audit so its log block stays unbroken.
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                ensure_required_models_downloaded(&app_handle_for_dl).await;
             });
 
             // Trigger system audio permission request on startup (similar to microphone permission)
@@ -513,21 +777,14 @@ pub fn run() {
             whisper_engine::commands::whisper_download_model,
             whisper_engine::commands::whisper_cancel_download,
             whisper_engine::commands::whisper_delete_corrupted_model,
-            // Parakeet engine commands
-            parakeet_engine::commands::parakeet_init,
-            parakeet_engine::commands::parakeet_get_available_models,
-            parakeet_engine::commands::parakeet_load_model,
-            parakeet_engine::commands::parakeet_get_current_model,
-            parakeet_engine::commands::parakeet_is_model_loaded,
-            parakeet_engine::commands::parakeet_has_available_models,
-            parakeet_engine::commands::parakeet_validate_model_ready,
-            parakeet_engine::commands::parakeet_transcribe_audio,
-            parakeet_engine::commands::parakeet_get_models_directory,
-            parakeet_engine::commands::parakeet_download_model,
-            parakeet_engine::commands::parakeet_retry_download,
-            parakeet_engine::commands::parakeet_cancel_download,
-            parakeet_engine::commands::parakeet_delete_corrupted_model,
-            parakeet_engine::commands::open_parakeet_models_folder,
+            // Speaker diarization commands
+            speaker_diarization::commands::speaker_model_status,
+            speaker_diarization::commands::speaker_model_download,
+            speaker_diarization::commands::list_voice_profiles,
+            speaker_diarization::commands::delete_voice_profile,
+            speaker_diarization::commands::rename_voice_profile,
+            speaker_diarization::commands::promote_speaker_to_profile,
+            speaker_diarization::commands::refine_speaker_assignments,
             // Parallel processing commands
             whisper_engine::parallel_commands::initialize_parallel_processor,
             whisper_engine::parallel_commands::start_parallel_processing,

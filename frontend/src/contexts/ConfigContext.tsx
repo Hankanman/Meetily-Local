@@ -123,11 +123,12 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     ollamaEndpoint: null,
   });
 
-  // Transcript model configuration state
+  // Transcript model configuration state. Default is local Whisper now that
+  // Parakeet has been removed.
   const [transcriptModelConfig, setTranscriptModelConfig] =
     useState<TranscriptModelProps>({
-      provider: "parakeet",
-      model: "parakeet-tdt-0.6b-v3-int8",
+      provider: "localWhisper",
+      model: "large-v3-turbo",
       apiKey: null,
     });
 
@@ -228,8 +229,8 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
             config,
           );
           setTranscriptModelConfig({
-            provider: config.provider || "parakeet",
-            model: config.model || "parakeet-tdt-0.6b-v3-int8",
+            provider: config.provider || "localWhisper",
+            model: config.model || "large-v3-turbo",
             apiKey: config.apiKey || null,
           });
         }

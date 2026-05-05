@@ -54,13 +54,17 @@ export function TranscriptPanel({
     if (usePagination && segments) {
       return segments;
     }
-    // Convert transcripts to segments for virtualization
+    // Convert transcripts to segments for virtualization. Speaker attribution
+    // (added in Phase 1 of the diarization feature) needs to ride along so
+    // the virtualized view can render the chip.
     return transcripts.map((t) => ({
       id: t.id,
       timestamp: t.audio_start_time ?? 0,
       endTime: t.audio_end_time,
       text: t.text,
       confidence: t.confidence,
+      speaker: t.speaker,
+      voice_profile_id: t.voice_profile_id,
     }));
   }, [transcripts, usePagination, segments]);
 

@@ -72,8 +72,9 @@ pub async fn whisper_get_available_models() -> Result<Vec<ModelInfo>, String> {
     }
 }
 
-/// Discover Whisper models by scanning the models directory directly
-/// Used when the Whisper engine isn't initialized (e.g., when using Parakeet for live transcription)
+/// Discover Whisper models by scanning the models directory directly.
+/// Used when the Whisper engine isn't initialized yet (e.g., during onboarding
+/// status checks before any model has been loaded).
 fn discover_models_standalone() -> Result<Vec<ModelInfo>, String> {
     use crate::whisper_engine::ModelStatus;
 

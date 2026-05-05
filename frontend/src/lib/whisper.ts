@@ -201,7 +201,7 @@ export function getModelPerformanceBadge(modelName: string): {
   }
 }
 
-// Helper function to get concise tagline for model (similar to Parakeet style)
+// Helper function to get a concise tagline for a Whisper model (used in UI badges).
 export function getModelTagline(
   modelName: string,
   speed: ProcessingSpeed,

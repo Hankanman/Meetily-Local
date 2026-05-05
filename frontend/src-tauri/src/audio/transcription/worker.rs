@@ -4,6 +4,7 @@
 
 use super::engine::TranscriptionEngine;
 use super::provider::TranscriptionError;
+use crate::audio::recording_state::DeviceType;
 use crate::audio::AudioChunk;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -30,15 +31,35 @@ pub fn reset_speech_detected_flag() {
 pub struct TranscriptUpdate {
     pub text: String,
     pub timestamp: String, // Wall-clock time for reference (e.g., "14:30:05")
+    /// Audio stream tag: "mic" or "system". Distinct from `speaker` (the
+    /// human-readable label) — `source` is the raw stream identity.
     pub source: String,
     pub sequence_id: u64,
     pub chunk_start_time: f64, // Legacy field, kept for compatibility
     pub is_partial: bool,
     pub confidence: f32,
-    // NEW: Recording-relative timestamps for playback sync
+    // Recording-relative timestamps for playback sync
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
     pub duration: f64,         // Segment duration in seconds (e.g., 3.3)
+    /// Speaker label shown in the UI. Mic-source segments are auto-tagged
+    /// "Me"; system-source segments get a clustered "Speaker N" or a stored
+    /// profile name when the embedding matches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+    /// Foreign key to a stored voice profile when the embedding matched one.
+    /// `None` for mic, in-session-only clusters, or unmatched system audio.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voice_profile_id: Option<String>,
+}
+
+/// Resolve a default (source, speaker) pair from the audio stream's device type.
+/// Phase 1: mic → "Me", system → "Speaker" (placeholder, replaced by diarization).
+pub fn default_speaker_for_source(source: DeviceType) -> (&'static str, &'static str) {
+    match source {
+        DeviceType::Microphone => ("mic", "Me"),
+        DeviceType::System => ("system", "Speaker"),
+    }
 }
 
 // NOTE: get_transcript_history and get_recording_meeting_name functions
@@ -52,7 +73,7 @@ pub fn start_transcription_task<R: Runtime>(
     tokio::spawn(async move {
         info!("🚀 Starting optimized parallel transcription task - guaranteeing zero chunk loss");
 
-        // Initialize transcription engine (Whisper or Parakeet based on config)
+        // Initialize transcription engine (Whisper, or a remote provider via the trait).
         let transcription_engine = match super::engine::get_or_init_transcription_engine(&app).await
         {
             Ok(engine) => engine,
@@ -88,7 +109,6 @@ pub fn start_transcription_task<R: Runtime>(
         for worker_id in 0..NUM_WORKERS {
             let engine_clone = match &transcription_engine {
                 TranscriptionEngine::Whisper(e) => TranscriptionEngine::Whisper(e.clone()),
-                TranscriptionEngine::Parakeet(e) => TranscriptionEngine::Parakeet(e.clone()),
                 TranscriptionEngine::Provider(p) => TranscriptionEngine::Provider(p.clone()),
             };
             let app_clone = app.clone();
@@ -153,6 +173,18 @@ pub fn start_transcription_task<R: Runtime>(
 
                             let chunk_timestamp = chunk.timestamp;
                             let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
+                            // Capture source identity before chunk is moved into the transcription call.
+                            let chunk_source = chunk.device_type;
+                            // For system-source chunks, snapshot the 16kHz samples for the
+                            // diarizer to embed after transcription completes. Skipped for
+                            // mic-source (auto-tagged "Me") and when no diarizer is loaded.
+                            let chunk_audio_for_diarization = if chunk_source == DeviceType::System
+                                && crate::speaker_diarization::current_diarizer().is_some()
+                            {
+                                Some(chunk.data.clone())
+                            } else {
+                                None
+                            };
 
                             // Transcribe with provider-agnostic approach
                             match transcribe_chunk_with_provider(&engine_clone, chunk, &app_clone)
@@ -163,7 +195,6 @@ pub fn start_transcription_task<R: Runtime>(
                                     let confidence_threshold = match &engine_clone {
                                         TranscriptionEngine::Whisper(_)
                                         | TranscriptionEngine::Provider(_) => 0.3,
-                                        TranscriptionEngine::Parakeet(_) => 0.0, // Parakeet has no confidence, accept all
                                     };
 
                                     let confidence_str = match confidence_opt {
@@ -214,20 +245,50 @@ pub fn start_transcription_task<R: Runtime>(
                                         // The recording_commands module listens to these events and saves them
                                         // This decouples the transcription worker from direct RECORDING_MANAGER access
 
-                                        // Emit transcript update with NEW recording-relative timestamps
+                                        // Emit transcript update with source-tagged speaker identity.
+                                        // Mic → "Me" (auto). System → diarizer result, which is
+                                        // either a stored profile name (when an embedding matches
+                                        // a saved voice profile above threshold) or "Speaker N"
+                                        // from in-session clustering. Falls back to the static
+                                        // "Speaker" placeholder when no model is loaded.
+                                        let (source_tag, default_speaker) =
+                                            default_speaker_for_source(chunk_source);
+                                        let diarization_result = chunk_audio_for_diarization
+                                            .as_ref()
+                                            .and_then(|samples| {
+                                                let diarizer =
+                                                    crate::speaker_diarization::current_diarizer()?;
+                                                match diarizer.process(sequence_id, samples) {
+                                                    Ok(result) => Some(result),
+                                                    Err(e) => {
+                                                        log::debug!(
+                                                            "Diarization fallback for chunk {}: {}",
+                                                            sequence_id,
+                                                            e
+                                                        );
+                                                        None
+                                                    }
+                                                }
+                                            });
+                                        let (speaker_label, voice_profile_id) =
+                                            match diarization_result {
+                                                Some(r) => (r.label, r.voice_profile_id),
+                                                None => (default_speaker.to_string(), None),
+                                            };
 
                                         let update = TranscriptUpdate {
                                             text: transcript,
                                             timestamp: format_current_timestamp(), // Wall-clock for reference
-                                            source: "Audio".to_string(),
+                                            source: source_tag.to_string(),
                                             sequence_id,
                                             chunk_start_time: chunk_timestamp, // Legacy compatibility
                                             is_partial,
                                             confidence: confidence_opt.unwrap_or(0.85), // Default for providers without confidence
-                                            // NEW: Recording-relative timestamps for sync
                                             audio_start_time,
                                             audio_end_time,
                                             duration: chunk_duration,
+                                            speaker: Some(speaker_label),
+                                            voice_profile_id,
                                         };
 
                                         if let Err(e) = app_clone.emit("transcript-update", &update)
@@ -421,7 +482,7 @@ pub fn start_transcription_task<R: Runtime>(
     })
 }
 
-/// Transcribe audio chunk using the appropriate provider (Whisper, Parakeet, or trait-based)
+/// Transcribe audio chunk using the configured engine (Whisper or trait-based provider).
 /// Returns: (text, confidence Option, is_partial)
 async fn transcribe_chunk_with_provider<R: Runtime>(
     engine: &TranscriptionEngine,
@@ -486,42 +547,6 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                 Err(e) => {
                     error!(
                         "Whisper transcription failed for chunk {}: {}",
-                        chunk.chunk_id, e
-                    );
-
-                    let transcription_error = TranscriptionError::EngineFailed(e.to_string());
-                    let _ = app.emit(
-                        "transcription-error",
-                        &serde_json::json!({
-                            "error": transcription_error.to_string(),
-                            "userMessage": format!("Transcription failed: {}", transcription_error),
-                            "actionable": false
-                        }),
-                    );
-
-                    Err(transcription_error)
-                }
-            }
-        }
-        TranscriptionEngine::Parakeet(parakeet_engine) => {
-            match parakeet_engine.transcribe_audio(speech_samples).await {
-                Ok(text) => {
-                    let cleaned_text = text.trim().to_string();
-                    if cleaned_text.is_empty() {
-                        return Ok((String::new(), None, false));
-                    }
-
-                    info!(
-                        "Parakeet transcription complete for chunk {}: '{}'",
-                        chunk.chunk_id, cleaned_text
-                    );
-
-                    // Parakeet doesn't provide confidence or partial results
-                    Ok((cleaned_text, None, false))
-                }
-                Err(e) => {
-                    error!(
-                        "Parakeet transcription failed for chunk {}: {}",
                         chunk.chunk_id, e
                     );
 

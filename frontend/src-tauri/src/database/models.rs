@@ -35,6 +35,24 @@ pub struct Transcript {
     pub audio_start_time: Option<f64>,
     pub audio_end_time: Option<f64>,
     pub duration: Option<f64>,
+    /// Human-readable speaker label ("Me", "Speaker 1", or stored profile name).
+    pub speaker: Option<String>,
+    /// Foreign key to `voice_profiles.id` when this transcript matched a
+    /// stored profile; null otherwise.
+    pub voice_profile_id: Option<String>,
+}
+
+/// Stored speaker voice profile used to recognize returning speakers across meetings.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct VoiceProfile {
+    pub id: String,
+    pub name: String,
+    /// Packed little-endian f32 speaker-embedding centroid.
+    pub embedding: Vec<u8>,
+    pub embedding_dim: i64,
+    pub sample_count: i64,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

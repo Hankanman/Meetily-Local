@@ -52,22 +52,23 @@ export function useRecordingStart(
     return `Meeting ${day}_${month}_${year}_${hours}_${minutes}_${seconds}`;
   }, []);
 
-  // Check if Parakeet transcription model is ready
+  // Check if a local Whisper transcription model is downloaded and ready.
+  // Function name kept as `checkParakeetReady` for minimal call-site churn —
+  // it now reflects Whisper readiness.
   const checkParakeetReady = useCallback(async (): Promise<boolean> => {
     try {
-      await invoke("parakeet_init");
-      const hasModels = await invoke<boolean>("parakeet_has_available_models");
+      const hasModels = await invoke<boolean>("whisper_has_available_models");
       return hasModels;
     } catch (error) {
-      console.error("Failed to check Parakeet status:", error);
+      console.error("Failed to check Whisper status:", error);
       return false;
     }
   }, []);
 
-  // Check if any model is currently downloading
+  // Check if any Whisper model is currently downloading.
   const checkIfModelDownloading = useCallback(async (): Promise<boolean> => {
     try {
-      const models = await invoke<any[]>("parakeet_get_available_models");
+      const models = await invoke<any[]>("whisper_get_available_models");
       const isDownloading = models.some(
         (m) =>
           m.status &&

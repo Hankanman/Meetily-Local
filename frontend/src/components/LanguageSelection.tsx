@@ -120,7 +120,6 @@ interface LanguageSelectionProps {
   disabled?: boolean;
   provider?:
     | "localWhisper"
-    | "parakeet"
     | "deepgram"
     | "elevenLabs"
     | "groq"
@@ -131,18 +130,14 @@ export function LanguageSelection({
   selectedLanguage,
   onLanguageChange,
   disabled = false,
-  provider = "localWhisper",
+  provider: _provider = "localWhisper",
 }: LanguageSelectionProps) {
   const [saving, setSaving] = useState(false);
   const { setSelectedLanguage } = useConfig();
 
-  // Parakeet only supports auto-detection (doesn't support manual language selection)
-  const isParakeet = provider === "parakeet";
-  const availableLanguages = isParakeet
-    ? LANGUAGES.filter(
-        (lang) => lang.code === "auto" || lang.code === "auto-translate",
-      )
-    : LANGUAGES;
+  // Whisper supports the full language list; the provider prop is reserved
+  // for future provider-specific filtering but currently ignored.
+  const availableLanguages = LANGUAGES;
 
   const handleLanguageChange = async (languageCode: string) => {
     setSaving(true);
@@ -206,20 +201,6 @@ export function LanguageSelection({
             </option>
           ))}
         </select>
-
-        {/* Parakeet language limitation warning */}
-        {isParakeet && (
-          <div className="
-            rounded-md border border-warning/30 bg-warning-muted p-2 text-warning
-          ">
-            <p className="font-medium">ℹ️ Parakeet Language Support</p>
-            <p className="mt-1 text-sm">
-              Parakeet currently only supports automatic language detection.
-              Manual language selection is not available. Use Whisper if you
-              need to specify a particular language.
-            </p>
-          </div>
-        )}
 
         {/* Info text */}
         <div className="space-y-2 pt-2 text-sm">

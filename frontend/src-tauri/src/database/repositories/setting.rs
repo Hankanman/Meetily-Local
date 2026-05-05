@@ -178,7 +178,6 @@ impl SettingsRepository {
     ) -> std::result::Result<(), sqlx::Error> {
         let api_key_column = match provider {
             "localWhisper" => "whisperApiKey",
-            "parakeet" => return Ok(()), // Parakeet doesn't need an API key, return early
             "deepgram" => "deepgramApiKey",
             "elevenLabs" => "elevenLabsApiKey",
             "groq" => "groqApiKey",
@@ -190,15 +189,17 @@ impl SettingsRepository {
             }
         };
 
+        // Default row inserted when first setting an API key uses the local
+        // Whisper provider/model — the user can switch later from settings.
         let query = format!(
             r#"
             INSERT INTO transcript_settings (id, provider, model, "{}")
-            VALUES ('1', 'parakeet', '{}', $1)
+            VALUES ('1', 'localWhisper', '{}', $1)
             ON CONFLICT(id) DO UPDATE SET
                 "{}" = $1
             "#,
             api_key_column,
-            crate::config::DEFAULT_PARAKEET_MODEL,
+            crate::config::DEFAULT_WHISPER_MODEL,
             api_key_column
         );
         sqlx::query(&query).bind(api_key).execute(pool).await?;
@@ -212,7 +213,6 @@ impl SettingsRepository {
     ) -> std::result::Result<Option<String>, sqlx::Error> {
         let api_key_column = match provider {
             "localWhisper" => "whisperApiKey",
-            "parakeet" => return Ok(None), // Parakeet doesn't need an API key
             "deepgram" => "deepgramApiKey",
             "elevenLabs" => "elevenLabsApiKey",
             "groq" => "groqApiKey",

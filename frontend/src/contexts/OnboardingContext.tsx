@@ -15,13 +15,18 @@ import type {
   OnboardingPermissions,
 } from "@/types/onboarding";
 
-const PARAKEET_MODEL = "parakeet-tdt-0.6b-v3-int8";
+// Default local Whisper model downloaded during onboarding. Quantized turbo
+// variant — comparable accuracy to large-v3 but ~3x faster on GPU.
+const ONBOARDING_WHISPER_MODEL = "large-v3-turbo-q5_0";
 
 interface OnboardingStatus {
   version: string;
   completed: boolean;
   current_step: number;
   model_status: {
+    // JSON field name kept as `parakeet` for backward compat with existing
+    // on-disk onboarding-status.json files; the Rust side aliases it to
+    // `transcription` semantically (now refers to the local Whisper model).
     parakeet: string;
     summary: string;
   };
@@ -35,7 +40,7 @@ interface SummaryModelProgressInfo {
   speedMbps: number;
 }
 
-interface ParakeetProgressInfo {
+interface TranscriptionProgressInfo {
   percent: number;
   downloadedMb: number;
   totalMb: number;
@@ -50,9 +55,12 @@ interface OnboardingContextType {
   // avoid showing a flash of the wrong UI on cold start.
   isStatusLoading: boolean;
   currentStep: number;
+  // Local-Whisper download state. Field names kept short ("parakeet*" was
+  // the legacy naming when Parakeet was the bundled engine) for minimal
+  // call-site churn — they refer to the Whisper transcription model now.
   parakeetDownloaded: boolean;
   parakeetProgress: number;
-  parakeetProgressInfo: ParakeetProgressInfo;
+  parakeetProgressInfo: TranscriptionProgressInfo;
   summaryModelDownloaded: boolean;
   summaryModelProgress: number;
   summaryModelProgressInfo: SummaryModelProgressInfo;
@@ -96,7 +104,7 @@ export function OnboardingProvider({
   const [parakeetDownloaded, setParakeetDownloaded] = useState(false);
   const [parakeetProgress, setParakeetProgress] = useState(0);
   const [parakeetProgressInfo, setParakeetProgressInfo] =
-    useState<ParakeetProgressInfo>({
+    useState<TranscriptionProgressInfo>({
       percent: 0,
       downloadedMb: 0,
       totalMb: 0,
@@ -230,18 +238,20 @@ export function OnboardingProvider({
       let parakeetDownloaded = false;
       let summaryModelDownloaded = false;
 
-      // Verify Parakeet model exists on disk
+      // Verify the local Whisper transcription model exists on disk.
       try {
-        await invoke("parakeet_init");
         parakeetDownloaded = await invoke<boolean>(
-          "parakeet_has_available_models",
+          "whisper_has_available_models",
         );
         console.log(
-          "[OnboardingContext] Parakeet verified on disk:",
+          "[OnboardingContext] Whisper model verified on disk:",
           parakeetDownloaded,
         );
       } catch (error) {
-        console.warn("[OnboardingContext] Failed to verify Parakeet:", error);
+        console.warn(
+          "[OnboardingContext] Failed to verify Whisper model:",
+          error,
+        );
         parakeetDownloaded = false;
       }
 
@@ -291,7 +301,7 @@ export function OnboardingProvider({
   // Check if any models are currently downloading (for re-entry)
   const checkActiveDownloads = useCallback(async () => {
     try {
-      const models = await invoke<any[]>("parakeet_get_available_models");
+      const models = await invoke<any[]>("whisper_get_available_models");
       const isDownloading = models.some(
         (m) =>
           m.status &&
@@ -302,12 +312,10 @@ export function OnboardingProvider({
 
       if (isDownloading) {
         console.log(
-          "[OnboardingContext] Detected active background downloads on mount",
+          "[OnboardingContext] Detected active Whisper download on mount",
         );
         setIsBackgroundDownloading(true);
       }
-
-      // Also check for Gemma/Built-in AI downloads if possible (though less critical as Parakeet is the main blocker)
     } catch (error) {
       console.warn(
         "[OnboardingContext] Failed to check active downloads:",
@@ -437,7 +445,8 @@ export function OnboardingProvider({
     saveOnboardingStatus,
   ]);
 
-  // Listen to Parakeet download progress
+  // Listen to Whisper download progress (the Rust side emits payloads with
+  // a `modelName` field per the whisper_download_model command in lib.rs).
   useEffect(() => {
     const unlisten = listen<{
       modelName: string;
@@ -446,7 +455,7 @@ export function OnboardingProvider({
       total_mb?: number;
       speed_mbps?: number;
       status?: string;
-    }>("parakeet-model-download-progress", (event) => {
+    }>("model-download-progress", (event) => {
       const {
         modelName,
         progress,
@@ -455,7 +464,7 @@ export function OnboardingProvider({
         speed_mbps,
         status,
       } = event.payload;
-      if (modelName === PARAKEET_MODEL) {
+      if (modelName === ONBOARDING_WHISPER_MODEL) {
         setParakeetProgress(progress);
         setParakeetProgressInfo({
           percent: progress,
@@ -470,10 +479,9 @@ export function OnboardingProvider({
     });
 
     const unlistenComplete = listen<{ modelName: string }>(
-      "parakeet-model-download-complete",
+      "model-download-complete",
       (event) => {
-        const { modelName } = event.payload;
-        if (modelName === PARAKEET_MODEL) {
+        if (event.payload.modelName === ONBOARDING_WHISPER_MODEL) {
           setParakeetDownloaded(true);
           setParakeetProgress(100);
         }
@@ -481,11 +489,10 @@ export function OnboardingProvider({
     );
 
     const unlistenError = listen<{ modelName: string; error: string }>(
-      "parakeet-model-download-error",
+      "model-download-error",
       (event) => {
-        const { modelName } = event.payload;
-        if (modelName === PARAKEET_MODEL) {
-          console.error("Parakeet download error:", event.payload.error);
+        if (event.payload.modelName === ONBOARDING_WHISPER_MODEL) {
+          console.error("Whisper download error:", event.payload.error);
         }
       },
     );
@@ -575,27 +582,28 @@ export function OnboardingProvider({
     setIsBackgroundDownloading(true);
 
     try {
-      // Start Parakeet download first (speech recognition - always required)
+      // Start Whisper download first (speech recognition — always required)
       if (!parakeetDownloaded) {
-        console.log("[OnboardingContext] Starting Parakeet download");
-        invoke("parakeet_download_model", { modelName: PARAKEET_MODEL }).catch(
-          (err) =>
-            console.error("[OnboardingContext] Parakeet download failed:", err),
+        console.log("[OnboardingContext] Starting Whisper model download");
+        invoke("whisper_download_model", {
+          modelName: ONBOARDING_WHISPER_MODEL,
+        }).catch((err) =>
+          console.error("[OnboardingContext] Whisper download failed:", err),
         );
       }
 
-      // Start Gemma download after a delay to prioritize Parakeet bandwidth
+      // Start Gemma download after a delay to prioritize transcription bandwidth
       if (includeGemma && !summaryModelDownloaded) {
         setTimeout(() => {
           console.log(
-            "[OnboardingContext] Starting Gemma download (delayed to prioritize Parakeet)",
+            "[OnboardingContext] Starting Gemma download (delayed to prioritize Whisper)",
           );
           invoke("builtin_ai_download_model", {
             modelName: selectedSummaryModel || "gemma3:1b",
           }).catch((err) =>
             console.error("[OnboardingContext] Gemma download failed:", err),
           );
-        }, 3000); // 3 second delay to give Parakeet priority
+        }, 3000); // 3 second delay to give Whisper priority
       }
     } catch (error) {
       console.error(
@@ -608,9 +616,13 @@ export function OnboardingProvider({
   };
 
   const retryParakeetDownload = async () => {
-    console.log("[OnboardingContext] Retrying Parakeet download");
+    // Whisper has no separate retry command — calling download again is the
+    // retry path (the backend resumes / re-fetches as appropriate).
+    console.log("[OnboardingContext] Retrying Whisper model download");
     try {
-      await invoke("parakeet_retry_download", { modelName: PARAKEET_MODEL });
+      await invoke("whisper_download_model", {
+        modelName: ONBOARDING_WHISPER_MODEL,
+      });
     } catch (error) {
       console.error("[OnboardingContext] Retry failed:", error);
       throw error;

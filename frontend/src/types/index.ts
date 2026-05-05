@@ -12,24 +12,34 @@ export interface Transcript {
   chunk_start_time?: number; // Legacy field
   is_partial?: boolean;
   confidence?: number;
-  // NEW: Recording-relative timestamps for playback sync
+  // Recording-relative timestamps for playback sync
   audio_start_time?: number; // Seconds from recording start (e.g., 125.3)
   audio_end_time?: number; // Seconds from recording start (e.g., 128.6)
   duration?: number; // Segment duration in seconds (e.g., 3.3)
+  // Speaker attribution. `speaker` is the human-readable label shown in the
+  // UI ("Me", "Speaker 1", or a stored profile name); `voice_profile_id`
+  // links to the stored profile when matched.
+  speaker?: string;
+  voice_profile_id?: string;
 }
 
 export interface TranscriptUpdate {
   text: string;
   timestamp: string; // Wall-clock time for reference
+  /** Audio-stream tag: "mic" or "system". */
   source: string;
   sequence_id: number;
   chunk_start_time: number; // Legacy field
   is_partial: boolean;
   confidence: number;
-  // NEW: Recording-relative timestamps for playback sync
+  // Recording-relative timestamps for playback sync
   audio_start_time: number; // Seconds from recording start
   audio_end_time: number; // Seconds from recording start
   duration: number; // Segment duration in seconds
+  /** Human-readable speaker label assigned at transcription time. */
+  speaker?: string;
+  /** FK to a stored voice profile when the embedding matched one. */
+  voice_profile_id?: string;
 }
 
 export interface Block {
@@ -102,4 +112,8 @@ export interface TranscriptSegmentData {
   endTime?: number; // audio_end_time in seconds
   text: string;
   confidence?: number;
+  /** Speaker label ("Me", "Speaker N", or stored profile name). */
+  speaker?: string;
+  /** FK to a stored voice profile when matched. */
+  voice_profile_id?: string;
 }

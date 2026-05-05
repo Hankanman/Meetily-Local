@@ -96,11 +96,23 @@ nnnoiseless = "0.5"
 # NOTE: whisper-rs is declared in platform-specific sections below (macOS/Windows/Linux)
 # to ensure correct GPU features are enabled per platform
 futures-util = "0.3"
-silero_rs = { git = "https://github.com/emotechlab/silero-rs", rev = "26a6460", package = "silero" }
 
-# Parakeet (ONNX-based fast transcription) dependencies
-ort = { version = "2.0.0-rc.10" }  # ONNX Runtime for Parakeet models
-thiserror = "2.0.16"                # Error handling for Parakeet
+# General error handling helper
+thiserror = "2.0.16"
+
+# Speaker diarization + VAD via sherpa-onnx. Provides:
+# - SpeakerEmbeddingExtractor (3D-Speaker CAM++) for "who's speaking" attribution
+# - VoiceActivityDetector (silero-vad ONNX) for speech segmentation
+#
+# Linked with the `shared` feature (instead of the default `static`) because
+# the static linkage caused `free(): invalid pointer` aborts on Linux when
+# sherpa's bundled onnxruntime tried to load its first model alongside
+# whisper-rs's whisper.cpp — two static C++ runtimes in one binary collided
+# on glibc allocator state. Shared linkage keeps onnxruntime in a separate
+# .so loaded at runtime, which has different symbol-visibility and TLS
+# semantics. Prebuilt .so is fetched at build time, dropped next to the
+# binary, and resolved via rpath / LD_LIBRARY_PATH.
+sherpa-onnx = { version = "1.13.0", default-features = false, features = ["shared"] }
 
 # Async
 tokio = { version = "1.32.0", features = ["full", "tracing"] }
@@ -159,7 +171,7 @@ futures-channel = "0.3.31"
 
 # PERFORMANCE: Enable Metal GPU + CoreML acceleration automatically on macOS
 # CoreML provides additional acceleration for Apple Silicon chips
-whisper-rs = { version = "0.16.0", features = ["raw-api", "metal", "coreml"] }
+whisper-rs = { version = "0.16.0", features = ["raw-api", "metal", "coreml", "log_backend"] }
 
 # Windows-specific dependencies
 # Default: CPU-only build (no BLAS)
@@ -168,7 +180,7 @@ whisper-rs = { version = "0.16.0", features = ["raw-api", "metal", "coreml"] }
 #   --features vulkan   (AMD/Intel GPUs)
 #   --features openblas (OpenBLAS optimization, requires BLAS_INCLUDE_DIRS)
 [target.'cfg(target_os = "windows")'.dependencies]
-whisper-rs = { version = "0.16.0", features = ["raw-api", "vulkan"] }
+whisper-rs = { version = "0.16.0", features = ["raw-api", "vulkan", "log_backend"] }
 futures-channel = "0.3.31"
 
 # Linux-specific dependencies
@@ -179,7 +191,7 @@ futures-channel = "0.3.31"
 #   --features hipblas  (AMD ROCm)
 #   --features openblas (OpenBLAS optimization, requires BLAS_INCLUDE_DIRS)
 [target.'cfg(target_os = "linux")'.dependencies]
-whisper-rs = { version = "0.16.0", features = ["raw-api"] }
+whisper-rs = { version = "0.16.0", features = ["raw-api", "log_backend"] }
 futures-channel = "0.3.31"
 
 [dev-dependencies]

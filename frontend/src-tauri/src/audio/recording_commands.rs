@@ -262,6 +262,14 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     IS_RECORDING.store(true, Ordering::SeqCst);
     reset_speech_detected_flag(); // Reset for new recording session
 
+    // Initialize the speaker diarizer for this session if the model is on disk.
+    // Failure is non-fatal: recording proceeds with the "Speaker" placeholder.
+    match crate::speaker_diarization::commands::try_init_for_recording(&app).await {
+        Ok(true) => info!("🗣️ Speaker diarization enabled for this session"),
+        Ok(false) => info!("🗣️ Speaker diarization disabled (model not downloaded)"),
+        Err(e) => warn!("Speaker diarizer init failed: {}", e),
+    }
+
     // Start optimized parallel transcription task and store handle
     let task_handle = transcription::start_transcription_task(app.clone(), transcription_receiver);
     {
@@ -287,6 +295,8 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
+                    speaker: update.speaker.clone(),
+                    voice_profile_id: update.voice_profile_id.clone(),
                 };
 
                 // Save to recording manager
@@ -440,6 +450,14 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     IS_RECORDING.store(true, Ordering::SeqCst);
     reset_speech_detected_flag(); // Reset for new recording session
 
+    // Initialize the speaker diarizer for this session if the model is on disk.
+    // Failure is non-fatal: recording proceeds with the "Speaker" placeholder.
+    match crate::speaker_diarization::commands::try_init_for_recording(&app).await {
+        Ok(true) => info!("🗣️ Speaker diarization enabled for this session"),
+        Ok(false) => info!("🗣️ Speaker diarization disabled (model not downloaded)"),
+        Err(e) => warn!("Speaker diarizer init failed: {}", e),
+    }
+
     // Start optimized parallel transcription task and store handle
     let task_handle = transcription::start_transcription_task(app.clone(), transcription_receiver);
     {
@@ -465,6 +483,8 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                     display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
                     confidence: update.confidence,
                     sequence_id: update.sequence_id,
+                    speaker: update.speaker.clone(),
+                    voice_profile_id: update.voice_profile_id.clone(),
                 };
 
                 // Save to recording manager
@@ -567,6 +587,9 @@ pub async fn stop_recording<R: Runtime>(
         }
     }
 
+    // Drop the speaker diarizer so a fresh session starts with empty cluster IDs.
+    crate::speaker_diarization::commands::shutdown_for_recording();
+
     // Step 2: Signal transcription workers to finish processing ALL queued chunks
     let _ = app.emit(
         "recording-shutdown-progress",
@@ -666,61 +689,30 @@ pub async fn stop_recording<R: Runtime>(
         }
     };
 
-    match config.as_deref() {
-        Some("parakeet") => {
-            info!("🦜 Unloading Parakeet model...");
-            let engine_clone = {
-                let engine_guard = crate::parakeet_engine::commands::PARAKEET_ENGINE
-                    .lock()
-                    .unwrap();
-                engine_guard.as_ref().cloned()
-            };
+    // Whisper is the only local ASR engine now; unload it after recording stops.
+    let _ = config; // config provider isn't consulted any more — kept for future routing.
+    info!("🎤 Unloading Whisper model...");
+    let engine_clone = {
+        let engine_guard = crate::whisper_engine::commands::WHISPER_ENGINE
+            .lock()
+            .unwrap();
+        engine_guard.as_ref().cloned()
+    };
 
-            if let Some(engine) = engine_clone {
-                let current_model = engine
-                    .get_current_model()
-                    .await
-                    .unwrap_or_else(|| "unknown".to_string());
-                info!("Current Parakeet model before unload: '{}'", current_model);
+    if let Some(engine) = engine_clone {
+        let current_model = engine
+            .get_current_model()
+            .await
+            .unwrap_or_else(|| "unknown".to_string());
+        info!("Current Whisper model before unload: '{}'", current_model);
 
-                if engine.unload_model().await {
-                    info!(
-                        "✅ Parakeet model '{}' unloaded successfully",
-                        current_model
-                    );
-                } else {
-                    warn!("⚠️ Failed to unload Parakeet model '{}'", current_model);
-                }
-            } else {
-                warn!("⚠️ No Parakeet engine found to unload model");
-            }
+        if engine.unload_model().await {
+            info!("✅ Whisper model '{}' unloaded successfully", current_model);
+        } else {
+            warn!("⚠️ Failed to unload Whisper model '{}'", current_model);
         }
-        _ => {
-            // Default to Whisper
-            info!("🎤 Unloading Whisper model...");
-            let engine_clone = {
-                let engine_guard = crate::whisper_engine::commands::WHISPER_ENGINE
-                    .lock()
-                    .unwrap();
-                engine_guard.as_ref().cloned()
-            };
-
-            if let Some(engine) = engine_clone {
-                let current_model = engine
-                    .get_current_model()
-                    .await
-                    .unwrap_or_else(|| "unknown".to_string());
-                info!("Current Whisper model before unload: '{}'", current_model);
-
-                if engine.unload_model().await {
-                    info!("✅ Whisper model '{}' unloaded successfully", current_model);
-                } else {
-                    warn!("⚠️ Failed to unload Whisper model '{}'", current_model);
-                }
-            } else {
-                warn!("⚠️ No Whisper engine found to unload model");
-            }
-        }
+    } else {
+        warn!("⚠️ No Whisper engine found to unload model");
     }
 
     // Step 4: Finalize recording state and cleanup resources safely

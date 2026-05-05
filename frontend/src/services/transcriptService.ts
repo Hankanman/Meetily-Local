@@ -112,21 +112,6 @@ export class TranscriptService {
     );
   }
 
-  /**
-   * Listen for Parakeet model download complete event
-   * @param callback - Function to call when Parakeet model download completes
-   * @returns Promise that resolves to unlisten function
-   */
-  async onParakeetModelDownloadComplete(
-    callback: (modelName: string) => void,
-  ): Promise<UnlistenFn> {
-    return listen<ModelDownloadCompletePayload>(
-      "parakeet-model-download-complete",
-      (event) => {
-        callback(event.payload.modelName);
-      },
-    );
-  }
 }
 
 // Export singleton instance

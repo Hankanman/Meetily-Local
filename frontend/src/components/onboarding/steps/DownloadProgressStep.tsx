@@ -10,7 +10,9 @@ import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { getErrorMessage } from "@/lib/utils";
 
-const PARAKEET_MODEL = "parakeet-tdt-0.6b-v3-int8";
+// Default local Whisper model downloaded during onboarding. Quantized turbo
+// variant — comparable accuracy to large-v3 but faster on CPU/GPU.
+const ONBOARDING_WHISPER_MODEL = "large-v3-turbo-q5_0";
 
 type DownloadStatus = "waiting" | "downloading" | "completed" | "error";
 
@@ -43,7 +45,7 @@ export function DownloadProgressStep() {
     status: parakeetDownloaded ? "completed" : "waiting",
     progress: parakeetDownloaded ? 100 : 0,
     downloadedMb: 0,
-    totalMb: 670,
+    totalMb: 547, // large-v3-turbo-q5_0 is ~547 MB
     speedMbps: 0,
   });
 
@@ -68,7 +70,7 @@ export function DownloadProgressStep() {
       return;
     }
 
-    console.log("[DownloadProgressStep] Retrying Parakeet download");
+    console.log("[DownloadProgressStep] Retrying Whisper model download");
     retryingRef.current = true;
 
     // Reset error state
@@ -82,7 +84,10 @@ export function DownloadProgressStep() {
     }));
 
     try {
-      await invoke("parakeet_retry_download", { modelName: PARAKEET_MODEL });
+      // No separate retry command for Whisper — re-issue the download.
+      await invoke("whisper_download_model", {
+        modelName: ONBOARDING_WHISPER_MODEL,
+      });
       // Progress events will update state
     } catch (error) {
       console.error("[DownloadProgressStep] Retry failed:", error);
@@ -191,7 +196,8 @@ export function DownloadProgressStep() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Listen to Parakeet download progress
+  // Listen to Whisper download progress (the Rust whisper_download_model
+  // command emits payloads with a `modelName` field).
   useEffect(() => {
     const unlistenProgress = listen<{
       modelName: string;
@@ -200,7 +206,7 @@ export function DownloadProgressStep() {
       total_mb?: number;
       speed_mbps?: number;
       status?: string;
-    }>("parakeet-model-download-progress", (event) => {
+    }>("model-download-progress", (event) => {
       const {
         modelName,
         progress,
@@ -209,7 +215,7 @@ export function DownloadProgressStep() {
         speed_mbps,
         status,
       } = event.payload;
-      if (modelName === PARAKEET_MODEL) {
+      if (modelName === ONBOARDING_WHISPER_MODEL) {
         setParakeetState((prev) => ({
           ...prev,
           status: status === "completed" ? "completed" : "downloading",
@@ -226,9 +232,9 @@ export function DownloadProgressStep() {
     });
 
     const unlistenComplete = listen<{ modelName: string }>(
-      "parakeet-model-download-complete",
+      "model-download-complete",
       (event) => {
-        if (event.payload.modelName === PARAKEET_MODEL) {
+        if (event.payload.modelName === ONBOARDING_WHISPER_MODEL) {
           setParakeetState((prev) => ({
             ...prev,
             status: "completed",
@@ -240,9 +246,9 @@ export function DownloadProgressStep() {
     );
 
     const unlistenError = listen<{ modelName: string; error: string }>(
-      "parakeet-model-download-error",
+      "model-download-error",
       (event) => {
-        if (event.payload.modelName === PARAKEET_MODEL) {
+        if (event.payload.modelName === ONBOARDING_WHISPER_MODEL) {
           setParakeetState((prev) => ({
             ...prev,
             status: "error",
@@ -335,16 +341,16 @@ export function DownloadProgressStep() {
   };
 
   const handleContinue = async () => {
-    // Verify actual model availability (catches state drift)
+    // Verify actual Whisper model availability (catches state drift between
+    // the React state and what's actually on disk).
     try {
-      await invoke("parakeet_init");
       const actuallyAvailable = await invoke<boolean>(
-        "parakeet_has_available_models",
+        "whisper_has_available_models",
       );
 
       if (actuallyAvailable && !parakeetDownloaded) {
         console.log(
-          "[DownloadProgressStep] Model available but state not updated",
+          "[DownloadProgressStep] Whisper model available but state not updated",
         );
         setParakeetDownloaded(true);
         setParakeetState((prev) => ({
@@ -359,7 +365,10 @@ export function DownloadProgressStep() {
         return;
       }
     } catch (error) {
-      console.warn("[DownloadProgressStep] Failed to verify model:", error);
+      console.warn(
+        "[DownloadProgressStep] Failed to verify Whisper model:",
+        error,
+      );
     }
 
     // Check if downloads are complete for toast notification

@@ -51,6 +51,33 @@ esac
 echo "==> Dev mode: $MODE"
 cd "$ROOT/frontend"
 
+# Full Rust backtrace on panic. Note: glibc's abort() from
+# `free(): invalid pointer` bypasses Rust's panic handler, so this won't
+# show a Rust trace for that specific kind of crash — use gdb if needed.
+export RUST_BACKTRACE="${RUST_BACKTRACE:-full}"
+
+# Default log filter:
+#   - app_lib at info  → our own logs visible
+#   - whisper_rs at warn → drop the per-decoder beam-search trace noise
+#                          (whisper.cpp emits these at INFO, very chatty)
+#   - everything else at info
+# Override by exporting RUST_LOG before invoking dev.sh.
+export RUST_LOG="${RUST_LOG:-info,whisper_rs=warn}"
+
+# sherpa-onnx is linked dynamically (via the `shared` Cargo feature) to
+# avoid the static-onnxruntime conflict with whisper-rs. The build script
+# drops libsherpa-onnx-c-api.so / libonnxruntime.so into target/debug/
+# but doesn't set an rpath, so the loader needs to be told where to look.
+# Production builds will need this baked into the bundle's library dir.
+SHERPA_LIB_DIR="$ROOT/target/debug"
+if [[ -d "$SHERPA_LIB_DIR" ]]; then
+    if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
+        export LD_LIBRARY_PATH="$SHERPA_LIB_DIR:$LD_LIBRARY_PATH"
+    else
+        export LD_LIBRARY_PATH="$SHERPA_LIB_DIR"
+    fi
+fi
+
 # ----- compiler-cache opt-in (auto-enables if sccache is installed) -----
 if command -v sccache >/dev/null 2>&1; then
     export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"

@@ -44,6 +44,8 @@ function convertTranscriptsToSegments(
     endTime: t.audio_end_time,
     text: t.text,
     confidence: t.confidence,
+    speaker: t.speaker,
+    voice_profile_id: t.voice_profile_id,
   }));
 }
 

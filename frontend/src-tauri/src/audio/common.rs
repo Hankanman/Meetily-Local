@@ -4,55 +4,59 @@ use log::{debug, info};
 use std::path::Path;
 use uuid::Uuid;
 
-/// Unload the transcription engine after a batch job (import or retranscription).
+/// Unload the Whisper model after a batch job (import or retranscription).
 /// Skips unloading if a live recording is currently in progress, since recording
-/// uses the same global engine instances.
-pub(crate) async fn unload_engine_after_batch(use_parakeet: bool) {
+/// uses the same global engine instance.
+pub(crate) async fn unload_engine_after_batch() {
     if crate::audio::recording_commands::is_recording().await {
         log::info!("Skipping model unload after batch: recording in progress");
         return;
     }
 
-    if use_parakeet {
-        use crate::parakeet_engine::commands::PARAKEET_ENGINE;
-        let engine = {
-            let guard = PARAKEET_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
-            guard.as_ref().cloned()
-        };
-        if let Some(e) = engine {
-            e.unload_model().await;
-        }
-    } else {
-        use crate::whisper_engine::commands::WHISPER_ENGINE;
-        let engine = {
-            let guard = WHISPER_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
-            guard.as_ref().cloned()
-        };
-        if let Some(e) = engine {
-            e.unload_model().await;
-        }
+    use crate::whisper_engine::commands::WHISPER_ENGINE;
+    let engine = {
+        let guard = WHISPER_ENGINE.lock().unwrap_or_else(|e| e.into_inner());
+        guard.as_ref().cloned()
+    };
+    if let Some(e) = engine {
+        e.unload_model().await;
     }
 }
 
-/// Create transcript segments from transcription results.
-/// Each tuple is (text, start_ms, end_ms) from VAD timestamps.
+/// One transcribed segment from a batch (import / retranscription) job.
+/// `speaker`/`voice_profile_id` are populated when a [`Diarizer`] is
+/// available for the batch; otherwise they're `None`.
+///
+/// [`Diarizer`]: crate::speaker_diarization::Diarizer
+#[derive(Debug, Clone)]
+pub(crate) struct BatchTranscript {
+    pub text: String,
+    pub start_ms: f64,
+    pub end_ms: f64,
+    pub speaker: Option<String>,
+    pub voice_profile_id: Option<String>,
+}
+
+/// Create transcript segments from a batch transcription result.
 pub(crate) fn create_transcript_segments(
-    transcripts: &[(String, f64, f64)],
+    transcripts: &[BatchTranscript],
 ) -> Vec<TranscriptSegment> {
     transcripts
         .iter()
-        .map(|(text, start_ms, end_ms)| {
-            let start_seconds = start_ms / 1000.0;
-            let end_seconds = end_ms / 1000.0;
+        .map(|t| {
+            let start_seconds = t.start_ms / 1000.0;
+            let end_seconds = t.end_ms / 1000.0;
             let duration = end_seconds - start_seconds;
 
             TranscriptSegment {
                 id: format!("transcript-{}", Uuid::new_v4()),
-                text: text.trim().to_string(),
+                text: t.text.trim().to_string(),
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 audio_start_time: Some(start_seconds),
                 audio_end_time: Some(end_seconds),
                 duration: Some(duration),
+                speaker: t.speaker.clone(),
+                voice_profile_id: t.voice_profile_id.clone(),
             }
         })
         .collect()
@@ -75,6 +79,8 @@ pub(crate) fn write_transcripts_json(folder: &Path, segments: &[TranscriptSegmen
                 "audio_start_time": s.audio_start_time,
                 "audio_end_time": s.audio_end_time,
                 "duration": s.duration,
+                "speaker": s.speaker,
+                "voice_profile_id": s.voice_profile_id,
                 "sequence_id": i
             })
         }).collect::<Vec<_>>()
@@ -133,6 +139,7 @@ pub(crate) fn split_segment_at_silence(
                 start_timestamp_ms: chunk_start_ms,
                 end_timestamp_ms: chunk_end_ms,
                 confidence: segment.confidence,
+                source: segment.source,
             });
             break;
         }
@@ -191,6 +198,7 @@ pub(crate) fn split_segment_at_silence(
             start_timestamp_ms: chunk_start_ms,
             end_timestamp_ms: chunk_end_ms,
             confidence: segment.confidence,
+            source: segment.source,
         });
 
         // Advance position to where the current chunk actually ends

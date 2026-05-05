@@ -366,10 +366,13 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             chunk_start_time: update.chunk_start_time,
             is_partial: update.is_partial,
             confidence: update.confidence,
-            // NEW: Recording-relative timestamps for playback sync
+            // Recording-relative timestamps for playback sync
             audio_start_time: update.audio_start_time,
             audio_end_time: update.audio_end_time,
             duration: update.duration,
+            // Speaker attribution from source-tagged VAD pipeline / diarizer
+            speaker: update.speaker,
+            voice_profile_id: update.voice_profile_id,
           };
 
           // Add to buffer
@@ -448,6 +451,8 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
               audio_start_time: segment.audio_start_time,
               audio_end_time: segment.audio_end_time,
               duration: segment.duration,
+              speaker: segment.speaker,
+              voice_profile_id: segment.voice_profile_id,
             }),
           );
 
@@ -498,6 +503,8 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       audio_start_time: update.audio_start_time,
       audio_end_time: update.audio_end_time,
       duration: update.duration,
+      speaker: update.speaker,
+      voice_profile_id: update.voice_profile_id,
     };
 
     setTranscripts((prev) => {

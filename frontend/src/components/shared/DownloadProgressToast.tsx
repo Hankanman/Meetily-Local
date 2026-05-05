@@ -257,7 +257,9 @@ export function useDownloadProgressToast() {
     });
   }, [downloads, dismissedModels, showDownloadToast]);
 
-  // Listen to Parakeet download events
+  // Listen to Whisper download events. The Rust whisper_download_model
+  // command emits payloads with `modelName` so the same hook covers any
+  // Whisper model the user downloads from settings or onboarding.
   useEffect(() => {
     const unlistenProgress = listen<{
       modelName: string;
@@ -266,7 +268,7 @@ export function useDownloadProgressToast() {
       total_mb?: number;
       speed_mbps?: number;
       status?: string;
-    }>("parakeet-model-download-progress", (event) => {
+    }>("model-download-progress", (event) => {
       const {
         modelName,
         progress,
@@ -278,10 +280,10 @@ export function useDownloadProgressToast() {
 
       const downloadData: DownloadProgress = {
         modelName,
-        displayName: "Transcription Model (Parakeet)",
+        displayName: `Transcription Model (Whisper: ${modelName})`,
         progress,
         downloadedMb: downloaded_mb ?? 0,
-        totalMb: total_mb ?? 670,
+        totalMb: total_mb ?? 0,
         speedMbps: speed_mbps ?? 0,
         status:
           status === "cancelled"
@@ -297,19 +299,18 @@ export function useDownloadProgressToast() {
       if (downloadData.status === "cancelled") {
         cleanupDownload(modelName, 6000); // 5s toast + 1s buffer
       }
-      // Removed direct showDownloadToast call here, handled by effect
     });
 
     const unlistenComplete = listen<{ modelName: string }>(
-      "parakeet-model-download-complete",
+      "model-download-complete",
       (event) => {
         const { modelName } = event.payload;
         const downloadData: DownloadProgress = {
           modelName,
-          displayName: "Transcription Model (Parakeet)",
+          displayName: `Transcription Model (Whisper: ${modelName})`,
           progress: 100,
-          downloadedMb: 670,
-          totalMb: 670,
+          downloadedMb: 0,
+          totalMb: 0,
           speedMbps: 0,
           status: "completed",
         };
@@ -320,15 +321,15 @@ export function useDownloadProgressToast() {
     );
 
     const unlistenError = listen<{ modelName: string; error: string }>(
-      "parakeet-model-download-error",
+      "model-download-error",
       (event) => {
         const { modelName, error } = event.payload;
         const downloadData: DownloadProgress = {
           modelName,
-          displayName: "Transcription Model (Parakeet)",
+          displayName: `Transcription Model (Whisper: ${modelName})`,
           progress: 0,
           downloadedMb: 0,
-          totalMb: 670,
+          totalMb: 0,
           speedMbps: 0,
           status: "error",
           error: categorizeError(error),
