@@ -7,7 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
 import { formatRecordingTime } from "@/lib/utils";
-import { speakerChipClass } from "@/lib/speaker-chip";
+import { EditableSpeakerChip } from "./EditableSpeakerChip";
 
 interface TranscriptViewProps {
   transcripts: Transcript[];
@@ -16,6 +16,11 @@ interface TranscriptViewProps {
   isProcessing?: boolean; // Is processing/finalizing transcription (hides "Listening..." indicator)
   isStopping?: boolean; // Is recording being stopped (provides immediate UI feedback)
   enableStreaming?: boolean; // Enable streaming effect for live transcription UX
+  /** Meeting these transcripts belong to. Required for the "Speaker N" → name
+   *  flow because the rename is scoped per-meeting. */
+  meetingId?: string;
+  /** Fired after a speaker chip's name/email is saved. */
+  onSpeakerProfileChanged?: () => void;
 }
 
 interface SpeechDetectedEvent {
@@ -109,6 +114,8 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
   isProcessing = false,
   isStopping = false,
   enableStreaming = false,
+  meetingId,
+  onSpeakerProfileChanged,
 }) => {
   const [speechDetected, setSpeechDetected] = useState(false);
 
@@ -335,15 +342,12 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
               </Tooltip>
               <div className="flex-1">
                 {transcript.speaker && (
-                  <span
-                    className={`
-                      mb-1 mr-2 inline-block rounded-full px-2 py-0.5 text-xs
-                      font-medium
-                      ${speakerChipClass(transcript.speaker)}
-                    `}
-                  >
-                    {transcript.speaker}
-                  </span>
+                  <EditableSpeakerChip
+                    speaker={transcript.speaker}
+                    voiceProfileId={transcript.voice_profile_id}
+                    meetingId={meetingId}
+                    onSaved={onSpeakerProfileChanged}
+                  />
                 )}
                 {isStreaming ? (
                   // Streaming transcript - show in bubble (full width)

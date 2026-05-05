@@ -84,6 +84,35 @@ impl TranscriptsRepository {
         Ok(meeting_id)
     }
 
+    /// Replace every transcript's `speaker` label that currently equals
+    /// `old_label` within `meeting_id` with `new_label`, and set
+    /// `voice_profile_id` to `profile_id` (which may be `None` for the
+    /// rename-only fallback). Returns the number of rows updated.
+    ///
+    /// Scoped to a single meeting because cluster numbering is per-meeting:
+    /// "Speaker 1" in one recording is a different person than "Speaker 1"
+    /// in another, so a global rename would mis-attribute speech.
+    pub async fn rename_speaker_in_meeting(
+        pool: &SqlitePool,
+        meeting_id: &str,
+        old_label: &str,
+        new_label: &str,
+        profile_id: Option<&str>,
+    ) -> Result<u64, SqlxError> {
+        let res = sqlx::query(
+            "UPDATE transcripts
+             SET speaker = ?, voice_profile_id = ?
+             WHERE meeting_id = ? AND speaker = ?",
+        )
+        .bind(new_label)
+        .bind(profile_id)
+        .bind(meeting_id)
+        .bind(old_label)
+        .execute(pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Searches for a query string within the transcripts.
     /// It returns a list of matching transcripts with context.
     pub async fn search_transcripts(

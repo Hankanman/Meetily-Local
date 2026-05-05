@@ -600,6 +600,19 @@ async fn run_retranscription<R: Runtime>(
         "Retranscription complete",
     );
 
+    // Install the batch diarizer as the process-wide current diarizer so
+    // `promote_speaker_to_profile` can reach its embeddings when the user
+    // names a "Speaker N" chip on the just-finished meeting. Without this,
+    // the diarizer (and its history) would be dropped at function return,
+    // forcing every promote to fall back to rename-only.
+    if let Some(d) = diarizer {
+        crate::speaker_diarization::set_current_diarizer(Some(d));
+        info!(
+            "Installed retranscription diarizer as current_diarizer for meeting {}",
+            meeting_id
+        );
+    }
+
     Ok(RetranscriptionResult {
         meeting_id,
         segments_count: segments.len(),

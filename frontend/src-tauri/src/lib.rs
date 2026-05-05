@@ -782,7 +782,7 @@ pub fn run() {
             speaker_diarization::commands::speaker_model_download,
             speaker_diarization::commands::list_voice_profiles,
             speaker_diarization::commands::delete_voice_profile,
-            speaker_diarization::commands::rename_voice_profile,
+            speaker_diarization::commands::update_voice_profile,
             speaker_diarization::commands::promote_speaker_to_profile,
             speaker_diarization::commands::refine_speaker_assignments,
             // Parallel processing commands

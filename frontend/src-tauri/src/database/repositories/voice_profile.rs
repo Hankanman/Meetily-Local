@@ -15,7 +15,7 @@ pub struct VoiceProfilesRepository;
 impl VoiceProfilesRepository {
     pub async fn list_all(pool: &SqlitePool) -> Result<Vec<VoiceProfile>, SqlxError> {
         sqlx::query_as::<_, VoiceProfile>(
-            "SELECT id, name, embedding, embedding_dim, sample_count, created_at, updated_at
+            "SELECT id, name, email, embedding, embedding_dim, sample_count, created_at, updated_at
              FROM voice_profiles
              ORDER BY name COLLATE NOCASE",
         )
@@ -28,7 +28,7 @@ impl VoiceProfilesRepository {
         id: &str,
     ) -> Result<Option<VoiceProfile>, SqlxError> {
         sqlx::query_as::<_, VoiceProfile>(
-            "SELECT id, name, embedding, embedding_dim, sample_count, created_at, updated_at
+            "SELECT id, name, email, embedding, embedding_dim, sample_count, created_at, updated_at
              FROM voice_profiles WHERE id = ?",
         )
         .bind(id)
@@ -36,10 +36,12 @@ impl VoiceProfilesRepository {
         .await
     }
 
-    /// Insert a new profile. Returns the generated id.
+    /// Insert a new profile. `email` is optional — pass `None` if the user
+    /// only provided a display name. Returns the generated id.
     pub async fn create(
         pool: &SqlitePool,
         name: &str,
+        email: Option<&str>,
         embedding: &[f32],
         sample_count: i64,
     ) -> Result<String, SqlxError> {
@@ -49,11 +51,12 @@ impl VoiceProfilesRepository {
 
         sqlx::query(
             "INSERT INTO voice_profiles
-             (id, name, embedding, embedding_dim, sample_count, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             (id, name, email, embedding, embedding_dim, sample_count, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(name)
+        .bind(email)
         .bind(&bytes)
         .bind(embedding.len() as i64)
         .bind(sample_count)
@@ -65,12 +68,21 @@ impl VoiceProfilesRepository {
         Ok(id)
     }
 
-    pub async fn rename(pool: &SqlitePool, id: &str, name: &str) -> Result<bool, SqlxError> {
+    /// Update a profile's display fields (name + optional email). Replaces the
+    /// previous narrow `rename` API — every UI surface for editing a profile
+    /// shows both fields together, so the command does too.
+    pub async fn update_profile(
+        pool: &SqlitePool,
+        id: &str,
+        name: &str,
+        email: Option<&str>,
+    ) -> Result<bool, SqlxError> {
         let now = Utc::now().to_rfc3339();
         let res = sqlx::query(
-            "UPDATE voice_profiles SET name = ?, updated_at = ? WHERE id = ?",
+            "UPDATE voice_profiles SET name = ?, email = ?, updated_at = ? WHERE id = ?",
         )
         .bind(name)
+        .bind(email)
         .bind(&now)
         .bind(id)
         .execute(pool)
