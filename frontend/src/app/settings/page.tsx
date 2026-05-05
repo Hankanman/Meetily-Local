@@ -8,6 +8,7 @@ import {
   Database as DatabaseIcon,
   SparkleIcon,
   FlaskConical,
+  Users,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { invoke } from "@tauri-apps/api/core";
@@ -17,6 +18,7 @@ import { RecordingSettings } from "@/components/RecordingSettings";
 import { PreferenceSettings } from "@/components/PreferenceSettings";
 import { SummaryModelSettings } from "@/components/SummaryModelSettings";
 import { BetaSettings } from "@/components/BetaSettings";
+import { SpeakerSettings } from "@/components/SpeakerSettings";
 import { useConfig } from "@/contexts/ConfigContext";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -26,6 +28,7 @@ import { Page, PageBody } from "@/components/layout/Page";
 const TABS = [
   { value: "general", label: "General", icon: Settings2 },
   { value: "recording", label: "Recordings", icon: Mic },
+  { value: "speakers", label: "Speakers", icon: Users },
   { value: "Transcriptionmodels", label: "Transcription", icon: DatabaseIcon },
   { value: "summaryModels", label: "Summary", icon: SparkleIcon },
   { value: "beta", label: "Beta", icon: FlaskConical },
@@ -138,6 +141,9 @@ export default function SettingsPage() {
             </TabsContent>
             <TabsContent value="recording">
               <RecordingSettings />
+            </TabsContent>
+            <TabsContent value="speakers">
+              <SpeakerSettings />
             </TabsContent>
             <TabsContent value="Transcriptionmodels">
               <TranscriptSettings
