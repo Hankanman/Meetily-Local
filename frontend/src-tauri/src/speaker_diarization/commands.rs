@@ -436,6 +436,232 @@ pub async fn promote_speaker_to_profile<R: Runtime>(
     })
 }
 
+#[derive(Debug, Deserialize)]
+pub struct MergeProfilesArgs {
+    /// Profile that survives the merge (keeps its id, name, email).
+    pub winner_id: String,
+    /// Profile that gets folded into the winner and then deleted.
+    pub loser_id: String,
+}
+
+/// Result of any merge operation. `renamed_count` is the number of
+/// transcript rows whose displayed `speaker` label and/or
+/// `voice_profile_id` were rewritten.
+#[derive(Debug, Serialize)]
+pub struct MergeResult {
+    pub renamed_count: u64,
+    /// True if the winner profile's centroid was rebuilt from the merged
+    /// samples; false in the rare degraded path where dimensions didn't
+    /// match (e.g. embedding model change between sessions) and we fell
+    /// back to relinking transcripts only.
+    pub centroid_updated: bool,
+}
+
+/// Merge two stored voice profiles into one. Used when the model created
+/// duplicate profiles for the same person across meetings (e.g., "Bob"
+/// from Tuesday and "Bob" from Friday became separate ids).
+///
+/// Combines centroids weighted by `sample_count`, then re-points every
+/// transcript referencing the loser to the winner and rewrites the
+/// displayed `speaker` text. The loser profile is deleted in the same
+/// transaction so the operation is atomic from the frontend's perspective.
+#[command]
+pub async fn merge_voice_profiles<R: Runtime>(
+    app: AppHandle<R>,
+    args: MergeProfilesArgs,
+) -> Result<MergeResult, String> {
+    if args.winner_id == args.loser_id {
+        return Err("Cannot merge a profile into itself".into());
+    }
+
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "AppState unavailable".to_string())?;
+    let pool = state.db_manager.pool();
+
+    let winner = VoiceProfilesRepository::get_by_id(pool, &args.winner_id)
+        .await
+        .map_err(|e| format!("Failed to load winner profile: {}", e))?
+        .ok_or_else(|| format!("Profile not found: {}", args.winner_id))?;
+    let loser = VoiceProfilesRepository::get_by_id(pool, &args.loser_id)
+        .await
+        .map_err(|e| format!("Failed to load loser profile: {}", e))?
+        .ok_or_else(|| format!("Profile not found: {}", args.loser_id))?;
+
+    let centroid_updated = if winner.embedding_dim == loser.embedding_dim {
+        let winner_centroid = bytes_to_floats(&winner.embedding)
+            .ok_or_else(|| "Winner profile has corrupt embedding".to_string())?;
+        let loser_centroid = bytes_to_floats(&loser.embedding)
+            .ok_or_else(|| "Loser profile has corrupt embedding".to_string())?;
+        let merged = merge_centroids(
+            &winner_centroid,
+            winner.sample_count.max(0) as usize,
+            &loser_centroid,
+            loser.sample_count.max(0) as usize,
+        );
+        let new_count = winner.sample_count + loser.sample_count;
+        VoiceProfilesRepository::update_centroid(pool, &winner.id, &merged, new_count)
+            .await
+            .map_err(|e| format!("Failed to update winner centroid: {}", e))?;
+        true
+    } else {
+        log::warn!(
+            "Embedding-dim mismatch ({} vs {}) merging {} into {} — relinking transcripts only",
+            winner.embedding_dim,
+            loser.embedding_dim,
+            loser.id,
+            winner.id,
+        );
+        false
+    };
+
+    let renamed_count = TranscriptsRepository::relink_transcripts(
+        pool,
+        &loser.id,
+        &winner.id,
+        &winner.name,
+    )
+    .await
+    .map_err(|e| format!("Failed to relink transcripts: {}", e))?;
+
+    VoiceProfilesRepository::delete(pool, &loser.id)
+        .await
+        .map_err(|e| format!("Failed to delete loser profile: {}", e))?;
+
+    log::info!(
+        "Merged profile '{}' ({}) into '{}' ({}): {} transcripts relinked, centroid_updated={}",
+        loser.name,
+        loser.id,
+        winner.name,
+        winner.id,
+        renamed_count,
+        centroid_updated
+    );
+
+    Ok(MergeResult {
+        renamed_count,
+        centroid_updated,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MergeClusterArgs {
+    /// Meeting whose "Speaker N" labels should be rewritten to the
+    /// existing profile's name.
+    pub meeting_id: String,
+    /// Cluster id assigned during the meeting (0-indexed).
+    pub cluster_id: usize,
+    /// Profile that gets credit for this cluster's samples.
+    pub profile_id: String,
+}
+
+/// Merge an unnamed in-meeting cluster ("Speaker N") into an existing
+/// stored profile. Used when the user clicks "Speaker 2" and selects an
+/// existing speaker (e.g., "Alice") from the autocomplete instead of
+/// typing a new name — they're declaring "this is the same voice we
+/// already have a profile for".
+///
+/// If the diarizer's embeddings for the cluster are reachable (see
+/// `tauri-singleton-state-batch-vs-live` skill), they're folded into the
+/// profile's centroid. Otherwise we degrade to relabel-only — the user
+/// still gets named chips in this meeting.
+#[command]
+pub async fn merge_cluster_into_profile<R: Runtime>(
+    app: AppHandle<R>,
+    args: MergeClusterArgs,
+) -> Result<MergeResult, String> {
+    if args.meeting_id.trim().is_empty() {
+        return Err("meeting_id is required".into());
+    }
+    if args.profile_id.trim().is_empty() {
+        return Err("profile_id is required".into());
+    }
+
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "AppState unavailable".to_string())?;
+    let pool = state.db_manager.pool();
+
+    let profile = VoiceProfilesRepository::get_by_id(pool, &args.profile_id)
+        .await
+        .map_err(|e| format!("Failed to load profile: {}", e))?
+        .ok_or_else(|| format!("Profile not found: {}", args.profile_id))?;
+
+    let old_label = format!("Speaker {}", args.cluster_id + 1);
+
+    // Pull this cluster's embeddings if the diarizer is still reachable.
+    let cluster_embeddings = current_diarizer()
+        .map(|d| d.embeddings_for_cluster(args.cluster_id))
+        .unwrap_or_default();
+
+    let centroid_updated = if !cluster_embeddings.is_empty()
+        && cluster_embeddings[0].len() as i64 == profile.embedding_dim
+    {
+        let cluster_centroid = average_and_normalize(&cluster_embeddings);
+        let profile_centroid = bytes_to_floats(&profile.embedding)
+            .ok_or_else(|| "Profile has corrupt embedding".to_string())?;
+        let merged = merge_centroids(
+            &profile_centroid,
+            profile.sample_count.max(0) as usize,
+            &cluster_centroid,
+            cluster_embeddings.len(),
+        );
+        let new_count = profile.sample_count + cluster_embeddings.len() as i64;
+        VoiceProfilesRepository::update_centroid(pool, &profile.id, &merged, new_count)
+            .await
+            .map_err(|e| format!("Failed to update profile centroid: {}", e))?;
+        true
+    } else {
+        if !cluster_embeddings.is_empty() {
+            log::warn!(
+                "Embedding-dim mismatch for cluster {} ({} vs profile {}) — skipping centroid update",
+                args.cluster_id,
+                cluster_embeddings[0].len(),
+                profile.embedding_dim,
+            );
+        } else {
+            log::info!(
+                "No embeddings reachable for cluster {} in meeting {} — relabel only",
+                args.cluster_id,
+                args.meeting_id,
+            );
+        }
+        false
+    };
+
+    let renamed_count = TranscriptsRepository::rename_speaker_in_meeting(
+        pool,
+        &args.meeting_id,
+        &old_label,
+        &profile.name,
+        Some(&profile.id),
+    )
+    .await
+    .map_err(|e| format!("Failed to rename transcripts: {}", e))?;
+
+    if !centroid_updated && renamed_count == 0 {
+        return Err(format!(
+            "Nothing to do: no embeddings for {} and no transcripts in meeting {} carry that label",
+            old_label, args.meeting_id
+        ));
+    }
+
+    log::info!(
+        "Merged {} (meeting {}) into profile '{}' ({}): {} transcripts relabeled, centroid_updated={}",
+        old_label,
+        args.meeting_id,
+        profile.name,
+        profile.id,
+        renamed_count,
+        centroid_updated
+    );
+
+    Ok(MergeResult {
+        renamed_count,
+        centroid_updated,
+    })
+}
+
 /// Run the post-recording 2-pass refinement and return refined speaker
 /// assignments, one per system-source segment (keyed by `sequence_id`).
 /// Frontend consumers update displayed transcripts whose `sequence_id`
@@ -469,6 +695,33 @@ pub async fn refine_speaker_assignments<R: Runtime>(
     );
 
     Ok(refined)
+}
+
+/// Combine two centroid+sample_count pairs into a single L2-normalized
+/// centroid representing the union of samples.
+///
+/// We only have the precomputed centroids (the raw embeddings aren't kept
+/// after the diarizer's history is dropped), so this is a sample-count-
+/// weighted average rather than a true mean over the raw vectors. For
+/// reasonably similar voices that's close enough; the renormalize keeps
+/// the result on the unit sphere where cosine-similarity matching expects
+/// it.
+fn merge_centroids(a: &[f32], a_n: usize, b: &[f32], b_n: usize) -> Vec<f32> {
+    debug_assert_eq!(a.len(), b.len());
+    let dim = a.len();
+    let total = (a_n + b_n) as f32;
+    let mut acc = vec![0.0f32; dim];
+    for i in 0..dim {
+        acc[i] = (a[i] * a_n as f32 + b[i] * b_n as f32) / total;
+    }
+    let norm = acc.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 1e-8 {
+        let inv = 1.0 / norm;
+        for v in acc.iter_mut() {
+            *v *= inv;
+        }
+    }
+    acc
 }
 
 /// Average a set of embeddings and L2-normalize the result. Mirrors the

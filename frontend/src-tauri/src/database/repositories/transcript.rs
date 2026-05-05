@@ -84,6 +84,29 @@ impl TranscriptsRepository {
         Ok(meeting_id)
     }
 
+    /// Re-point every transcript that currently references `from_profile_id`
+    /// to `to_profile_id`, also rewriting the displayed `speaker` text to
+    /// `to_name`. Used when merging two stored voice profiles into one.
+    /// Returns the number of rows updated.
+    pub async fn relink_transcripts(
+        pool: &SqlitePool,
+        from_profile_id: &str,
+        to_profile_id: &str,
+        to_name: &str,
+    ) -> Result<u64, SqlxError> {
+        let res = sqlx::query(
+            "UPDATE transcripts
+             SET voice_profile_id = ?, speaker = ?
+             WHERE voice_profile_id = ?",
+        )
+        .bind(to_profile_id)
+        .bind(to_name)
+        .bind(from_profile_id)
+        .execute(pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Replace every transcript's `speaker` label that currently equals
     /// `old_label` within `meeting_id` with `new_label`, and set
     /// `voice_profile_id` to `profile_id` (which may be `None` for the

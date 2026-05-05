@@ -784,6 +784,8 @@ pub fn run() {
             speaker_diarization::commands::delete_voice_profile,
             speaker_diarization::commands::update_voice_profile,
             speaker_diarization::commands::promote_speaker_to_profile,
+            speaker_diarization::commands::merge_voice_profiles,
+            speaker_diarization::commands::merge_cluster_into_profile,
             speaker_diarization::commands::refine_speaker_assignments,
             // Parallel processing commands
             whisper_engine::parallel_commands::initialize_parallel_processor,
