@@ -228,6 +228,7 @@ async fn stream_download<R: Runtime>(
 pub struct VoiceProfileDto {
     pub id: String,
     pub name: String,
+    pub email: Option<String>,
     pub embedding_dim: i64,
     pub sample_count: i64,
     pub created_at: String,
@@ -240,6 +241,10 @@ pub struct PromoteSpeakerArgs {
     /// cluster_id = N - 1).
     pub cluster_id: usize,
     pub name: String,
+    /// Optional contact email — frontend may collect it in the same dialog
+    /// that captures the name. `None` / empty string leaves it unset.
+    #[serde(default)]
+    pub email: Option<String>,
 }
 
 #[command]
@@ -260,6 +265,7 @@ pub async fn list_voice_profiles<R: Runtime>(
         .map(|p| VoiceProfileDto {
             id: p.id,
             name: p.name,
+            email: p.email,
             embedding_dim: p.embedding_dim,
             sample_count: p.sample_count,
             created_at: p.created_at,
@@ -282,23 +288,31 @@ pub async fn delete_voice_profile<R: Runtime>(
         .map_err(|e| format!("Failed to delete voice profile: {}", e))
 }
 
+/// Update the display fields (name and optional email) of a stored voice
+/// profile. Empty / whitespace-only `email` is normalised to `None`.
 #[command]
-pub async fn rename_voice_profile<R: Runtime>(
+pub async fn update_voice_profile<R: Runtime>(
     app: AppHandle<R>,
     profile_id: String,
     name: String,
+    email: Option<String>,
 ) -> Result<bool, String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
+    let trimmed_name = name.trim();
+    if trimmed_name.is_empty() {
         return Err("Profile name cannot be empty".into());
     }
+    let normalised_email = email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| "AppState unavailable".to_string())?;
     let pool = state.db_manager.pool();
-    VoiceProfilesRepository::rename(pool, &profile_id, trimmed)
+    VoiceProfilesRepository::update_profile(pool, &profile_id, trimmed_name, normalised_email)
         .await
-        .map_err(|e| format!("Failed to rename voice profile: {}", e))
+        .map_err(|e| format!("Failed to update voice profile: {}", e))
 }
 
 /// Take all embeddings the diarizer assigned to `cluster_id` during the most
@@ -313,10 +327,15 @@ pub async fn promote_speaker_to_profile<R: Runtime>(
     app: AppHandle<R>,
     args: PromoteSpeakerArgs,
 ) -> Result<String, String> {
-    let trimmed = args.name.trim();
-    if trimmed.is_empty() {
+    let trimmed_name = args.name.trim();
+    if trimmed_name.is_empty() {
         return Err("Profile name cannot be empty".into());
     }
+    let normalised_email = args
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
 
     let diarizer =
         current_diarizer().ok_or_else(|| "No diarizer available — record a meeting first".to_string())?;
@@ -336,15 +355,22 @@ pub async fn promote_speaker_to_profile<R: Runtime>(
         .try_state::<AppState>()
         .ok_or_else(|| "AppState unavailable".to_string())?;
     let pool = state.db_manager.pool();
-    let id = VoiceProfilesRepository::create(pool, trimmed, &centroid, embeddings.len() as i64)
-        .await
-        .map_err(|e| format!("Failed to create voice profile: {}", e))?;
+    let id = VoiceProfilesRepository::create(
+        pool,
+        trimmed_name,
+        normalised_email,
+        &centroid,
+        embeddings.len() as i64,
+    )
+    .await
+    .map_err(|e| format!("Failed to create voice profile: {}", e))?;
 
     log::info!(
-        "Promoted Speaker {} (cluster {}) to profile '{}' (id={}, samples={})",
+        "Promoted Speaker {} (cluster {}) to profile '{}' (email={:?}, id={}, samples={})",
         args.cluster_id + 1,
         args.cluster_id,
-        trimmed,
+        trimmed_name,
+        normalised_email,
         id,
         embeddings.len()
     );

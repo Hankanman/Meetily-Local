@@ -47,6 +47,10 @@ pub struct Transcript {
 pub struct VoiceProfile {
     pub id: String,
     pub name: String,
+    /// Optional contact email for the speaker. Populated when the user links
+    /// a profile to a known contact; nullable since not every named speaker
+    /// will have an email available.
+    pub email: Option<String>,
     /// Packed little-endian f32 speaker-embedding centroid.
     pub embedding: Vec<u8>,
     pub embedding_dim: i64,
