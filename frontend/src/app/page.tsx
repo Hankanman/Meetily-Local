@@ -1,20 +1,19 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { motion } from "framer-motion";
-import { RecordingControls } from "@/components/RecordingControls";
+import { useEffect, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { useRouter } from "next/navigation";
+import { listen } from "@tauri-apps/api/event";
+import { toast } from "sonner";
+
 import { useSidebar } from "@/components/Sidebar/SidebarProvider";
-import { Page, FloatingBottomDock } from "@/components/layout/Page";
-import { usePermissionCheck } from "@/hooks/usePermissionCheck";
+import { Page } from "@/components/layout/Page";
 import {
   useRecordingState,
   RecordingStatus,
 } from "@/contexts/RecordingStateContext";
 import { useTranscripts } from "@/contexts/TranscriptContext";
 import { useConfig } from "@/contexts/ConfigContext";
-import { StatusOverlays } from "@/app/_components/StatusOverlays";
-import { SettingsModals } from "./_components/SettingsModal";
-import { TranscriptPanel } from "./_components/TranscriptPanel";
 import { useModalState } from "@/hooks/useModalState";
 import { useRecordingStateSync } from "@/hooks/useRecordingStateSync";
 import { useRecordingStart } from "@/hooks/useRecordingStart";
@@ -22,30 +21,32 @@ import { useRecordingStop } from "@/hooks/useRecordingStop";
 import { useTranscriptRecovery } from "@/hooks/useTranscriptRecovery";
 import { TranscriptRecovery } from "@/components/TranscriptRecovery";
 import { indexedDBService } from "@/services/indexedDBService";
-import { toast } from "sonner";
-import { useRouter } from "next/navigation";
 import { getErrorMessage } from "@/lib/utils";
 
+import { StatusOverlays } from "@/app/_components/StatusOverlays";
+import { SettingsModals } from "./_components/SettingsModal";
+import { TranscriptPanel } from "./_components/TranscriptPanel";
+import { RecordingHero } from "./_components/recording-page/RecordingHero";
+import { RecordingTopBar } from "./_components/recording-page/RecordingTopBar";
+
 export default function Home() {
-  // Local page state (not moved to contexts)
-  const [isRecording, setIsRecordingState] = useState(false);
-  const [barHeights, setBarHeights] = useState(["58%", "76%", "58%"]);
-  const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
-
-  // Use contexts for state management
-  const { meetingTitle } = useTranscripts();
-  const { transcriptModelConfig, selectedDevices } = useConfig();
+  const router = useRouter();
   const recordingState = useRecordingState();
+  const { transcriptModelConfig } = useConfig();
+  const { setIsMeetingActive, refetchMeetings } = useSidebar();
+  const { modals, messages, showModal, hideModal } =
+    useModalState(transcriptModelConfig);
 
-  // Extract status from global state
   const { status, isStopping, isProcessing, isSaving } = recordingState;
 
-  // Hooks
-  const { hasMicrophone } = usePermissionCheck();
-  const { setIsMeetingActive, refetchMeetings } = useSidebar();
-  const { modals, messages, showModal, hideModal } = useModalState(
-    transcriptModelConfig,
-  );
+  // Page-local mirror of `isRecording`. The cross-cutting hook below keeps
+  // this in sync with the global recording-state context (the "page only
+  // updates after a successful Tauri response" semantic that several
+  // call-sites depend on).
+  const [isRecording, setIsRecordingState] = useState(false);
+  const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+
   const { isRecordingDisabled, setIsRecordingDisabled } = useRecordingStateSync(
     isRecording,
     setIsRecordingState,
@@ -56,61 +57,45 @@ export default function Home() {
     setIsRecordingState,
     showModal,
   );
-
-  // Get handleRecordingStop function and setIsStopping (state comes from global context)
   const { handleRecordingStop, setIsStopping } = useRecordingStop(
     setIsRecordingState,
     setIsRecordingDisabled,
   );
 
-  // Recovery hook
+  // Recovery
   const {
     recoverableMeetings,
-    isLoading: isLoadingRecovery,
-    isRecovering,
+    isRecovering: _isRecovering,
     checkForRecoverableTranscripts,
     recoverMeeting,
     loadMeetingTranscripts,
     deleteRecoverableMeeting,
   } = useTranscriptRecovery();
+  void _isRecovering;
 
-  const router = useRouter();
-
-  // Startup recovery check
+  // Startup checks (cleanup + recovery dialog) — same intent as the
+  // previous version, just lifted into this composer.
   useEffect(() => {
-    const performStartupChecks = async () => {
+    (async () => {
       try {
-        // Skip recovery check if currently recording or processing stop
-        // This prevents the recovery dialog from showing when:
         if (
           recordingState.isRecording ||
           status === RecordingStatus.STOPPING ||
           status === RecordingStatus.PROCESSING_TRANSCRIPTS ||
           status === RecordingStatus.SAVING
         ) {
-          console.log(
-            "Skipping recovery check - recording in progress or processing",
-          );
           return;
         }
-
-        // 1. Clean up old meetings (7+ days)
         try {
           await indexedDBService.deleteOldMeetings(7);
-        } catch (error) {
-          console.warn("⚠️ Failed to clean up old meetings:", error);
+        } catch (err) {
+          console.warn("Failed to clean up old meetings:", err);
         }
-
-        // 2. Clean up saved meetings (24+ hours after save)
         try {
           await indexedDBService.deleteSavedMeetings(24);
-        } catch (error) {
-          console.warn("⚠️ Failed to clean up saved meetings:", error);
+        } catch (err) {
+          console.warn("Failed to clean up saved meetings:", err);
         }
-
-        // 3. Always check for recoverable meetings on startup. Open the
-        // dialog once per session at the data-load callsite — keeping this
-        // off a derived effect so we don't trip react-hooks/set-state-in-effect.
         const meetings = await checkForRecoverableTranscripts();
         if (
           meetings.length > 0 &&
@@ -119,19 +104,25 @@ export default function Home() {
           setShowRecoveryDialog(true);
           sessionStorage.setItem("recovery_dialog_shown", "true");
         }
-      } catch (error) {
-        console.error("Failed to perform startup checks:", error);
+      } catch (err) {
+        console.error("Startup checks failed:", err);
       }
-    };
-
-    performStartupChecks();
+    })();
   }, [checkForRecoverableTranscripts, recordingState.isRecording, status]);
 
-  // Handle recovery with toast notifications and navigation
+  const handleStartClick = async () => {
+    if (isRecordingDisabled || isRecording || isStarting) return;
+    setIsStarting(true);
+    try {
+      await handleRecordingStart();
+    } finally {
+      setIsStarting(false);
+    }
+  };
+
   const handleRecovery = async (meetingId: string) => {
     try {
       const result = await recoverMeeting(meetingId);
-
       if (result.success) {
         toast.success("Meeting recovered successfully!", {
           description:
@@ -141,71 +132,87 @@ export default function Home() {
           action: result.meetingId
             ? {
                 label: "View Meeting",
-                onClick: () => {
-                  router.push(`/meeting-details?id=${result.meetingId}`);
-                },
+                onClick: () =>
+                  router.push(`/meeting-details?id=${result.meetingId}`),
               }
             : undefined,
           duration: 10000,
         });
-
-        // Refresh sidebar to show the newly recovered meeting
         await refetchMeetings();
-
-        // If no more recoverable meetings, clear session flag so dialog can show again
         if (recoverableMeetings.length === 0) {
           sessionStorage.removeItem("recovery_dialog_shown");
         }
-
-        // Auto-navigate after a short delay
         if (result.meetingId) {
           setTimeout(() => {
             router.push(`/meeting-details?id=${result.meetingId}`);
           }, 2000);
         }
       }
-    } catch (error) {
+    } catch (err) {
       toast.error("Failed to recover meeting", {
-        description: getErrorMessage(error),
+        description: getErrorMessage(err),
       });
-      throw error;
+      throw err;
     }
   };
 
-  // Handle dialog close - clear session flag if no meetings left
   const handleDialogClose = () => {
     setShowRecoveryDialog(false);
-    // If user closes dialog and there are no more meetings, clear the flag
-    // This allows the dialog to show again next session if new meetings appear
     if (recoverableMeetings.length === 0) {
       sessionStorage.removeItem("recovery_dialog_shown");
     }
   };
 
+  // Surface backend transcription errors as page-level modals — the
+  // legacy `RecordingControls` did this internally; we pulled it up here
+  // when the new top bar replaced it.
   useEffect(() => {
-    if (recordingState.isRecording) {
-      const interval = setInterval(() => {
-        setBarHeights((prev) => {
-          const newHeights = [...prev];
-          newHeights[0] = Math.random() * 20 + 10 + "px";
-          newHeights[1] = Math.random() * 20 + 10 + "px";
-          newHeights[2] = Math.random() * 20 + 10 + "px";
-          return newHeights;
-        });
-      }, 300);
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      try {
+        unlisten = await listen<{ message?: string; error?: string }>(
+          "transcript-error",
+          (event) => {
+            const message =
+              event.payload?.message ??
+              event.payload?.error ??
+              "Transcription error";
+            showModal("errorAlert", message);
+          },
+        );
+      } catch (err) {
+        console.error("Failed to subscribe to transcript-error:", err);
+      }
+    })();
+    return () => unlisten?.();
+  }, [showModal]);
 
-      return () => clearInterval(interval);
+  // Auto-start hook: the sidebar may set this flag right before pushing
+  // the user to home, asking us to start a recording immediately on
+  // mount. Same protocol as the legacy implementation.
+  useEffect(() => {
+    if (sessionStorage.getItem("autoStartRecording") === "true") {
+      sessionStorage.removeItem("autoStartRecording");
+      void handleStartClick();
     }
-  }, [recordingState.isRecording]);
+    const onSidebarStart = () => {
+      void handleStartClick();
+    };
+    window.addEventListener("start-recording-from-sidebar", onSidebarStart);
+    return () =>
+      window.removeEventListener(
+        "start-recording-from-sidebar",
+        onSidebarStart,
+      );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Computed values using global status
   const isProcessingStop =
     status === RecordingStatus.PROCESSING_TRANSCRIPTS || isProcessing;
-
-  const showRecordingControls =
-    (hasMicrophone || isRecording) &&
-    status !== RecordingStatus.PROCESSING_TRANSCRIPTS &&
-    status !== RecordingStatus.SAVING;
+  const isFinalising =
+    status === RecordingStatus.PROCESSING_TRANSCRIPTS ||
+    status === RecordingStatus.SAVING ||
+    isSaving;
 
   return (
     <Page>
@@ -220,40 +227,47 @@ export default function Home() {
         onLoadPreview={loadMeetingTranscripts}
       />
 
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, ease: "easeOut" }}
-        className="flex flex-1 min-h-0 overflow-hidden"
-      >
-        <TranscriptPanel
-          isProcessingStop={isProcessingStop}
-          isStopping={isStopping}
-          showModal={showModal}
-        />
-      </motion.div>
-
-      {showRecordingControls && (
-        <FloatingBottomDock>
-          <div className="flex items-center rounded-full bg-background shadow-lg">
-            <RecordingControls
-              isRecording={recordingState.isRecording}
-              onRecordingStop={(callApi = true) => handleRecordingStop(callApi)}
-              onRecordingStart={handleRecordingStart}
-              onTranscriptReceived={() => {}}
-              onStopInitiated={() => setIsStopping(true)}
-              barHeights={barHeights}
-              onTranscriptionError={(message) => {
-                showModal("errorAlert", message);
-              }}
-              isRecordingDisabled={isRecordingDisabled}
-              isParentProcessing={isProcessingStop}
-              selectedDevices={selectedDevices}
-              meetingName={meetingTitle}
-            />
-          </div>
-        </FloatingBottomDock>
-      )}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <AnimatePresence mode="wait">
+          {!isRecording && !isFinalising ? (
+            <motion.div
+              key="hero"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.15 }}
+              className="flex min-h-0 flex-1 overflow-y-auto"
+            >
+              <RecordingHero
+                onStart={handleStartClick}
+                isStarting={isStarting || isRecordingDisabled}
+              />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="recording"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="flex min-h-0 flex-1 flex-col overflow-hidden"
+            >
+              {isRecording && (
+                <RecordingTopBar
+                  isStopping={isStopping}
+                  onStop={(callApi = true) => handleRecordingStop(callApi)}
+                  onStopInitiated={() => setIsStopping(true)}
+                />
+              )}
+              <TranscriptPanel
+                isProcessingStop={isProcessingStop}
+                isStopping={isStopping}
+                showModal={showModal}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
 
       <StatusOverlays
         isProcessing={
