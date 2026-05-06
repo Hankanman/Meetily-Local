@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
@@ -5,6 +7,9 @@ use tauri::{AppHandle, Runtime};
 use super::fetcher;
 use super::models::{CalendarEvent, CalendarSourceRow};
 use super::repository::CalendarRepository;
+use super::snapshot::{
+    self, lookup_meeting_folder, CalendarEventSnapshot, SNAPSHOT_FILENAME,
+};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -228,13 +233,70 @@ pub async fn calendar_link_meeting<R: Runtime>(
     meeting_id: String,
     event_id: Option<String>,
 ) -> Result<bool, String> {
-    CalendarRepository::link_meeting(
-        state.db_manager.pool(),
-        &meeting_id,
-        event_id.as_deref(),
-    )
-    .await
-    .map_err(err)
+    let pool = state.db_manager.pool();
+
+    let updated = CalendarRepository::link_meeting(pool, &meeting_id, event_id.as_deref())
+        .await
+        .map_err(err)?;
+
+    if !updated {
+        return Ok(false);
+    }
+
+    // Best-effort sidecar write so a portable copy of the event details
+    // travels with the recording folder (alongside metadata.json /
+    // transcripts.json). Failure here doesn't roll back the DB link —
+    // the link is still valid; the user just won't get the offline
+    // snapshot. We log so it's debuggable.
+    let folder = match lookup_meeting_folder(pool, &meeting_id).await {
+        Ok(Some(p)) => Some(PathBuf::from(p)),
+        Ok(None) => None,
+        Err(e) => {
+            log::warn!(
+                "calendar snapshot: meeting folder lookup failed for {}: {}",
+                meeting_id,
+                e
+            );
+            None
+        }
+    };
+
+    if let Some(folder) = folder {
+        if let Some(event_id_ref) = event_id.as_deref() {
+            match CalendarRepository::get_event(pool, event_id_ref).await {
+                Ok(Some(event)) => {
+                    let snapshot_data = CalendarEventSnapshot::from_event(&event);
+                    if let Err(e) = snapshot::write_snapshot(&folder, &snapshot_data) {
+                        log::warn!(
+                            "calendar snapshot: failed to write {} for meeting {}: {}",
+                            SNAPSHOT_FILENAME,
+                            meeting_id,
+                            e
+                        );
+                    }
+                }
+                Ok(None) => log::warn!(
+                    "calendar snapshot: event {} not found when writing snapshot for meeting {}",
+                    event_id_ref,
+                    meeting_id
+                ),
+                Err(e) => log::warn!(
+                    "calendar snapshot: get_event {} failed: {}",
+                    event_id_ref,
+                    e
+                ),
+            }
+        } else if let Err(e) = snapshot::delete_snapshot(&folder) {
+            log::warn!(
+                "calendar snapshot: failed to delete {} for meeting {}: {}",
+                SNAPSHOT_FILENAME,
+                meeting_id,
+                e
+            );
+        }
+    }
+
+    Ok(true)
 }
 
 #[tauri::command]
