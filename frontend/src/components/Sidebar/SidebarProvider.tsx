@@ -22,6 +22,10 @@ interface SidebarItem {
 export interface CurrentMeeting {
   id: string;
   title: string;
+  /** ISO 8601 string from `api_get_meetings`. Optional because some
+   *  call-sites construct synthetic placeholder meetings (e.g. the
+   *  "+ New Call" intro) that don't have one. */
+  updated_at?: string;
 }
 
 // Search result type for transcript search
@@ -98,10 +102,12 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       const meetings = (await invoke("api_get_meetings")) as Array<{
         id: string;
         title: string;
+        updated_at?: string;
       }>;
-      const transformedMeetings = meetings.map((meeting: any) => ({
+      const transformedMeetings = meetings.map((meeting) => ({
         id: meeting.id,
         title: meeting.title,
+        updated_at: meeting.updated_at,
       }));
       setMeetings(transformedMeetings);
     } catch (error) {
