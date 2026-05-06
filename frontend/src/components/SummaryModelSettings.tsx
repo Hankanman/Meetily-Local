@@ -9,6 +9,10 @@ import {
 } from "@/components/ModelSettingsModal";
 import { Switch } from "./ui/switch";
 import { useConfig } from "@/contexts/ConfigContext";
+import {
+  SettingsCard,
+  SettingsRow,
+} from "@/app/settings/parts/SettingsCard";
 
 interface SummaryModelSettingsProps {
   refetchTrigger?: number; // Change this to trigger refetch
@@ -142,43 +146,30 @@ export function SummaryModelSettings({
   };
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="
-        rounded-lg border border-border bg-background p-6 shadow-sm
-      ">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="mb-2 text-lg font-semibold text-foreground">
-              Auto Summary
-            </h3>
-            <p className="text-sm text-muted-foreground">
-              Auto Generating summary after meeting completion(Stopping)
-            </p>
-          </div>
+    <div className="space-y-4">
+      <SettingsCard>
+        <SettingsRow
+          label="Auto-summary"
+          description="Generate a summary automatically when a meeting recording stops."
+        >
           <Switch
             checked={isAutoSummary}
             onCheckedChange={toggleIsAutoSummary}
           />
-        </div>
-      </div>
+        </SettingsRow>
+      </SettingsCard>
 
-      <div className="
-        rounded-lg border border-border bg-background p-6 shadow-sm
-      ">
-        <h3 className="mb-4 text-lg font-semibold">
-          Summary Model Configuration
-        </h3>
-        <p className="mb-6 text-sm text-muted-foreground">
-          Configure the AI model used for generating meeting summaries.
-        </p>
-
+      <SettingsCard
+        title="Summary model"
+        description="The AI engine + model used to write meeting summaries."
+      >
         <ModelSettingsModal
           modelConfig={modelConfig}
           setModelConfig={setModelConfig}
           onSave={handleSaveModelConfig}
           skipInitialFetch={true}
         />
-      </div>
+      </SettingsCard>
     </div>
   );
 }
