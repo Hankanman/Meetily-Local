@@ -648,8 +648,16 @@ function ModelCard({
       initial={false}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      // `transition-colors` (not `transition-all`) — the latter
+      // transitions every CSS property including layout-affecting
+      // ones, and with ~10 cards that fires ~10 simultaneous full
+      // repaints of the whole card grid on every state change. The
+      // WebKit timeline showed each such burst at ~120ms per frame
+      // dominated by paint, dwarfing all the JS work and making the
+      // entire settings page feel laggy. Color-only transitions can
+      // run on the GPU compositor and don't trigger per-pixel paint.
       className={`
-        relative cursor-pointer rounded-lg border-2 transition-all
+        relative cursor-pointer rounded-lg border-2 transition-colors
         ${
           isSelected && isAvailable
             ? "border-info bg-info/10"
