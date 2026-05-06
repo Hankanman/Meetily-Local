@@ -9,6 +9,7 @@ import {
 } from "@/contexts/RecordingStateContext";
 import { recordingService } from "@/services/recordingService";
 import { showRecordingNotification } from "@/lib/recordingNotification";
+import { prepareRecordingMetadata } from "@/lib/recordingCalendarLink";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/lib/utils";
 
@@ -39,18 +40,6 @@ export function useRecordingStart(
   const { setIsMeetingActive } = useSidebar();
   const { selectedDevices } = useConfig();
   const { setStatus } = useRecordingState();
-
-  // Generate meeting title with timestamp
-  const generateMeetingTitle = useCallback(() => {
-    const now = new Date();
-    const day = String(now.getDate()).padStart(2, "0");
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const year = String(now.getFullYear()).slice(-2);
-    const hours = String(now.getHours()).padStart(2, "0");
-    const minutes = String(now.getMinutes()).padStart(2, "0");
-    const seconds = String(now.getSeconds()).padStart(2, "0");
-    return `Meeting ${day}_${month}_${year}_${hours}_${minutes}_${seconds}`;
-  }, []);
 
   // Check if a local Whisper transcription model is downloaded and ready.
   // Function name kept as `checkParakeetReady` for minimal call-site churn —
@@ -114,18 +103,24 @@ export function useRecordingStart(
 
       console.log("Parakeet ready - setting up meeting title and state");
 
-      const randomTitle = generateMeetingTitle();
-      setMeetingTitle(randomTitle);
+      const { meetingTitle, calendarEvent } = await prepareRecordingMetadata();
+      setMeetingTitle(meetingTitle);
+      if (calendarEvent) {
+        toast.info(`Linked to "${meetingTitle}" from your calendar`, {
+          description: "We'll attach the event details when the meeting saves.",
+          duration: 4000,
+        });
+      }
 
       // Set STARTING status before initiating backend recording
       setStatus(RecordingStatus.STARTING, "Initializing recording...");
 
       // Start the actual backend recording
-      console.log("Starting backend recording with meeting:", randomTitle);
+      console.log("Starting backend recording with meeting:", meetingTitle);
       await recordingService.startRecordingWithDevices(
         selectedDevices?.micDevice || null,
         selectedDevices?.systemDevice || null,
-        randomTitle,
+        meetingTitle,
       );
       console.log("Backend recording started successfully");
 
@@ -149,7 +144,6 @@ export function useRecordingStart(
       throw error;
     }
   }, [
-    generateMeetingTitle,
     setMeetingTitle,
     setIsRecording,
     clearTranscripts,
@@ -199,8 +193,18 @@ export function useRecordingStart(
 
           // Start the actual backend recording
           try {
-            // Generate meeting title
-            const generatedMeetingTitle = generateMeetingTitle();
+            const { meetingTitle: generatedMeetingTitle, calendarEvent } =
+              await prepareRecordingMetadata();
+            if (calendarEvent) {
+              toast.info(
+                `Linked to "${generatedMeetingTitle}" from your calendar`,
+                {
+                  description:
+                    "We'll attach the event details when the meeting saves.",
+                  duration: 4000,
+                },
+              );
+            }
 
             // Set STARTING status before initiating backend recording
             setStatus(RecordingStatus.STARTING, "Initializing recording...");
@@ -244,7 +248,6 @@ export function useRecordingStart(
     isRecording,
     isAutoStarting,
     selectedDevices,
-    generateMeetingTitle,
     setMeetingTitle,
     setIsRecording,
     clearTranscripts,
@@ -292,8 +295,18 @@ export function useRecordingStart(
       }
 
       try {
-        // Generate meeting title
-        const generatedMeetingTitle = generateMeetingTitle();
+        const { meetingTitle: generatedMeetingTitle, calendarEvent } =
+          await prepareRecordingMetadata();
+        if (calendarEvent) {
+          toast.info(
+            `Linked to "${generatedMeetingTitle}" from your calendar`,
+            {
+              description:
+                "We'll attach the event details when the meeting saves.",
+              duration: 4000,
+            },
+          );
+        }
 
         // Set STARTING status before initiating backend recording
         setStatus(RecordingStatus.STARTING, "Initializing recording...");
@@ -342,7 +355,6 @@ export function useRecordingStart(
     isRecording,
     isAutoStarting,
     selectedDevices,
-    generateMeetingTitle,
     setMeetingTitle,
     setIsRecording,
     clearTranscripts,

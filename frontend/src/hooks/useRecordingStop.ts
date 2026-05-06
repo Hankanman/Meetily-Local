@@ -11,6 +11,8 @@ import {
 import { storageService } from "@/services/storageService";
 import { transcriptService } from "@/services/transcriptService";
 import { getErrorMessage } from "@/lib/utils";
+import { linkMeetingToCalendarEvent } from "@/lib/calendar";
+import { consumePendingCalendarEventId } from "@/lib/recordingCalendarLink";
 
 type SummaryStatus =
   | "idle"
@@ -318,6 +320,25 @@ export function useRecordingStop(
             );
             console.log("   Transcripts:", freshTranscripts.length);
             console.log("   folder_path:", folderPath);
+
+            // If a calendar event was matched at recording start, link the
+            // saved meeting to it now that we have a meeting_id. Failure is
+            // non-fatal — the user can still link manually from the meeting
+            // detail page.
+            const pendingEventId = consumePendingCalendarEventId();
+            if (pendingEventId) {
+              try {
+                await linkMeetingToCalendarEvent(meetingId, pendingEventId);
+                console.log(
+                  "📅 Linked meeting",
+                  meetingId,
+                  "to calendar event",
+                  pendingEventId,
+                );
+              } catch (err) {
+                console.warn("Failed to link meeting to calendar event:", err);
+              }
+            }
 
             // Mark meeting as saved in IndexedDB (for recovery system)
             await markMeetingAsSaved();
