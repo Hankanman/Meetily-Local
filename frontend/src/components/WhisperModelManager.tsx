@@ -635,22 +635,15 @@ function ModelCard({
       : null;
 
   return (
-    // `initial={false}` skips the entry animation — that fade-in was
-    // perceived as a flash on the settings page where loads are fast.
-    // The motion.div is kept (rather than a plain div) because the
-    // ✓ badge below uses motion.span scale-in; framer-motion's
-    // enclosing render context avoids interaction lag observed when
-    // the parent was a plain div.
-    //
-    // The `group` class lets the hover-revealed delete button below
-    // toggle visibility via pure CSS (`group-hover:opacity-100`)
-    // instead of a JS-managed isHovered state. That eliminates a
-    // React re-render + AnimatePresence mount/unmount on every
-    // mouse-enter/leave; with ~10 cards, scrubbing across them was
-    // firing simultaneous enter/exit animations and producing ~92ms
-    // pure-paint frames in the WebKit timeline.
-    <motion.div
-      initial={false}
+    // Plain <div>, not motion.div. We previously kept motion.div with
+    // `initial={false}` because a nested <AnimatePresence> needed
+    // framer-motion's parent context. That AnimatePresence has since
+    // been replaced with pure CSS `group-hover` (no nested motion.*
+    // children remain that need the context), so the wrapper itself
+    // can drop framer-motion overhead — measurable per-render cost
+    // when the page renders ~10 cards. The lone <motion.span> for
+    // the ✓ checkmark on the selected card works standalone.
+    <div
       className={`
         group relative cursor-pointer rounded-lg border-2
         ${
@@ -885,6 +878,6 @@ function ModelCard({
           </motion.div>
         )}
       </div>
-    </motion.div>
+    </div>
   );
 }

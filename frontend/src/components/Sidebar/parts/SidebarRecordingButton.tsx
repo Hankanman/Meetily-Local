@@ -77,7 +77,7 @@ export function SidebarRecordingButton({
         }
         className="
           flex size-10 items-center justify-center rounded-full bg-destructive
-          text-white shadow-sm transition-colors
+          text-white shadow-sm
           hover:bg-destructive/90
         "
       >
@@ -102,7 +102,6 @@ export function SidebarRecordingButton({
       className="
         flex w-full items-center justify-center gap-2 rounded-md
         bg-destructive px-3 py-2.5 text-sm font-medium text-white shadow-sm
-        transition-colors
         hover:bg-destructive/90
       "
     >
