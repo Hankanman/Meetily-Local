@@ -83,8 +83,13 @@ impl Template {
 
     /// Generates section-specific instructions for the LLM
     pub fn to_section_instructions(&self) -> String {
+        // The placeholder text used to be `# [AI-Generated Title]`, but
+        // small models echoed the bracketed phrase verbatim — every
+        // generated meeting ended up titled
+        // "AI-Generated Title: <real title>". Phrasing the instruction
+        // without an embedded literal stops the leak.
         let mut instructions = String::from(
-            "- **For the main title (`# [AI-Generated Title]`):** Analyze the entire transcript and create a concise, descriptive title for the meeting.\n"
+            "- **For the main title:** the first line of the markdown must be a single `# ` heading. Analyze the entire transcript and write a concise, descriptive title there. Do not include any placeholder, prefix, or label words like 'Title' / 'AI-Generated' / 'Meeting Summary' — just the title itself.\n"
         );
 
         for section in &self.sections {

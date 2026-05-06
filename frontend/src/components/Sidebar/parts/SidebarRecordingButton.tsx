@@ -8,6 +8,11 @@ interface SidebarRecordingButtonProps {
   /** Triggered when the user clicks the button while not recording. The
    *  parent navigates to home and dispatches `start-recording-from-sidebar`. */
   onStart: () => void;
+  /** Triggered when the user clicks the button *while* recording. Used to
+   *  navigate back to the recording page (where the stop / pause controls
+   *  live) — without this, a user who navigates away during a recording
+   *  has no obvious way to get back to stop it. */
+  onResumeView: () => void;
   /** Hide the label, render an icon-only square pill (used by the collapsed
    *  rail). */
   collapsed?: boolean;
@@ -22,13 +27,21 @@ function formatElapsed(ms: number): string {
 
 /**
  * Primary call-to-action. Two visual states:
- *  - Idle: blue/primary "Start recording" pill
- *  - Recording: red pill with elapsed time and a stop icon, disabled
- *    (the actual stop is handled by the recording UI on the home page)
+ *  - Idle: red "Start recording" pill — click starts the recording.
+ *  - Recording: red pill with a pulse, "Recording", and elapsed time —
+ *    click navigates back to the recording page so the user can hit stop.
+ *
+ * The button is always clickable; the parent decides via the two
+ * callbacks (`onStart` when idle, `onResumeView` when recording) what
+ * each click does. Without the recording-state click action, a user who
+ * navigates to settings/details mid-recording has no path back to the
+ * stop control short of digging through the sidebar's brand-as-home
+ * shortcut.
  */
 export function SidebarRecordingButton({
   isRecording,
   onStart,
+  onResumeView,
   collapsed = false,
 }: SidebarRecordingButtonProps) {
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -45,21 +58,28 @@ export function SidebarRecordingButton({
   }, [isRecording]);
 
   const elapsed = isRecording && startedAt ? now - startedAt : 0;
+  const handleClick = isRecording ? onResumeView : onStart;
 
   if (collapsed) {
     return (
       <button
         type="button"
-        onClick={onStart}
-        disabled={isRecording}
-        aria-label={isRecording ? "Recording in progress" : "Start recording"}
-        className={`
-          flex size-10 items-center justify-center rounded-full text-white
-          shadow-sm transition-colors
-          ${isRecording
-            ? "cursor-not-allowed bg-destructive"
-            : "bg-destructive hover:bg-destructive/90"}
-        `}
+        onClick={handleClick}
+        aria-label={
+          isRecording
+            ? "Recording in progress — click to view"
+            : "Start recording"
+        }
+        title={
+          isRecording
+            ? "Recording in progress — click to view"
+            : "Start recording"
+        }
+        className="
+          flex size-10 items-center justify-center rounded-full bg-destructive
+          text-white shadow-sm transition-colors
+          hover:bg-destructive/90
+        "
       >
         {isRecording ? (
           <Square className="size-4" />
@@ -73,15 +93,18 @@ export function SidebarRecordingButton({
   return (
     <button
       type="button"
-      onClick={onStart}
-      disabled={isRecording}
-      className={`
-        flex w-full items-center justify-center gap-2 rounded-md px-3 py-2.5
-        text-sm font-medium text-white shadow-sm transition-colors
-        ${isRecording
-          ? "cursor-not-allowed bg-destructive"
-          : "bg-destructive hover:bg-destructive/90"}
-      `}
+      onClick={handleClick}
+      title={
+        isRecording
+          ? "Recording in progress — click to return to the recording page"
+          : "Start a new recording"
+      }
+      className="
+        flex w-full items-center justify-center gap-2 rounded-md
+        bg-destructive px-3 py-2.5 text-sm font-medium text-white shadow-sm
+        transition-colors
+        hover:bg-destructive/90
+      "
     >
       {isRecording ? (
         <>

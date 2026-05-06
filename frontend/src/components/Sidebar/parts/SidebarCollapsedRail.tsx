@@ -20,6 +20,10 @@ interface SidebarCollapsedRailProps {
   showImport: boolean;
   onHome: () => void;
   onStartRecording: () => void;
+  /** Click while recording → navigate back to the recording page so the
+   *  user can hit stop. Without this, anyone who's collapsed the sidebar
+   *  and navigated away mid-recording is stuck. */
+  onResumeRecordingView: () => void;
   onMeetings: () => void;
   onImport: () => void;
   onSettings: () => void;
@@ -35,6 +39,7 @@ export function SidebarCollapsedRail({
   showImport,
   onHome,
   onStartRecording,
+  onResumeRecordingView,
   onMeetings,
   onImport,
   onSettings,
@@ -66,12 +71,13 @@ export function SidebarCollapsedRail({
               <SidebarRecordingButton
                 isRecording={isRecording}
                 onStart={onStartRecording}
+                onResumeView={onResumeRecordingView}
                 collapsed
               />
             </span>
           </TooltipTrigger>
           <TooltipContent side="right">
-            {isRecording ? "Recording in progress" : "Start recording"}
+            {isRecording ? "Recording — click to view" : "Start recording"}
           </TooltipContent>
         </Tooltip>
 

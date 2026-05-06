@@ -69,22 +69,34 @@ export function DeviceSummary({ disabled = false }: DeviceSummaryProps) {
     };
   }, []);
 
-  const inputs = devices.filter((d) => d.device_type === "Input");
-  const outputs = devices.filter((d) => d.device_type === "Output");
+  // Drop any device literally named "default" — that's the CPAL alias
+  // for the system default device, and we already render an explicit
+  // "Default …" option at the top of each list. Without this filter the
+  // Select gets two options with `value="default"` and React warns about
+  // duplicate keys.
+  const inputs = devices.filter(
+    (d) => d.device_type === "Input" && d.name !== "default",
+  );
+  const outputs = devices.filter(
+    (d) => d.device_type === "Output" && d.name !== "default",
+  );
 
+  // "default" is the canonical sentinel — same value DeviceSelection
+  // uses on the Settings page. Storing `null` in the context means
+  // "use the system default device" (the backend treats null this way).
   const setMic = (name: string) =>
     setSelectedDevices({
       ...selectedDevices,
-      micDevice: name === "__none__" ? null : name,
+      micDevice: name === "default" ? null : name,
     } as SelectedDevices);
   const setSystem = (name: string) =>
     setSelectedDevices({
       ...selectedDevices,
-      systemDevice: name === "__none__" ? null : name,
+      systemDevice: name === "default" ? null : name,
     } as SelectedDevices);
 
-  const micLabel = selectedDevices?.micDevice ?? "No microphone";
-  const systemLabel = selectedDevices?.systemDevice ?? "No system audio";
+  const micLabel = selectedDevices?.micDevice ?? "Default microphone";
+  const systemLabel = selectedDevices?.systemDevice ?? "Default system audio";
   const languageLabel =
     LANGUAGE_OPTIONS.find((l) => l.value === selectedLanguage)?.label ??
     "Auto detect";
@@ -95,10 +107,10 @@ export function DeviceSummary({ disabled = false }: DeviceSummaryProps) {
         icon={<Mic className="size-3.5" />}
         value={micLabel}
         options={[
-          { value: "__none__", label: "No microphone" },
+          { value: "default", label: "Default microphone" },
           ...inputs.map((d) => ({ value: d.name, label: d.name })),
         ]}
-        selectedValue={selectedDevices?.micDevice ?? "__none__"}
+        selectedValue={selectedDevices?.micDevice ?? "default"}
         onSelect={setMic}
         emptyState="No microphones detected"
         disabled={disabled}
@@ -107,10 +119,10 @@ export function DeviceSummary({ disabled = false }: DeviceSummaryProps) {
         icon={<Speaker className="size-3.5" />}
         value={systemLabel}
         options={[
-          { value: "__none__", label: "No system audio" },
+          { value: "default", label: "Default system audio" },
           ...outputs.map((d) => ({ value: d.name, label: d.name })),
         ]}
-        selectedValue={selectedDevices?.systemDevice ?? "__none__"}
+        selectedValue={selectedDevices?.systemDevice ?? "default"}
         onSelect={setSystem}
         emptyState="No output devices detected"
         disabled={disabled}

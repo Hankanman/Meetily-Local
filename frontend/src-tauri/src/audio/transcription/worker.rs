@@ -54,7 +54,10 @@ pub struct TranscriptUpdate {
 }
 
 /// Resolve a default (source, speaker) pair from the audio stream's device type.
-/// Phase 1: mic → "Me", system → "Speaker" (placeholder, replaced by diarization).
+/// Used only when no diarizer is loaded — both mic and system streams pass
+/// through the diarizer otherwise so multi-voice mic captures (open-mic +
+/// speakers setups) get clustered correctly instead of all being labelled
+/// as the local user.
 pub fn default_speaker_for_source(source: DeviceType) -> (&'static str, &'static str) {
     match source {
         DeviceType::Microphone => ("mic", "Me"),
@@ -175,16 +178,26 @@ pub fn start_transcription_task<R: Runtime>(
                             let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
                             // Capture source identity before chunk is moved into the transcription call.
                             let chunk_source = chunk.device_type;
-                            // For system-source chunks, snapshot the 16kHz samples for the
-                            // diarizer to embed after transcription completes. Skipped for
-                            // mic-source (auto-tagged "Me") and when no diarizer is loaded.
-                            let chunk_audio_for_diarization = if chunk_source == DeviceType::System
-                                && crate::speaker_diarization::current_diarizer().is_some()
-                            {
-                                Some(chunk.data.clone())
-                            } else {
-                                None
-                            };
+                            // Snapshot the samples for the diarizer to embed after
+                            // transcription completes. Routed for *both* mic and
+                            // system sources because in any setup where the user
+                            // is on speakers (instead of headphones), the mic
+                            // captures everyone in the room — call participants
+                            // included — and the asymmetric "mic = Me always"
+                            // placeholder mis-attributes them all to the local
+                            // user. Letting the diarizer cluster the mic stream
+                            // splits those voices correctly.
+                            //
+                            // The "Me" fallback in `default_speaker_for_source`
+                            // still applies for users who haven't downloaded the
+                            // speaker model yet (no diarizer loaded → mic chunks
+                            // get the static "Me" label).
+                            let chunk_audio_for_diarization =
+                                if crate::speaker_diarization::current_diarizer().is_some() {
+                                    Some(chunk.data.clone())
+                                } else {
+                                    None
+                                };
 
                             // Transcribe with provider-agnostic approach
                             match transcribe_chunk_with_provider(&engine_clone, chunk, &app_clone)
@@ -246,11 +259,13 @@ pub fn start_transcription_task<R: Runtime>(
                                         // This decouples the transcription worker from direct RECORDING_MANAGER access
 
                                         // Emit transcript update with source-tagged speaker identity.
-                                        // Mic → "Me" (auto). System → diarizer result, which is
-                                        // either a stored profile name (when an embedding matches
-                                        // a saved voice profile above threshold) or "Speaker N"
-                                        // from in-session clustering. Falls back to the static
-                                        // "Speaker" placeholder when no model is loaded.
+                                        // Both mic and system chunks pass through the diarizer
+                                        // when one is loaded — the result is either a stored
+                                        // profile name (when an embedding matches a saved voice
+                                        // profile above threshold) or "Speaker N" from in-session
+                                        // clustering. When no model is loaded, falls back to the
+                                        // source-specific placeholder ("Me" for mic, "Speaker"
+                                        // for system).
                                         let (source_tag, default_speaker) =
                                             default_speaker_for_source(chunk_source);
                                         let diarization_result = chunk_audio_for_diarization
@@ -511,7 +526,7 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
         });
     }
 
-    // Calculate energy for logging/monitoring only
+    // Calculate energy for logging + the system-audio silence gate below.
     let energy: f32 =
         speech_samples.iter().map(|&x| x * x).sum::<f32>() / speech_samples.len() as f32;
     info!(
@@ -520,6 +535,28 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
         speech_samples.len(),
         energy
     );
+
+    // Drop near-silent system-audio chunks. When nothing is actually playing
+    // through the speakers, the system loopback still picks up faint mic
+    // bleed (typically ~0.0001 RMS² range). VAD sees enough variation to
+    // call it speech; Whisper hallucinates words from the near-silence.
+    // Real system audio (a remote participant on a call) lands ~10-100x
+    // higher in energy than this floor.
+    //
+    // Threshold picked empirically: observed mic speech ~0.005, mic-bleed
+    // system ~0.0001; 0.0005 sits comfortably between.
+    const SYSTEM_AUDIO_SILENCE_THRESHOLD: f32 = 0.0005;
+    if chunk.device_type == DeviceType::System
+        && energy < SYSTEM_AUDIO_SILENCE_THRESHOLD
+    {
+        info!(
+            "Dropping near-silent system audio chunk {} (energy {:.6} < threshold {:.6})",
+            chunk.chunk_id, energy, SYSTEM_AUDIO_SILENCE_THRESHOLD
+        );
+        // Return empty text; downstream callers already treat empty as "no
+        // segment to emit", same path as Whisper returning "".
+        return Ok((String::new(), Some(1.0), false));
+    }
 
     // Transcribe using the appropriate engine (with improved error handling)
     match engine {

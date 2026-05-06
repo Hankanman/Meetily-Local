@@ -7,6 +7,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { formatDistanceToNow } from "date-fns";
+import { toast } from "sonner";
 import {
   AlertCircle,
   CheckCircle2,
@@ -55,6 +56,10 @@ export function TranscriptRecovery({
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [isRecovering, setIsRecovering] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  // Two-step delete: clicking Delete flips this true and the footer turns
+  // into a confirmation prompt. Replaces the legacy `confirm()` call which
+  // Tauri 2.x rejects ("dialog.confirm not allowed").
+  const [pendingDelete, setPendingDelete] = useState(false);
 
   // Declared above its first caller (the auto-select effect) to avoid TDZ.
   const handleMeetingSelect = useCallback(
@@ -82,6 +87,7 @@ export function TranscriptRecovery({
       /* eslint-disable react-hooks/set-state-in-effect */
       setSelectedMeetingId(null);
       setPreviewTranscripts([]);
+      setPendingDelete(false);
       /* eslint-enable react-hooks/set-state-in-effect */
     }
   }, [isOpen]);
@@ -106,31 +112,35 @@ export function TranscriptRecovery({
       onClose();
     } catch (error) {
       console.error("Recovery failed:", error);
-      alert("Failed to recover meeting. Please try again.");
+      toast.error("Failed to recover meeting", {
+        description: "Please try again.",
+      });
     } finally {
       setIsRecovering(false);
     }
   };
 
-  const handleDelete = async () => {
+  // Step 1: arm the confirmation prompt. The footer flips to a "Delete this
+  // meeting? [Cancel] [Confirm Delete]" view.
+  const armDelete = () => {
     if (!selectedMeetingId) return;
+    setPendingDelete(true);
+  };
 
-    if (
-      !confirm(
-        "Are you sure you want to delete this meeting? This cannot be undone.",
-      )
-    ) {
-      return;
-    }
-
+  // Step 2: actually delete. Only callable from the confirmation footer.
+  const confirmDelete = async () => {
+    if (!selectedMeetingId) return;
     setIsDeleting(true);
     try {
       await onDelete(selectedMeetingId);
       setSelectedMeetingId(null);
       setPreviewTranscripts([]);
+      setPendingDelete(false);
     } catch (error) {
       console.error("Delete failed:", error);
-      alert("Failed to delete meeting. Please try again.");
+      toast.error("Failed to delete meeting", {
+        description: "Please try again.",
+      });
     } finally {
       setIsDeleting(false);
     }
@@ -336,48 +346,71 @@ export function TranscriptRecovery({
           </div>
         </div>
 
-        <DialogFooter className="px-6 pb-6">
-          <Button
-            variant="outline"
-            onClick={onClose}
-            disabled={isRecovering || isDeleting}
-          >
-            Cancel
-          </Button>
-          <Button
-            variant="destructive"
-            onClick={handleDelete}
-            disabled={!selectedMeetingId || isRecovering || isDeleting}
-          >
-            {isDeleting ? (
-              <>
-                <XCircle className="mr-2 size-4 animate-spin" />
-                Deleting...
-              </>
-            ) : (
-              <>
-                <Trash2 className="mr-2 size-4" />
-                Delete
-              </>
-            )}
-          </Button>
-          <Button
-            onClick={handleRecover}
-            disabled={!selectedMeetingId || isRecovering || isDeleting}
-          >
-            {isRecovering ? (
-              <>
-                <CheckCircle2 className="mr-2 size-4 animate-spin" />
-                Recovering...
-              </>
-            ) : (
-              <>
-                <CheckCircle2 className="mr-2 size-4" />
-                Recover
-              </>
-            )}
-          </Button>
-        </DialogFooter>
+        {pendingDelete ? (
+          <DialogFooter className="items-center px-6 pb-6">
+            <p className="mr-auto text-sm text-muted-foreground">
+              Delete this meeting and its transcripts? This cannot be undone.
+            </p>
+            <Button
+              variant="outline"
+              onClick={() => setPendingDelete(false)}
+              disabled={isDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={confirmDelete}
+              disabled={isDeleting}
+            >
+              {isDeleting ? (
+                <>
+                  <XCircle className="mr-2 size-4 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="mr-2 size-4" />
+                  Confirm delete
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        ) : (
+          <DialogFooter className="px-6 pb-6">
+            <Button
+              variant="outline"
+              onClick={onClose}
+              disabled={isRecovering || isDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={armDelete}
+              disabled={!selectedMeetingId || isRecovering || isDeleting}
+            >
+              <Trash2 className="mr-2 size-4" />
+              Delete
+            </Button>
+            <Button
+              onClick={handleRecover}
+              disabled={!selectedMeetingId || isRecovering || isDeleting}
+            >
+              {isRecovering ? (
+                <>
+                  <CheckCircle2 className="mr-2 size-4 animate-spin" />
+                  Recovering...
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="mr-2 size-4" />
+                  Recover
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        )}
       </DialogContent>
     </Dialog>
   );
