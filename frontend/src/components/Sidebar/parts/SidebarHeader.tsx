@@ -19,40 +19,25 @@ export function SidebarHeader({
 }: SidebarHeaderProps) {
   const Icon = isCollapsed ? PanelLeftOpen : PanelLeftClose;
 
-  if (isCollapsed) {
-    return (
-      <div className="flex h-12 items-center justify-center border-b border-border">
-        <button
-          type="button"
-          aria-label="Expand sidebar"
-          onClick={onToggleCollapse}
-          className="
-            flex size-8 items-center justify-center rounded-md
-            text-muted-foreground transition-colors
-            hover:bg-muted hover:text-foreground
-          "
-        >
-          <Icon className="size-5" />
-        </button>
-      </div>
-    );
-  }
-
+  // Toggle stays anchored at the left in both states so its physical
+  // position doesn't shift when the panel collapses/expands. The brand
+  // renders to the right of it in expanded mode (and is dropped in
+  // collapsed mode since the rail is too narrow to hold it).
   return (
-    <div className="flex h-12 items-center justify-between border-b border-border px-3">
-      <Logo isCollapsed={false} />
+    <div className="flex h-12 items-center gap-2 border-b border-border px-3">
       <button
         type="button"
-        aria-label="Collapse sidebar"
+        aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         onClick={onToggleCollapse}
         className="
-          flex size-8 items-center justify-center rounded-md
+          flex size-8 shrink-0 items-center justify-center rounded-md
           text-muted-foreground transition-colors
           hover:bg-muted hover:text-foreground
         "
       >
         <Icon className="size-5" />
       </button>
+      {!isCollapsed && <Logo isCollapsed={false} />}
     </div>
   );
 }
