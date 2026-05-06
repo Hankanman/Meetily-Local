@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Home,
   NotebookPen,
   Settings as SettingsIcon,
   Upload,
@@ -17,6 +18,7 @@ import { SidebarRecordingButton } from "./SidebarRecordingButton";
 interface SidebarCollapsedRailProps {
   isRecording: boolean;
   showImport: boolean;
+  onHome: () => void;
   onStartRecording: () => void;
   onMeetings: () => void;
   onImport: () => void;
@@ -31,6 +33,7 @@ interface SidebarCollapsedRailProps {
 export function SidebarCollapsedRail({
   isRecording,
   showImport,
+  onHome,
   onStartRecording,
   onMeetings,
   onImport,
@@ -39,6 +42,24 @@ export function SidebarCollapsedRail({
   return (
     <TooltipProvider>
       <div className="flex flex-1 flex-col items-center gap-3 py-3">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onHome}
+              className="
+                flex size-9 items-center justify-center rounded-md
+                text-muted-foreground transition-colors
+                hover:bg-muted hover:text-foreground
+              "
+              aria-label="Go to recording page"
+            >
+              <Home className="size-5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">Recording page</TooltipContent>
+        </Tooltip>
+
         <Tooltip>
           <TooltipTrigger asChild>
             <span>

@@ -178,12 +178,14 @@ const Sidebar: React.FC = () => {
       <SidebarHeader
         isCollapsed={isCollapsed}
         onToggleCollapse={toggleCollapse}
+        onHome={() => router.push("/")}
       />
 
       {isCollapsed ? (
         <SidebarCollapsedRail
           isRecording={isRecording}
           showImport={betaFeatures.importAndRetranscribe}
+          onHome={() => router.push("/")}
           onStartRecording={handleRecordingToggle}
           onMeetings={toggleCollapse}
           onImport={() => openImportDialog()}
