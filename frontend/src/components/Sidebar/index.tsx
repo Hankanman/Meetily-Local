@@ -187,6 +187,7 @@ const Sidebar: React.FC = () => {
           showImport={betaFeatures.importAndRetranscribe}
           onHome={() => router.push("/")}
           onStartRecording={handleRecordingToggle}
+          onResumeRecordingView={() => router.push("/")}
           onMeetings={toggleCollapse}
           onImport={() => openImportDialog()}
           onSettings={() => router.push("/settings")}
@@ -197,6 +198,7 @@ const Sidebar: React.FC = () => {
             <SidebarRecordingButton
               isRecording={isRecording}
               onStart={handleRecordingToggle}
+              onResumeView={() => router.push("/")}
             />
             <SidebarSearch
               value={searchQuery}
