@@ -1,18 +1,17 @@
 "use client";
 
-import React, { useState, useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft,
-  Settings2,
-  Mic,
   Database as DatabaseIcon,
-  SparkleIcon,
   FlaskConical,
+  Mic,
+  Settings2,
+  SparkleIcon,
   Users,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { invoke } from "@tauri-apps/api/core";
-import { motion } from "framer-motion";
+
 import { TranscriptSettings } from "@/components/TranscriptSettings";
 import { RecordingSettings } from "@/components/RecordingSettings";
 import { PreferenceSettings } from "@/components/PreferenceSettings";
@@ -20,144 +19,130 @@ import { SummaryModelSettings } from "@/components/SummaryModelSettings";
 import { BetaSettings } from "@/components/BetaSettings";
 import { SpeakerSettings } from "@/components/SpeakerSettings";
 import { useConfig } from "@/contexts/ConfigContext";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Page, PageBody } from "@/components/layout/Page";
 
-// Tabs configuration (constant)
-const TABS = [
-  { value: "general", label: "General", icon: Settings2 },
-  { value: "recording", label: "Recordings", icon: Mic },
-  { value: "speakers", label: "Speakers", icon: Users },
-  { value: "Transcriptionmodels", label: "Transcription", icon: DatabaseIcon },
-  { value: "summaryModels", label: "Summary", icon: SparkleIcon },
-  { value: "beta", label: "Beta", icon: FlaskConical },
+import { SettingsSidebar, type SettingsCategory } from "./parts/SettingsSidebar";
+import { SettingsSection } from "./parts/SettingsSection";
+
+const CATEGORIES: readonly SettingsCategory[] = [
+  {
+    id: "general",
+    label: "General",
+    description: "Notifications, recording-folder location, and other defaults.",
+    icon: Settings2,
+  },
+  {
+    id: "recording",
+    label: "Recordings",
+    description: "Audio devices, capture format, and per-recording defaults.",
+    icon: Mic,
+  },
+  {
+    id: "speakers",
+    label: "Speakers",
+    description: "Saved voice profiles. Manage names, emails, and merges.",
+    icon: Users,
+  },
+  {
+    id: "transcription",
+    label: "Transcription",
+    description: "Whisper model selection and language preference.",
+    icon: DatabaseIcon,
+  },
+  {
+    id: "summary",
+    label: "Summary",
+    description: "AI engine + model that generates meeting summaries.",
+    icon: SparkleIcon,
+  },
+  {
+    id: "beta",
+    label: "Beta",
+    description: "Experimental features still under active development.",
+    icon: FlaskConical,
+  },
 ] as const;
+
+const DEFAULT_CATEGORY = CATEGORIES[0].id;
+
+function isKnownCategory(id: string): boolean {
+  return CATEGORIES.some((c) => c.id === id);
+}
 
 export default function SettingsPage() {
   const router = useRouter();
   const { transcriptModelConfig, setTranscriptModelConfig } = useConfig();
 
-  // Animation state for tabs
-  const [activeTab, setActiveTab] = useState("general");
-  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const [underlineStyle, setUnderlineStyle] = useState({ left: 0, width: 0 });
+  const [activeId, setActiveId] = useState<string>(DEFAULT_CATEGORY);
 
-  // Load saved transcript configuration on mount
+  // Sync the active category with `location.hash` on mount so links like
+  // `/settings#summary` deep-link to the right panel. We only push a new
+  // hash on user-driven changes — replaceState (not pushState) so the
+  // back button doesn't accumulate one history entry per category click.
   useEffect(() => {
-    const loadTranscriptConfig = async () => {
-      try {
-        const config = (await invoke("api_get_transcript_config")) as any;
-        if (config) {
-          console.log("Loaded saved transcript config:", config);
-          setTranscriptModelConfig({
-            provider: config.provider || "localWhisper",
-            model: config.model || "large-v3",
-            apiKey: config.apiKey || null,
-          });
-        }
-      } catch (error) {
-        console.error("Failed to load transcript config:", error);
-      }
-    };
-    loadTranscriptConfig();
-  }, [setTranscriptModelConfig]);
-
-  // Update underline position when active tab changes
-  useLayoutEffect(() => {
-    const activeIndex = TABS.findIndex((tab) => tab.value === activeTab);
-    const activeTabElement = tabRefs.current[activeIndex];
-
-    if (activeTabElement) {
-      const { offsetLeft, offsetWidth } = activeTabElement;
-      setUnderlineStyle({ left: offsetLeft, width: offsetWidth });
+    const fromHash = window.location.hash.replace(/^#/, "");
+    if (fromHash && isKnownCategory(fromHash)) {
+      setActiveId(fromHash);
     }
-  }, [activeTab]);
+  }, []);
+
+  const handleSelect = (id: string) => {
+    setActiveId(id);
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", `#${id}`);
+    }
+  };
+
+  // The ConfigContext already loads `transcriptModelConfig` on mount;
+  // the legacy version of this page duplicated that fetch here, which
+  // caused a brief content flash inside `<WhisperModelManager>` once
+  // the second fetch resolved with the same data but a new object
+  // reference (consumers re-rendered, the selected-model row briefly
+  // unhighlighted). Trust the context — it owns this lifecycle.
+
+  const active = CATEGORIES.find((c) => c.id === activeId) ?? CATEGORIES[0];
 
   return (
     <Page>
-      {/* Fixed Header */}
-      <div className="shrink-0 border-b border-border bg-muted">
-        <div className="mx-auto max-w-6xl px-8 py-6">
-          <div className="flex items-center gap-4">
-            <Button
-              variant="ghost"
-              onClick={() => router.back()}
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <ArrowLeft className="size-5" />
-              <span>Back</span>
-            </Button>
-            <h1 className="text-2xl font-bold">Settings</h1>
-          </div>
-        </div>
+      <div className="flex shrink-0 items-center gap-3 border-b border-border bg-background px-6 py-4">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => router.back()}
+          className="gap-2"
+        >
+          <ArrowLeft className="size-4" />
+          <span>Back</span>
+        </Button>
+        <h1 className="text-lg font-semibold">Settings</h1>
       </div>
 
       <PageBody>
-        <div className="mx-auto max-w-6xl p-8 pt-6">
-          {/* Tabs */}
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="
-              relative h-auto rounded-none border-b border-border bg-transparent
-              p-0
-            ">
-              {TABS.map((tab, index) => {
-                const Icon = tab.icon;
-                return (
-                  <TabsTrigger
-                    key={tab.value}
-                    value={tab.value}
-                    ref={(el) => {
-                      tabRefs.current[index] = el;
-                    }}
-                    className="
-                      relative z-10 flex items-center gap-2 rounded-none
-                      border-0 bg-transparent px-6 py-4 text-muted-foreground
-                      hover:text-foreground
-                      data-[state=active]:bg-transparent
-                      data-[state=active]:text-info
-                      data-[state=active]:shadow-none
-                    "
-                  >
-                    <Icon className="size-4" />
-                    {tab.label}
-                  </TabsTrigger>
-                );
-              })}
-
-              <motion.div
-                className="absolute bottom-0 z-20 h-0.5 bg-info"
-                layoutId="underline"
-                style={{
-                  left: underlineStyle.left,
-                  width: underlineStyle.width,
-                }}
-                transition={{ type: "spring", stiffness: 400, damping: 40 }}
-              />
-            </TabsList>
-
-            <TabsContent value="general">
-              <PreferenceSettings />
-            </TabsContent>
-            <TabsContent value="recording">
-              <RecordingSettings />
-            </TabsContent>
-            <TabsContent value="speakers">
-              <SpeakerSettings />
-            </TabsContent>
-            <TabsContent value="Transcriptionmodels">
-              <TranscriptSettings
-                transcriptModelConfig={transcriptModelConfig}
-                setTranscriptModelConfig={setTranscriptModelConfig}
-              />
-            </TabsContent>
-            <TabsContent value="summaryModels">
-              <SummaryModelSettings />
-            </TabsContent>
-            <TabsContent value="beta" className="mt-6">
-              <BetaSettings />
-            </TabsContent>
-          </Tabs>
+        <div className="flex h-full min-h-0 flex-1 overflow-hidden bg-background">
+          <SettingsSidebar
+            categories={CATEGORIES}
+            activeId={activeId}
+            onSelect={handleSelect}
+          />
+          <main className="min-w-0 flex-1">
+            <SettingsSection
+              title={active.label}
+              description={active.description}
+            >
+              {active.id === "general" && <PreferenceSettings />}
+              {active.id === "recording" && <RecordingSettings />}
+              {active.id === "speakers" && <SpeakerSettings />}
+              {active.id === "transcription" && (
+                <TranscriptSettings
+                  transcriptModelConfig={transcriptModelConfig}
+                  setTranscriptModelConfig={setTranscriptModelConfig}
+                />
+              )}
+              {active.id === "summary" && <SummaryModelSettings />}
+              {active.id === "beta" && <BetaSettings />}
+            </SettingsSection>
+          </main>
         </div>
       </PageBody>
     </Page>

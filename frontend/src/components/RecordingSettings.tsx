@@ -6,6 +6,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { DeviceSelection, SelectedDevices } from "@/components/DeviceSelection";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/lib/utils";
+import {
+  SettingsCard,
+  SettingsRow,
+} from "@/app/settings/parts/SettingsCard";
 
 export interface RecordingPreferences {
   save_folder: string;
@@ -137,116 +141,92 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
 
   if (loading) {
     return (
-      <div className="animate-pulse">
-        <div className="mb-4 h-4 w-1/4 rounded-md bg-muted"></div>
-        <div className="mb-4 h-8 rounded-md bg-muted"></div>
+      <div className="space-y-4">
+        <SettingsCard>
+          <div className="h-12 animate-pulse rounded-md bg-muted/40" />
+        </SettingsCard>
+        <SettingsCard>
+          <div className="h-20 animate-pulse rounded-md bg-muted/40" />
+        </SettingsCard>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="mb-4 text-lg font-semibold">Recording Settings</h3>
-        <p className="mb-6 text-sm text-muted-foreground">
-          Configure how your audio recordings are saved during meetings.
-        </p>
-      </div>
+    <div className="space-y-4">
+      <SettingsCard>
+        <SettingsRow
+          label="Save audio recordings"
+          description="Automatically save audio files when recording stops"
+        >
+          <Switch
+            checked={preferences.auto_save}
+            onCheckedChange={handleAutoSaveToggle}
+            disabled={saving}
+          />
+        </SettingsRow>
+      </SettingsCard>
 
-      {/* Auto Save Toggle */}
-      <div className="flex items-center justify-between rounded-lg border p-4">
-        <div className="flex-1">
-          <div className="font-medium">Save Audio Recordings</div>
-          <div className="text-sm text-muted-foreground">
-            Automatically save audio files when recording stops
-          </div>
+      {preferences.auto_save && (
+        <>
+          <SettingsCard
+            title="Save location"
+            description="Where the audio file for each meeting is written."
+          >
+            <div className="space-y-3">
+              <p className="text-sm break-all text-muted-foreground">
+                {preferences.save_folder || "Default folder"}
+              </p>
+              <Button variant="outline" size="sm" onClick={handleOpenFolder}>
+                <FolderOpen className="size-4" />
+                Open folder
+              </Button>
+            </div>
+          </SettingsCard>
+
+          <SettingsCard
+            title="File format"
+            description={`Recordings are saved as recording_YYYYMMDD_HHMMSS.${preferences.file_format}.`}
+          >
+            <p className="text-sm font-medium text-foreground">
+              {preferences.file_format.toUpperCase()}
+            </p>
+          </SettingsCard>
+        </>
+      )}
+
+      {!preferences.auto_save && (
+        <div className="rounded-lg border border-warning/30 bg-warning-muted p-4 text-sm text-warning">
+          Audio recording is disabled. Enable &quot;Save audio recordings&quot;
+          to automatically save meeting audio.
         </div>
-        <Switch
-          checked={preferences.auto_save}
-          onCheckedChange={handleAutoSaveToggle}
+      )}
+
+      <SettingsCard>
+        <SettingsRow
+          label="Recording-start notification"
+          description="Show a reminder so participants are informed when recording begins"
+        >
+          <Switch
+            checked={showRecordingNotification}
+            onCheckedChange={handleNotificationToggle}
+          />
+        </SettingsRow>
+      </SettingsCard>
+
+      <SettingsCard
+        title="Default audio devices"
+        description="The microphone and system audio source automatically selected when you start a new recording."
+      >
+        <DeviceSelection
+          selectedDevices={{
+            micDevice: preferences.preferred_mic_device,
+            systemDevice: preferences.preferred_system_device,
+          }}
+          onDeviceChange={handleDeviceChange}
           disabled={saving}
         />
-      </div>
-
-      {/* Folder Location - Only shown when auto_save is enabled */}
-      {preferences.auto_save && (
-        <div className="space-y-4">
-          <div className="rounded-lg border bg-muted p-4">
-            <div className="mb-2 font-medium">Save Location</div>
-            <div className="mb-3 text-sm break-all text-muted-foreground">
-              {preferences.save_folder || "Default folder"}
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleOpenFolder}
-            >
-              <FolderOpen className="size-4" />
-              Open Folder
-            </Button>
-          </div>
-
-          <div className="rounded-lg border bg-info/10 p-4">
-            <div className="text-sm text-info">
-              <strong>File Format:</strong>{" "}
-              {preferences.file_format.toUpperCase()} files
-            </div>
-            <div className="mt-1 text-sm text-info">
-              Recordings are saved with timestamp: recording_YYYYMMDD_HHMMSS.
-              {preferences.file_format}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Info when auto_save is disabled */}
-      {!preferences.auto_save && (
-        <div className="rounded-lg border bg-warning-muted p-4">
-          <div className="text-sm text-warning">
-            Audio recording is disabled. Enable &quot;Save Audio Recordings&quot; to
-            automatically save your meeting audio.
-          </div>
-        </div>
-      )}
-
-      {/* Recording Notification Toggle */}
-      <div className="flex items-center justify-between rounded-lg border p-4">
-        <div className="flex-1">
-          <div className="font-medium">Recording Start Notification</div>
-          <div className="text-sm text-muted-foreground">
-            Show reminder to inform participants when recording starts
-          </div>
-        </div>
-        <Switch
-          checked={showRecordingNotification}
-          onCheckedChange={handleNotificationToggle}
-        />
-      </div>
-
-      {/* Device Preferences */}
-      <div className="space-y-4">
-        <div className="border-t pt-6">
-          <h4 className="mb-4 text-sm font-medium text-foreground">
-            Default Audio Devices
-          </h4>
-          <p className="mb-4 text-sm text-muted-foreground">
-            Set your preferred microphone and system audio devices for
-            recording. These will be automatically selected when starting new
-            recordings.
-          </p>
-
-          <div className="rounded-lg border bg-muted p-4">
-            <DeviceSelection
-              selectedDevices={{
-                micDevice: preferences.preferred_mic_device,
-                systemDevice: preferences.preferred_system_device,
-              }}
-              onDeviceChange={handleDeviceChange}
-              disabled={saving}
-            />
-          </div>
-        </div>
-      </div>
+      </SettingsCard>
     </div>
   );
 }

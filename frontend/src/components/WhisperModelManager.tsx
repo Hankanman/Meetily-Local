@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { toast } from "sonner";
 import {
   ModelInfo,
@@ -43,9 +44,12 @@ export function ModelManager({
   );
   const [hasUserSelection, setHasUserSelection] = useState(false);
 
-  // Refs for stable callbacks
+  // Refs for stable callbacks. Mirroring props/state into refs lets the
+  // (heavy) listener-setup effect below run exactly once on mount
+  // without capturing stale values.
   const onModelSelectRef = useRef(onModelSelect);
   const autoSaveRef = useRef(autoSave);
+  const modelsRef = useRef<ModelInfo[]>([]);
 
   // Progress throttle map to prevent rapid updates
   const progressThrottleRef = useRef<
@@ -57,6 +61,21 @@ export function ModelManager({
     onModelSelectRef.current = onModelSelect;
     autoSaveRef.current = autoSave;
   }, [onModelSelect, autoSave]);
+
+  // Mirror the `models` state into a ref so the listener closures can
+  // read the current array without forcing the listener-setup effect
+  // to re-run (and tear-down + re-register three Tauri listeners) every
+  // time progress fires.
+  useEffect(() => {
+    modelsRef.current = models;
+  }, [models]);
+
+  // Same trick for `downloadModel`, which itself is recreated whenever
+  // `downloadingModels` changes (start of a download). The "Retry"
+  // toast inside the download-error listener needs to call the latest
+  // version, but we don't want listener re-registration whenever
+  // the callback's identity flips.
+  const downloadModelRef = useRef<(name: string) => Promise<void>>(async () => {});
 
   // Load persisted downloading state from localStorage
   const getPersistedDownloadingModels = (): Set<string> => {
@@ -140,7 +159,12 @@ export function ModelManager({
     };
 
     initializeModels();
-  }, [initialized, selectedModel, onModelSelect]);
+    // Only `initialized` is meaningful as a dep — `selectedModel` and
+    // `onModelSelect` previously made this effect re-run on every
+    // parent render (the parent created a new onModelSelect ref each
+    // render). The body short-circuits with `if (initialized) return`
+    // so re-runs were "harmless" but allocated a closure each click.
+  }, [initialized]);
 
   // getDisplayName, saveModelSelection, and downloadModel are declared before the
   // listener-setup effect so its closures can reference them without TDZ issues.
@@ -223,6 +247,11 @@ export function ModelManager({
     [downloadingModels, getDisplayName],
   );
 
+  // Keep the ref in sync with the latest downloadModel callback.
+  useEffect(() => {
+    downloadModelRef.current = downloadModel;
+  }, [downloadModel]);
+
   // Set up event listeners for download progress
   useEffect(() => {
     let unlistenProgress: (() => void) | null = null;
@@ -274,7 +303,7 @@ export function ModelManager({
         "model-download-complete",
         (event) => {
           const { modelName } = event.payload;
-          const model = models.find((m) => m.name === modelName);
+          const model = modelsRef.current.find((m) => m.name === modelName);
           const displayName = getDisplayName(modelName);
 
           setModels((prevModels) =>
@@ -341,7 +370,7 @@ export function ModelManager({
             duration: 6000,
             action: {
               label: "Retry",
-              onClick: () => downloadModel(modelName),
+              onClick: () => downloadModelRef.current(modelName),
             },
           });
         },
@@ -356,7 +385,14 @@ export function ModelManager({
       if (unlistenComplete) unlistenComplete();
       if (unlistenError) unlistenError();
     };
-  }, [getDisplayName, saveModelSelection, downloadModel, models]);
+    // Run once on mount. The closures inside read fresh values via
+    // `modelsRef`, `downloadModelRef`, `onModelSelectRef`,
+    // `autoSaveRef`. Both `getDisplayName` and `saveModelSelection`
+    // are stable `useCallback(..., [])` so they don't need to be
+    // listed; including them is fine but they're omitted to make
+    // intent clear ("this should never re-register").
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const cancelDownload = async (modelName: string) => {
     const displayName = getDisplayName(modelName);
@@ -438,12 +474,19 @@ export function ModelManager({
     }
   };
 
+  // Delayed skeleton: only render the loading placeholder if the fetch
+  // takes longer than ~250ms. The Tauri `WhisperAPI.init` + model-list
+  // call typically completes in < 100ms on a warm cache, which made the
+  // skeleton flash briefly then vanish — perceived as a "flash". With
+  // the delay, fast loads render nothing → content; slow loads still
+  // show the skeleton.
+  const showSkeleton = useDelayedFlag(loading, 250);
   if (loading) {
+    if (!showSkeleton) {
+      return <div className={className} />;
+    }
     return (
-      <div className={`
-        space-y-3
-        ${className}
-      `}>
+      <div className={`space-y-3 ${className}`}>
         <div className="animate-pulse space-y-3">
           <div className="h-20 rounded-lg bg-muted"></div>
           <div className="h-20 rounded-lg bg-muted"></div>
@@ -549,13 +592,9 @@ export function ModelManager({
 
       {/* Helper text */}
       {selectedModel && (
-        <motion.div
-          initial={{ opacity: 0, y: -5 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="pt-2 text-center text-sm text-muted-foreground"
-        >
+        <div className="pt-2 text-center text-sm text-muted-foreground">
           Using {getDisplayName(selectedModel)} for transcription
-        </motion.div>
+        </div>
       )}
     </div>
   );
@@ -585,8 +624,6 @@ function ModelCard({
   isDownloading,
   displayName,
 }: ModelCardProps) {
-  const [isHovered, setIsHovered] = useState(false);
-
   const isAvailable = model.status === "Available";
   const isMissing = model.status === "Missing";
   const isError = typeof model.status === "object" && "Error" in model.status;
@@ -598,22 +635,22 @@ function ModelCard({
       : null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 5 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2 }}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
+    // Plain <div>, not motion.div. We previously kept motion.div with
+    // `initial={false}` because a nested <AnimatePresence> needed
+    // framer-motion's parent context. That AnimatePresence has since
+    // been replaced with pure CSS `group-hover` (no nested motion.*
+    // children remain that need the context), so the wrapper itself
+    // can drop framer-motion overhead — measurable per-render cost
+    // when the page renders ~10 cards. The lone <motion.span> for
+    // the ✓ checkmark on the selected card works standalone.
+    <div
       className={`
-        relative cursor-pointer rounded-lg border-2 transition-all
+        group relative cursor-pointer rounded-lg border-2
         ${
           isSelected && isAvailable
             ? "border-info bg-info/10"
             : isAvailable
-              ? `
-                border-border bg-background
-                hover:border-border
-              `
+              ? "border-border bg-background"
               : "border-border bg-muted"
         }
         ${isAvailable ? "" : "cursor-default"}
@@ -701,39 +738,37 @@ function ModelCard({
                   <div className="size-2 rounded-full bg-success"></div>
                   <span className="text-sm font-medium">Ready</span>
                 </div>
-                <AnimatePresence>
-                  {isHovered && (
-                    <motion.button
-                      initial={{ opacity: 0, scale: 0.8 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.8 }}
-                      transition={{ duration: 0.15 }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDelete();
-                      }}
-                      className="
-                        p-1 text-muted-foreground/70 transition-colors
-                        hover:text-destructive
-                      "
-                      title="Delete model to free up space"
-                    >
-                      <svg
-                        className="size-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                        />
-                      </svg>
-                    </motion.button>
-                  )}
-                </AnimatePresence>
+                {/* Hover-revealed delete. Always rendered; visibility
+                    flips via `group-hover:opacity-100` on the parent
+                    motion.div. Pure CSS — no React state, no
+                    AnimatePresence mount/unmount per hover. */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete();
+                  }}
+                  className="
+                    pointer-events-none p-1 text-muted-foreground/70 opacity-0
+                    hover:text-destructive
+                    group-hover:pointer-events-auto group-hover:opacity-100
+                  "
+                  title="Delete model to free up space"
+                >
+                  <svg
+                    className="size-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                    />
+                  </svg>
+                </button>
               </>
             )}
 
@@ -843,6 +878,6 @@ function ModelCard({
           </motion.div>
         )}
       </div>
-    </motion.div>
+    </div>
   );
 }

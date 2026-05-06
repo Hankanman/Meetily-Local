@@ -6,6 +6,7 @@ import { BuiltInModelManager } from "@/components/BuiltInModelManager";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useConfig } from "@/contexts/ConfigContext";
+import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import {
   Select,
   SelectContent,
@@ -322,6 +323,18 @@ export function ModelSettingsModal({
       (!apiKey || (typeof apiKey === "string" && !apiKey.trim()))) ||
     (modelConfig.provider === "ollama" && ollamaEndpointChanged) ||
     isCustomOpenAIInvalid;
+
+  // Delayed loading flags — the model-list fetches typically resolve in
+  // < 200ms, which would otherwise flash a "Loading models…" spinner
+  // briefly before swapping to the real list. Skip the spinner unless
+  // the load is actually slow.
+  const isCloudLoading =
+    (modelConfig.provider === "openrouter" && isLoadingOpenRouter) ||
+    (modelConfig.provider === "openai" && isLoadingOpenAI) ||
+    (modelConfig.provider === "claude" && isLoadingClaude) ||
+    (modelConfig.provider === "groq" && isLoadingGroq);
+  const showCloudLoading = useDelayedFlag(isCloudLoading, 250);
+  const showOllamaLoading = useDelayedFlag(isLoadingOllama, 250);
 
   useEffect(() => {
     const fetchModelConfig = async () => {
@@ -1080,13 +1093,7 @@ export function ModelSettingsModal({
                     <Command>
                       <CommandInput placeholder="Search models..." />
                       <CommandList className="max-h-75">
-                        {(modelConfig.provider === "openrouter" &&
-                          isLoadingOpenRouter) ||
-                        (modelConfig.provider === "openai" &&
-                          isLoadingOpenAI) ||
-                        (modelConfig.provider === "claude" &&
-                          isLoadingClaude) ||
-                        (modelConfig.provider === "groq" && isLoadingGroq) ? (
+                        {isCloudLoading && showCloudLoading ? (
                           <div className="
                             py-6 text-center text-sm text-muted-foreground
                           ">
@@ -1095,7 +1102,7 @@ export function ModelSettingsModal({
                             " />
                             Loading models...
                           </div>
-                        ) : (
+                        ) : isCloudLoading ? null : (
                           <>
                             <CommandEmpty>No models found.</CommandEmpty>
                             <CommandGroup>
@@ -1444,12 +1451,12 @@ export function ModelSettingsModal({
                 />
               </div>
             )}
-            {isLoadingOllama ? (
+            {isLoadingOllama && showOllamaLoading ? (
               <div className="py-8 text-center text-muted-foreground">
                 <RefreshCw className="mx-auto mb-2 size-8 animate-spin" />
                 Loading models...
               </div>
-            ) : models.length === 0 ? (
+            ) : isLoadingOllama ? null : models.length === 0 ? (
               <div className="space-y-3">
                 {ollamaNotInstalled ? (
                   /* Show Ollama download link when not installed */
@@ -1574,16 +1581,13 @@ export function ModelSettingsModal({
                           <div
                             key={model.id}
                             className={cn(
-                              `
-                                m-0 rounded-md border bg-card p-2
-                                transition-colors
-                              `,
+                              "m-0 rounded-md border bg-card p-2",
                               modelConfig.model === model.name
                                 ? `
                                   background-blue-100 border-info ring-1
                                   ring-info
                                 `
-                                : "hover:bg-muted/50",
+                                : "hover:bg-muted",
                               !modelIsDownloading && "cursor-pointer",
                             )}
                             onClick={() => {

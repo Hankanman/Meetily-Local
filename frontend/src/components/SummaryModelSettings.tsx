@@ -9,6 +9,11 @@ import {
 } from "@/components/ModelSettingsModal";
 import { Switch } from "./ui/switch";
 import { useConfig } from "@/contexts/ConfigContext";
+import { useDelayedFlag } from "@/hooks/useDelayedFlag";
+import {
+  SettingsCard,
+  SettingsRow,
+} from "@/app/settings/parts/SettingsCard";
 
 interface SummaryModelSettingsProps {
   refetchTrigger?: number; // Change this to trigger refetch
@@ -24,6 +29,13 @@ export function SummaryModelSettings({
     apiKey: null,
     ollamaEndpoint: null,
   });
+  // Don't render the ModelSettingsModal until the initial fetch
+  // completes — otherwise the modal mounts with the placeholder
+  // defaults above (provider: "ollama", model: "llama3.2:latest"),
+  // renders one frame of "ollama" UI, then the fetch resolves with the
+  // real provider (e.g. "builtin-ai") and the UI swaps. Perceived as a
+  // content-flash separate from the fetch skeleton.
+  const [initialFetchDone, setInitialFetchDone] = useState(false);
 
   const { isAutoSummary, toggleIsAutoSummary } = useConfig();
 
@@ -73,6 +85,8 @@ export function SummaryModelSettings({
     } catch (error) {
       console.error("Failed to fetch model config:", error);
       toast.error("Failed to load model settings");
+    } finally {
+      setInitialFetchDone(true);
     }
   }, []);
 
@@ -141,44 +155,43 @@ export function SummaryModelSettings({
     }
   };
 
+  // Show the loading placeholder only if the initial fetch takes longer
+  // than ~250ms. Fast loads (the typical case) skip the placeholder
+  // entirely; slow loads still show feedback so the panel doesn't look
+  // dead.
+  const showLoadingFallback = useDelayedFlag(!initialFetchDone, 250);
+
   return (
-    <div className="flex flex-col gap-4">
-      <div className="
-        rounded-lg border border-border bg-background p-6 shadow-sm
-      ">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="mb-2 text-lg font-semibold text-foreground">
-              Auto Summary
-            </h3>
-            <p className="text-sm text-muted-foreground">
-              Auto Generating summary after meeting completion(Stopping)
-            </p>
-          </div>
+    <div className="space-y-4">
+      <SettingsCard>
+        <SettingsRow
+          label="Auto-summary"
+          description="Generate a summary automatically when a meeting recording stops."
+        >
           <Switch
             checked={isAutoSummary}
             onCheckedChange={toggleIsAutoSummary}
           />
-        </div>
-      </div>
+        </SettingsRow>
+      </SettingsCard>
 
-      <div className="
-        rounded-lg border border-border bg-background p-6 shadow-sm
-      ">
-        <h3 className="mb-4 text-lg font-semibold">
-          Summary Model Configuration
-        </h3>
-        <p className="mb-6 text-sm text-muted-foreground">
-          Configure the AI model used for generating meeting summaries.
-        </p>
-
-        <ModelSettingsModal
-          modelConfig={modelConfig}
-          setModelConfig={setModelConfig}
-          onSave={handleSaveModelConfig}
-          skipInitialFetch={true}
-        />
-      </div>
+      <SettingsCard
+        title="Summary model"
+        description="The AI engine + model used to write meeting summaries."
+      >
+        {!initialFetchDone ? (
+          showLoadingFallback ? (
+            <div className="h-32 animate-pulse rounded-md bg-muted/40" />
+          ) : null
+        ) : (
+          <ModelSettingsModal
+            modelConfig={modelConfig}
+            setModelConfig={setModelConfig}
+            onSave={handleSaveModelConfig}
+            skipInitialFetch={true}
+          />
+        )}
+      </SettingsCard>
     </div>
   );
 }

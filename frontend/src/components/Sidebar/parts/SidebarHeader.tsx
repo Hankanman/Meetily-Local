@@ -37,7 +37,7 @@ export function SidebarHeader({
         onClick={onToggleCollapse}
         className="
           flex size-8 shrink-0 items-center justify-center rounded-md
-          text-muted-foreground transition-colors
+          text-muted-foreground
           hover:bg-muted hover:text-foreground
         "
       >
@@ -51,7 +51,7 @@ export function SidebarHeader({
           title="Go to recording page"
           className="
             min-w-0 truncate rounded-md px-2 py-1 text-base font-semibold
-            text-foreground transition-colors
+            text-foreground
             hover:bg-muted
           "
         >

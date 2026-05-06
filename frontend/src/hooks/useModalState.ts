@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { TranscriptModelProps } from "@/components/TranscriptSettings";
@@ -178,40 +178,60 @@ export function useModalState(
     };
   }, [showModal]);
 
-  // Listen for model download completion to auto-close modal
+  // Stable ref for the listener's auto-close logic — the listener
+  // captures `transcriptModelConfig` so we'd otherwise need to put it
+  // in deps and re-register on every config change. Reading from a
+  // ref instead lets the effect run once on mount.
+  const transcriptConfigRef = useRef(transcriptModelConfig);
   useEffect(() => {
-    const setupDownloadListeners = async () => {
-      const unlisteners: (() => void)[] = [];
+    transcriptConfigRef.current = transcriptModelConfig;
+  }, [transcriptModelConfig]);
 
-      // Listen for Whisper model download complete
-      const unlistenWhisper = await listen<{ modelName: string }>(
-        "model-download-complete",
-        (event) => {
-          const { modelName } = event.payload;
-          console.log(
-            "[useModalState] Whisper model download complete:",
-            modelName,
-          );
+  // Listen for model download completion to auto-close modal.
+  //
+  // This previously had two compounding bugs:
+  //  1. The cleanup function was returned from the inner async closure
+  //     instead of from the useEffect body, so React never invoked it
+  //     on unmount or re-run — listeners accumulated forever.
+  //  2. Deps included `transcriptModelConfig`, so every Whisper-model
+  //     selection (which writes a new config object reference) re-ran
+  //     the effect, registering yet another `model-download-complete`
+  //     listener via Tauri IPC. Combined with #1, dozens of listeners
+  //     piled up after a few clicks, causing dramatic UI lag on the
+  //     transcript settings page.
+  //
+  // Now: register the listener once on mount, read the latest config
+  // via a ref, return the unlisten function from the effect properly.
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
 
-          // Auto-close modal if the downloaded model matches the selected one
-          if (
-            transcriptModelConfig?.provider === "localWhisper" &&
-            transcriptModelConfig?.model === modelName
-          ) {
-            toast.success("Model ready! Closing window...", { duration: 1500 });
-            setTimeout(() => hideModal("modelSelector"), 1500);
-          }
-        },
-      );
-      unlisteners.push(unlistenWhisper);
+    (async () => {
+      try {
+        unlistenFn = await listen<{ modelName: string }>(
+          "model-download-complete",
+          (event) => {
+            const { modelName } = event.payload;
+            const cfg = transcriptConfigRef.current;
+            if (
+              cfg?.provider === "localWhisper" &&
+              cfg?.model === modelName
+            ) {
+              toast.success("Model ready! Closing window...", {
+                duration: 1500,
+              });
+              setTimeout(() => hideModal("modelSelector"), 1500);
+            }
+          },
+        );
+      } catch (err) {
+        console.error("Failed to setup model-download-complete listener:", err);
+      }
+    })();
 
-      return () => {
-        unlisteners.forEach((unsub) => unsub());
-      };
+    return () => {
+      if (unlistenFn) unlistenFn();
     };
-
-    setupDownloadListeners();
-  }, [transcriptModelConfig, hideModal]);
+  }, [hideModal]);
 
   return {
     modals,

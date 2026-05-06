@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import { Download, RefreshCw, BadgeAlert, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 
 interface ModelInfo {
   name: string;
@@ -267,8 +268,13 @@ export function BuiltInModelManager({
     }
   };
 
-  // Don't show loading spinner if we have downloads in progress - show the model list instead
+  // Don't show loading spinner if we have downloads in progress - show the model list instead.
+  // Use the delayed-flag pattern so a fast `builtin_ai_list_models` invoke
+  // (the typical case — local file scan) skips the spinner entirely
+  // instead of flashing it for ~50ms.
+  const showLoadingSpinner = useDelayedFlag(isLoading, 250);
   if (isLoading && downloadingModels.size === 0) {
+    if (!showLoadingSpinner) return null;
     return (
       <div className="py-8 text-center text-muted-foreground">
         <RefreshCw className="mx-auto mb-2 size-8 animate-spin" />
@@ -308,14 +314,11 @@ export function BuiltInModelManager({
             <div
               key={model.name}
               className={cn(
-                "rounded-lg border p-4 transition-colors",
+                "rounded-lg border p-4",
                 modelIsDownloading ? "border-border bg-background" : "bg-card",
                 selectedModel === model.name
                   ? "border-foreground ring-2 ring-foreground"
-                  : `
-                    border-border
-                    hover:border-border
-                  `,
+                  : "border-border",
                 isAvailable && !modelIsDownloading && "cursor-pointer",
               )}
               onClick={() => {
@@ -479,7 +482,7 @@ export function BuiltInModelManager({
                     selectedModel !== model.name && (
                       <button
                         className="
-                          rounded-md p-2 text-muted-foreground transition-colors
+                          rounded-md p-2 text-muted-foreground
                           hover:bg-muted hover:text-destructive
                         "
                         onClick={(e) => {
