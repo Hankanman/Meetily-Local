@@ -120,18 +120,132 @@ pub fn clean_llm_markdown_output(markdown: &str) -> String {
     trimmed.to_string()
 }
 
-/// Extracts meeting name from the first heading in markdown
+/// Extracts meeting name from the first heading in markdown.
 ///
-/// # Arguments
-/// * `markdown` - Markdown content
-///
-/// # Returns
-/// Meeting name if found, None otherwise
+/// Some smaller LLMs echo the placeholder phrasing from the prompt into
+/// their generated title (e.g. "AI-Generated Title: Strategic …",
+/// "Title: Daily standup", "[AI-Generated Title] …"). The prompt
+/// itself was tightened to discourage this, but defensive sanitisation
+/// here cleans up titles that still leak through — so existing
+/// meetings retain a tidy title even if their generation predates the
+/// prompt fix.
 pub fn extract_meeting_name_from_markdown(markdown: &str) -> Option<String> {
-    markdown
+    let raw = markdown
         .lines()
         .find(|line| line.starts_with("# "))
-        .map(|line| line.trim_start_matches("# ").trim().to_string())
+        .map(|line| line.trim_start_matches("# ").trim().to_string())?;
+    Some(sanitize_meeting_title(&raw))
+}
+
+/// Strip leading bracket/quote noise and known LLM-echoed prefixes from
+/// a candidate meeting title. Idempotent — safe to call repeatedly.
+pub fn sanitize_meeting_title(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+
+    // Drop wrapping brackets / quotes that the model sometimes leaves in:
+    //   `[AI-Generated Title] …`, `"AI-Generated Title: …"`, etc.
+    let trim_chars: &[char] = &['[', ']', '(', ')', '"', '\'', '*', '#', ' '];
+    s = s.trim_matches(trim_chars).to_string();
+
+    // Strip case-insensitive prefix patterns the model leaks. Loop so that
+    // `[Title: ...]` (after the bracket strip above leaves `Title: ...`)
+    // collapses fully.
+    const LEAK_PREFIXES: &[&str] = &[
+        "ai-generated title",
+        "ai generated title",
+        "ai-generated meeting title",
+        "ai-generated summary title",
+        "generated title",
+        "meeting title",
+        "meeting summary",
+        "summary title",
+        "title",
+    ];
+
+    loop {
+        let lower = s.to_lowercase();
+        let mut stripped = false;
+        for prefix in LEAK_PREFIXES {
+            if lower.starts_with(prefix) {
+                let rest = &s[prefix.len()..];
+                // Only strip if the prefix is followed by a separator
+                // (`:` / `-` / whitespace) — avoids eating titles that
+                // legitimately start with those words ("Meeting summary
+                // playback design review").
+                let rest_trimmed = rest.trim_start();
+                if rest_trimmed.chars().next().map_or(false, |c| {
+                    matches!(c, ':' | '-' | '–' | '—' | ']' | ')')
+                }) {
+                    s = rest_trimmed
+                        .trim_start_matches(|c: char| {
+                            matches!(c, ':' | '-' | '–' | '—' | ']' | ')')
+                        })
+                        .trim_start()
+                        .to_string();
+                    stripped = true;
+                    break;
+                }
+            }
+        }
+        if !stripped {
+            break;
+        }
+        s = s.trim_matches(trim_chars).to_string();
+    }
+
+    s
+}
+
+#[cfg(test)]
+mod sanitize_title_tests {
+    use super::sanitize_meeting_title;
+
+    #[test]
+    fn passes_clean_titles_through() {
+        assert_eq!(
+            sanitize_meeting_title("Daily standup notes"),
+            "Daily standup notes"
+        );
+    }
+
+    #[test]
+    fn strips_ai_generated_prefix() {
+        assert_eq!(
+            sanitize_meeting_title("AI-Generated Title: Strategic engagement"),
+            "Strategic engagement"
+        );
+    }
+
+    #[test]
+    fn strips_bracketed_placeholder() {
+        assert_eq!(
+            sanitize_meeting_title("[AI-Generated Title] Project sync"),
+            "Project sync"
+        );
+    }
+
+    #[test]
+    fn strips_plain_title_prefix() {
+        assert_eq!(
+            sanitize_meeting_title("Title: Q3 review"),
+            "Q3 review"
+        );
+    }
+
+    #[test]
+    fn does_not_eat_legitimate_words() {
+        // No separator after the leading word → not a prefix to strip.
+        assert_eq!(
+            sanitize_meeting_title("Title implementation review"),
+            "Title implementation review"
+        );
+    }
+
+    #[test]
+    fn idempotent() {
+        let cleaned = sanitize_meeting_title("AI-Generated Title: Foo");
+        assert_eq!(sanitize_meeting_title(&cleaned), cleaned);
+    }
 }
 
 /// Generates a complete meeting summary with conditional chunking strategy
