@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { motion, AnimatePresence } from "framer-motion";
@@ -438,12 +439,19 @@ export function ModelManager({
     }
   };
 
+  // Delayed skeleton: only render the loading placeholder if the fetch
+  // takes longer than ~250ms. The Tauri `WhisperAPI.init` + model-list
+  // call typically completes in < 100ms on a warm cache, which made the
+  // skeleton flash briefly then vanish — perceived as a "flash". With
+  // the delay, fast loads render nothing → content; slow loads still
+  // show the skeleton.
+  const showSkeleton = useDelayedFlag(loading, 250);
   if (loading) {
+    if (!showSkeleton) {
+      return <div className={className} />;
+    }
     return (
-      <div className={`
-        space-y-3
-        ${className}
-      `}>
+      <div className={`space-y-3 ${className}`}>
         <div className="animate-pulse space-y-3">
           <div className="h-20 rounded-lg bg-muted"></div>
           <div className="h-20 rounded-lg bg-muted"></div>
