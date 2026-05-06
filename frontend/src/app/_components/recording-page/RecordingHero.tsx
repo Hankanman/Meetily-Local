@@ -25,19 +25,21 @@ export function RecordingHero({ onStart, isStarting }: RecordingHeroProps) {
   const { hasMicrophone } = usePermissionCheck();
 
   // Watch the selected devices so the user can see them light up before
-  // they hit record.
-  const monitorNames = [
-    selectedDevices?.micDevice ?? null,
-    selectedDevices?.systemDevice ?? null,
-  ].filter((n): n is string => !!n);
-  const levels = useAudioLevels(monitorNames.length > 0 ? monitorNames : null);
+  // they hit record. Fall back to "default" — the backend's magic name
+  // for the system default device — when the user hasn't picked
+  // explicitly. Without this fallback the hero shows no meters at all
+  // until the user opens the device-chip popover, since selectedDevices
+  // is `{ null, null }` on first load.
+  const micName = selectedDevices?.micDevice ?? "default";
+  const systemName = selectedDevices?.systemDevice ?? "default";
+  const monitorNames = Array.from(new Set([micName, systemName]));
+  const levels = useAudioLevels(monitorNames);
 
-  const micLevel = selectedDevices?.micDevice
-    ? levels.get(selectedDevices.micDevice)
-    : null;
-  const systemLevel = selectedDevices?.systemDevice
-    ? levels.get(selectedDevices.systemDevice)
-    : null;
+  const micLevel = levels.get(micName);
+  // When both "devices" are the same default the backend emits one
+  // entry; render the system row only when it's a distinct device, so
+  // we don't show two identical bars side-by-side.
+  const systemLevel = micName !== systemName ? levels.get(systemName) : null;
 
   return (
     // `w-full` is essential — without it the hero sits as a content-sized
@@ -52,7 +54,7 @@ export function RecordingHero({ onStart, isStarting }: RecordingHeroProps) {
           disabled={!hasMicrophone}
         />
 
-        {monitorNames.length > 0 && (
+        {(micLevel || systemLevel) && (
           <div className="flex items-center gap-4 text-xs text-muted-foreground">
             {micLevel && (
               <div className="flex items-center gap-2">
