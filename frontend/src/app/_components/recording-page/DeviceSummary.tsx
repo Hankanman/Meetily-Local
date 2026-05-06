@@ -69,8 +69,17 @@ export function DeviceSummary({ disabled = false }: DeviceSummaryProps) {
     };
   }, []);
 
-  const inputs = devices.filter((d) => d.device_type === "Input");
-  const outputs = devices.filter((d) => d.device_type === "Output");
+  // Drop any device literally named "default" — that's the CPAL alias
+  // for the system default device, and we already render an explicit
+  // "Default …" option at the top of each list. Without this filter the
+  // Select gets two options with `value="default"` and React warns about
+  // duplicate keys.
+  const inputs = devices.filter(
+    (d) => d.device_type === "Input" && d.name !== "default",
+  );
+  const outputs = devices.filter(
+    (d) => d.device_type === "Output" && d.name !== "default",
+  );
 
   // "default" is the canonical sentinel — same value DeviceSelection
   // uses on the Settings page. Storing `null` in the context means

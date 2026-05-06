@@ -58,12 +58,16 @@ export function DeviceSelection({
   const [isMonitoring, setIsMonitoring] = useState(false);
   const [showLevels, setShowLevels] = useState(false);
 
-  // Filter devices by type
+  // Filter devices by type. Also drop any device literally named
+  // "default" — that's the CPAL alias for the system default device,
+  // and we already render an explicit "Default …" SelectItem above the
+  // mapped list. Without this filter the Select would have two options
+  // with `value="default"` and React warns about duplicate keys.
   const inputDevices = devices.filter(
-    (device) => device.device_type === "Input",
+    (device) => device.device_type === "Input" && device.name !== "default",
   );
   const outputDevices = devices.filter(
-    (device) => device.device_type === "Output",
+    (device) => device.device_type === "Output" && device.name !== "default",
   );
 
   // Fetch available audio devices
