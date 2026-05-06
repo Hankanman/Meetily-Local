@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { toast } from "sonner";
 import {
   ModelInfo,
@@ -624,8 +624,6 @@ function ModelCard({
   isDownloading,
   displayName,
 }: ModelCardProps) {
-  const [isHovered, setIsHovered] = useState(false);
-
   const isAvailable = model.status === "Available";
   const isMissing = model.status === "Missing";
   const isError = typeof model.status === "object" && "Error" in model.status;
@@ -639,33 +637,27 @@ function ModelCard({
   return (
     // `initial={false}` skips the entry animation — that fade-in was
     // perceived as a flash on the settings page where loads are fast.
-    // The motion.div is kept (rather than a plain div) because nested
-    // <AnimatePresence> + motion.button on the hover-only delete
-    // button benefits from framer-motion's enclosing render context;
-    // a plain div parent worked but reportedly introduced interaction
-    // lag during model-selection clicks.
+    // The motion.div is kept (rather than a plain div) because the
+    // ✓ badge below uses motion.span scale-in; framer-motion's
+    // enclosing render context avoids interaction lag observed when
+    // the parent was a plain div.
+    //
+    // The `group` class lets the hover-revealed delete button below
+    // toggle visibility via pure CSS (`group-hover:opacity-100`)
+    // instead of a JS-managed isHovered state. That eliminates a
+    // React re-render + AnimatePresence mount/unmount on every
+    // mouse-enter/leave; with ~10 cards, scrubbing across them was
+    // firing simultaneous enter/exit animations and producing ~92ms
+    // pure-paint frames in the WebKit timeline.
     <motion.div
       initial={false}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-      // `transition-colors` (not `transition-all`) — the latter
-      // transitions every CSS property including layout-affecting
-      // ones, and with ~10 cards that fires ~10 simultaneous full
-      // repaints of the whole card grid on every state change. The
-      // WebKit timeline showed each such burst at ~120ms per frame
-      // dominated by paint, dwarfing all the JS work and making the
-      // entire settings page feel laggy. Color-only transitions can
-      // run on the GPU compositor and don't trigger per-pixel paint.
       className={`
-        relative cursor-pointer rounded-lg border-2 transition-colors
+        group relative cursor-pointer rounded-lg border-2
         ${
           isSelected && isAvailable
             ? "border-info bg-info/10"
             : isAvailable
-              ? `
-                border-border bg-background
-                hover:border-border
-              `
+              ? "border-border bg-background"
               : "border-border bg-muted"
         }
         ${isAvailable ? "" : "cursor-default"}
@@ -753,39 +745,37 @@ function ModelCard({
                   <div className="size-2 rounded-full bg-success"></div>
                   <span className="text-sm font-medium">Ready</span>
                 </div>
-                <AnimatePresence>
-                  {isHovered && (
-                    <motion.button
-                      initial={{ opacity: 0, scale: 0.8 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.8 }}
-                      transition={{ duration: 0.15 }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDelete();
-                      }}
-                      className="
-                        p-1 text-muted-foreground/70 transition-colors
-                        hover:text-destructive
-                      "
-                      title="Delete model to free up space"
-                    >
-                      <svg
-                        className="size-4"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                        />
-                      </svg>
-                    </motion.button>
-                  )}
-                </AnimatePresence>
+                {/* Hover-revealed delete. Always rendered; visibility
+                    flips via `group-hover:opacity-100` on the parent
+                    motion.div. Pure CSS — no React state, no
+                    AnimatePresence mount/unmount per hover. */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete();
+                  }}
+                  className="
+                    pointer-events-none p-1 text-muted-foreground/70 opacity-0
+                    hover:text-destructive
+                    group-hover:pointer-events-auto group-hover:opacity-100
+                  "
+                  title="Delete model to free up space"
+                >
+                  <svg
+                    className="size-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                    />
+                  </svg>
+                </button>
               </>
             )}
 
