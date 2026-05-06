@@ -35,6 +35,7 @@ macro_rules! perf_trace {
 pub mod anthropic;
 pub mod api;
 pub mod audio;
+pub mod calendar;
 pub mod config;
 pub mod console_utils;
 pub mod database;
@@ -943,6 +944,17 @@ pub fn run() {
             audio::import::start_import_audio_command,
             audio::import::cancel_import_command,
             audio::import::is_import_in_progress_command,
+            // Calendar / ICS commands
+            calendar::commands::calendar_list_sources,
+            calendar::commands::calendar_add_source,
+            calendar::commands::calendar_remove_source,
+            calendar::commands::calendar_update_source_label,
+            calendar::commands::calendar_refresh_source,
+            calendar::commands::calendar_refresh_all,
+            calendar::commands::calendar_list_events,
+            calendar::commands::calendar_find_event_for_now,
+            calendar::commands::calendar_link_meeting,
+            calendar::commands::calendar_get_event_for_meeting,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

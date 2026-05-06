@@ -148,6 +148,11 @@ ffmpeg-sidecar = { git = "https://github.com/nathanbabcock/ffmpeg-sidecar", bran
 
 sqlx = { version = "0.8", features = [ "runtime-tokio", "sqlite", "chrono"] }
 
+# Calendar / ICS parsing
+ical = "0.11"
+rrule = "0.13"
+chrono-tz = "0.10"
+
 # Common Tauri configuration
 tauri = { version = "2.11.0", features = [ "devtools", "macos-private-api", "protocol-asset", "tray-icon"] }
 tauri-plugin-fs = "2.5.0"
