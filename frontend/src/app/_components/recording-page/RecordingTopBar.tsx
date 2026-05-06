@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Pause, Play, Square } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { appDataDir } from "@tauri-apps/api/path";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
 import { useAudioLevels } from "@/hooks/useAudioLevels";
@@ -95,8 +96,32 @@ export function RecordingTopBar({
     }
   };
 
-  const handleStop = () => {
+  // Invokes the Tauri `stop_recording` command before delegating to the
+  // post-stop hook. Mirrors what the legacy `RecordingControls`
+  // component used to do — `useRecordingStop`'s handler explicitly
+  // assumes `stop_recording` has already been called (it only handles
+  // the wait-for-transcripts + DB save + navigate-to-meeting steps).
+  // Without this invoke the backend never emits the `recording-stopped`
+  // event with `folder_path`, so sessionStorage stays empty, the save
+  // call gets `folder_path: null`, and downstream features that gate
+  // on it (e.g. the meeting-details "Enhance" / re-transcribe button)
+  // silently disappear for new recordings.
+  const handleStop = async () => {
     onStopInitiated?.();
+    try {
+      const dataDir = await appDataDir();
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const savePath = `${dataDir}/recording-${timestamp}.wav`;
+      await invoke("stop_recording", { args: { save_path: savePath } });
+    } catch (err) {
+      // "No recording in progress" is benign on retry / double-click.
+      // Anything else gets logged and we still hand off to onStop so
+      // the UI doesn't get stuck in a half-stopped state.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("No recording in progress")) {
+        console.error("stop_recording invoke failed:", err);
+      }
+    }
     onStop(true);
   };
 
