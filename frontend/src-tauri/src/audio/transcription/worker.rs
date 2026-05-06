@@ -511,7 +511,7 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
         });
     }
 
-    // Calculate energy for logging/monitoring only
+    // Calculate energy for logging + the system-audio silence gate below.
     let energy: f32 =
         speech_samples.iter().map(|&x| x * x).sum::<f32>() / speech_samples.len() as f32;
     info!(
@@ -520,6 +520,28 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
         speech_samples.len(),
         energy
     );
+
+    // Drop near-silent system-audio chunks. When nothing is actually playing
+    // through the speakers, the system loopback still picks up faint mic
+    // bleed (typically ~0.0001 RMS² range). VAD sees enough variation to
+    // call it speech; Whisper hallucinates words from the near-silence.
+    // Real system audio (a remote participant on a call) lands ~10-100x
+    // higher in energy than this floor.
+    //
+    // Threshold picked empirically: observed mic speech ~0.005, mic-bleed
+    // system ~0.0001; 0.0005 sits comfortably between.
+    const SYSTEM_AUDIO_SILENCE_THRESHOLD: f32 = 0.0005;
+    if chunk.device_type == DeviceType::System
+        && energy < SYSTEM_AUDIO_SILENCE_THRESHOLD
+    {
+        info!(
+            "Dropping near-silent system audio chunk {} (energy {:.6} < threshold {:.6})",
+            chunk.chunk_id, energy, SYSTEM_AUDIO_SILENCE_THRESHOLD
+        );
+        // Return empty text; downstream callers already treat empty as "no
+        // segment to emit", same path as Whisper returning "".
+        return Ok((String::new(), Some(1.0), false));
+    }
 
     // Transcribe using the appropriate engine (with improved error handling)
     match engine {
