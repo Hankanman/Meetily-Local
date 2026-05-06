@@ -557,13 +557,9 @@ export function ModelManager({
 
       {/* Helper text */}
       {selectedModel && (
-        <motion.div
-          initial={{ opacity: 0, y: -5 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="pt-2 text-center text-sm text-muted-foreground"
-        >
+        <div className="pt-2 text-center text-sm text-muted-foreground">
           Using {getDisplayName(selectedModel)} for transcription
-        </motion.div>
+        </div>
       )}
     </div>
   );
@@ -606,10 +602,7 @@ function ModelCard({
       : null;
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 5 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2 }}
+    <div
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       className={`
@@ -851,6 +844,6 @@ function ModelCard({
           </motion.div>
         )}
       </div>
-    </motion.div>
+    </div>
   );
 }
