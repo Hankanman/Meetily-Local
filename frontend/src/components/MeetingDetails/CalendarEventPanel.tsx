@@ -19,6 +19,10 @@ import { CalendarEventPicker } from "./CalendarEventPicker";
 
 interface CalendarEventPanelProps {
   meetingId: string;
+  /** ISO-8601 timestamp the recording started. Used by the picker as the
+   *  anchor for "events around the same time as the transcript was
+   *  captured" instead of falling back to "now". */
+  meetingCreatedAt: string;
 }
 
 function formatTimeRange(startIso: string, endIso: string): string {
@@ -47,7 +51,10 @@ function formatTimeRange(startIso: string, endIso: string): string {
   return `${dateFmt} ${startTime} – ${end.toLocaleString()}`;
 }
 
-export function CalendarEventPanel({ meetingId }: CalendarEventPanelProps) {
+export function CalendarEventPanel({
+  meetingId,
+  meetingCreatedAt,
+}: CalendarEventPanelProps) {
   const [event, setEvent] = useState<CalendarEvent | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
@@ -128,6 +135,7 @@ export function CalendarEventPanel({ meetingId }: CalendarEventPanelProps) {
             onClose={() => setIsPickerOpen(false)}
             onPick={handlePickEvent}
             isSaving={isMutating}
+            anchorIso={meetingCreatedAt}
           />
         )}
       </>
@@ -228,6 +236,7 @@ export function CalendarEventPanel({ meetingId }: CalendarEventPanelProps) {
           onPick={handlePickEvent}
           isSaving={isMutating}
           currentEventId={event.id}
+          anchorIso={meetingCreatedAt}
         />
       )}
     </>

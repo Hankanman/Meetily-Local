@@ -125,7 +125,10 @@ export function SummaryPanel({
 
         {/* Calendar event link / metadata */}
         <div className="mb-3">
-          <CalendarEventPanel meetingId={meeting.id} />
+          <CalendarEventPanel
+            meetingId={meeting.id}
+            meetingCreatedAt={meeting.created_at}
+          />
         </div>
 
         {/* Button groups - only show when summary exists */}
