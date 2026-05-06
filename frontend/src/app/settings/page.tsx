@@ -11,12 +11,8 @@ import {
   Users,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { invoke } from "@tauri-apps/api/core";
 
-import {
-  TranscriptSettings,
-  type TranscriptModelProps,
-} from "@/components/TranscriptSettings";
+import { TranscriptSettings } from "@/components/TranscriptSettings";
 import { RecordingSettings } from "@/components/RecordingSettings";
 import { PreferenceSettings } from "@/components/PreferenceSettings";
 import { SummaryModelSettings } from "@/components/SummaryModelSettings";
@@ -98,30 +94,12 @@ export default function SettingsPage() {
     }
   };
 
-  // Pre-load the persisted transcription config the same way the legacy
-  // page did — TranscriptSettings consumes this via the controlled
-  // props pattern, so the load has to happen at the page level, not
-  // inside the component.
-  useEffect(() => {
-    (async () => {
-      try {
-        const config = (await invoke("api_get_transcript_config")) as {
-          provider?: TranscriptModelProps["provider"];
-          model?: string;
-          apiKey?: string | null;
-        } | null;
-        if (config) {
-          setTranscriptModelConfig({
-            provider: config.provider ?? "localWhisper",
-            model: config.model ?? "large-v3",
-            apiKey: config.apiKey ?? null,
-          });
-        }
-      } catch (err) {
-        console.error("Failed to load transcript config:", err);
-      }
-    })();
-  }, [setTranscriptModelConfig]);
+  // The ConfigContext already loads `transcriptModelConfig` on mount;
+  // the legacy version of this page duplicated that fetch here, which
+  // caused a brief content flash inside `<WhisperModelManager>` once
+  // the second fetch resolved with the same data but a new object
+  // reference (consumers re-rendered, the selected-model row briefly
+  // unhighlighted). Trust the context — it owns this lifecycle.
 
   const active = CATEGORIES.find((c) => c.id === activeId) ?? CATEGORIES[0];
 
