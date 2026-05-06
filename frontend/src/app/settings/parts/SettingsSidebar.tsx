@@ -92,9 +92,17 @@ export function SettingsSidebar({
                 type="button"
                 onClick={() => onSelect(c.id)}
                 aria-current={isActive ? "page" : undefined}
+                // No hover transition on the rail rows — the rail has
+                // ~7 category buttons stacked vertically, and scrubbing
+                // the cursor down the list fires a transition-start +
+                // transition-end pair for every boundary crossing. Even
+                // cheap color transitions stack into perceptible paint
+                // storms (~16ms paint per row, multiplied by adjacent
+                // rows whose hover state was changing). Snap-on hover
+                // is fast and visually fine here.
                 className={`
                   group relative flex w-full items-center gap-2 rounded-md
-                  px-2 py-1.5 text-left text-sm transition-colors
+                  px-2 py-1.5 text-left text-sm
                   ${isActive
                     ? "bg-info/10 font-medium text-info"
                     : "text-foreground hover:bg-muted"}

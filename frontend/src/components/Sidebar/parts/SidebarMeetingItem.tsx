@@ -41,9 +41,16 @@ export function SidebarMeetingItem({
           onClick();
         }
       }}
+      // No transition on the row itself — when scrubbing the cursor
+      // through a long meeting list, every boundary crossing fires a
+      // start + end transition pair, and even cheap color transitions
+      // accumulate into perceptible paint storms (each card hover was
+      // contributing ~16ms paint per frame in the WebKit timeline,
+      // multiplied by every adjacent row whose hover state was
+      // changing). Instant hover state is fast and visually fine for
+      // a dense list.
       className={`
         group relative cursor-pointer rounded-md px-2 py-1.5 text-sm
-        transition-colors
         ${isActive
           ? "bg-info/10 text-info"
           : "text-foreground hover:bg-muted"}
