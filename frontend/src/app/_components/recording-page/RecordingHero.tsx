@@ -40,7 +40,9 @@ export function RecordingHero({ onStart, isStarting }: RecordingHeroProps) {
     : null;
 
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-6 px-6 py-10">
+    // `w-full` is essential — without it the hero sits as a content-sized
+    // flex item inside its row-flex parent and visually pins to the left.
+    <div className="flex h-full w-full flex-col items-center justify-center gap-6 px-6 py-10">
       <DeviceSummary disabled={isStarting} />
 
       <div className="flex flex-col items-center gap-4">

@@ -28,11 +28,18 @@ export function HeroStartButton({
   return (
     <div className="relative inline-flex items-center justify-center">
       {/* Soft pulsing halo behind the button — purely decorative, signals
-          "ready to record". Disabled (visually muted) when the button is. */}
+          "ready to record". `pointer-events-none` is critical because the
+          ping animation expands the halo well past the button's radius
+          (overlapping the device-chip row above) and would otherwise
+          intercept clicks during the "large" frames of each cycle. */}
       {!isDisabled && (
-        <span className="
-          absolute inset-0 -m-2 animate-ping rounded-full bg-destructive/20
-        " />
+        <span
+          aria-hidden
+          className="
+            pointer-events-none absolute inset-0 -m-2 animate-ping
+            rounded-full bg-destructive/20
+          "
+        />
       )}
       <button
         type="button"
