@@ -44,9 +44,12 @@ export function ModelManager({
   );
   const [hasUserSelection, setHasUserSelection] = useState(false);
 
-  // Refs for stable callbacks
+  // Refs for stable callbacks. Mirroring props/state into refs lets the
+  // (heavy) listener-setup effect below run exactly once on mount
+  // without capturing stale values.
   const onModelSelectRef = useRef(onModelSelect);
   const autoSaveRef = useRef(autoSave);
+  const modelsRef = useRef<ModelInfo[]>([]);
 
   // Progress throttle map to prevent rapid updates
   const progressThrottleRef = useRef<
@@ -58,6 +61,21 @@ export function ModelManager({
     onModelSelectRef.current = onModelSelect;
     autoSaveRef.current = autoSave;
   }, [onModelSelect, autoSave]);
+
+  // Mirror the `models` state into a ref so the listener closures can
+  // read the current array without forcing the listener-setup effect
+  // to re-run (and tear-down + re-register three Tauri listeners) every
+  // time progress fires.
+  useEffect(() => {
+    modelsRef.current = models;
+  }, [models]);
+
+  // Same trick for `downloadModel`, which itself is recreated whenever
+  // `downloadingModels` changes (start of a download). The "Retry"
+  // toast inside the download-error listener needs to call the latest
+  // version, but we don't want listener re-registration whenever
+  // the callback's identity flips.
+  const downloadModelRef = useRef<(name: string) => Promise<void>>(async () => {});
 
   // Load persisted downloading state from localStorage
   const getPersistedDownloadingModels = (): Set<string> => {
@@ -141,7 +159,12 @@ export function ModelManager({
     };
 
     initializeModels();
-  }, [initialized, selectedModel, onModelSelect]);
+    // Only `initialized` is meaningful as a dep — `selectedModel` and
+    // `onModelSelect` previously made this effect re-run on every
+    // parent render (the parent created a new onModelSelect ref each
+    // render). The body short-circuits with `if (initialized) return`
+    // so re-runs were "harmless" but allocated a closure each click.
+  }, [initialized]);
 
   // getDisplayName, saveModelSelection, and downloadModel are declared before the
   // listener-setup effect so its closures can reference them without TDZ issues.
@@ -224,6 +247,11 @@ export function ModelManager({
     [downloadingModels, getDisplayName],
   );
 
+  // Keep the ref in sync with the latest downloadModel callback.
+  useEffect(() => {
+    downloadModelRef.current = downloadModel;
+  }, [downloadModel]);
+
   // Set up event listeners for download progress
   useEffect(() => {
     let unlistenProgress: (() => void) | null = null;
@@ -275,7 +303,7 @@ export function ModelManager({
         "model-download-complete",
         (event) => {
           const { modelName } = event.payload;
-          const model = models.find((m) => m.name === modelName);
+          const model = modelsRef.current.find((m) => m.name === modelName);
           const displayName = getDisplayName(modelName);
 
           setModels((prevModels) =>
@@ -342,7 +370,7 @@ export function ModelManager({
             duration: 6000,
             action: {
               label: "Retry",
-              onClick: () => downloadModel(modelName),
+              onClick: () => downloadModelRef.current(modelName),
             },
           });
         },
@@ -357,7 +385,14 @@ export function ModelManager({
       if (unlistenComplete) unlistenComplete();
       if (unlistenError) unlistenError();
     };
-  }, [getDisplayName, saveModelSelection, downloadModel, models]);
+    // Run once on mount. The closures inside read fresh values via
+    // `modelsRef`, `downloadModelRef`, `onModelSelectRef`,
+    // `autoSaveRef`. Both `getDisplayName` and `saveModelSelection`
+    // are stable `useCallback(..., [])` so they don't need to be
+    // listed; including them is fine but they're omitted to make
+    // intent clear ("this should never re-register").
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const cancelDownload = async (modelName: string) => {
     const displayName = getDisplayName(modelName);

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Select,
@@ -94,19 +94,29 @@ export function TranscriptSettings({
     }
   };
 
-  const handleWhisperModelSelect = (modelName: string) => {
-    // Always update config when model is selected, regardless of current provider
-    // This ensures the model is set when user switches back
-    setTranscriptModelConfig({
-      ...transcriptModelConfig,
-      provider: "localWhisper", // Ensure provider is set correctly
+  // Stable refs so the memoized callback below doesn't capture changing
+  // values. This is the difference between "re-creates on every render"
+  // (which propagates to WhisperModelManager and re-fires its effects)
+  // and "stable for the component's lifetime".
+  const configRef = useRef(transcriptModelConfig);
+  const setConfigRef = useRef(setTranscriptModelConfig);
+  const onModelSelectRef = useRef(onModelSelect);
+  useEffect(() => {
+    configRef.current = transcriptModelConfig;
+    setConfigRef.current = setTranscriptModelConfig;
+    onModelSelectRef.current = onModelSelect;
+  }, [transcriptModelConfig, setTranscriptModelConfig, onModelSelect]);
+
+  // Stable for the component's lifetime — WhisperModelManager's effects
+  // can include this in deps without re-firing on every parent render.
+  const handleWhisperModelSelect = useCallback((modelName: string) => {
+    setConfigRef.current({
+      ...configRef.current,
+      provider: "localWhisper",
       model: modelName,
     });
-    // Close modal after selection
-    if (onModelSelect) {
-      onModelSelect();
-    }
-  };
+    onModelSelectRef.current?.();
+  }, []);
 
   return (
     <div className="space-y-4">
