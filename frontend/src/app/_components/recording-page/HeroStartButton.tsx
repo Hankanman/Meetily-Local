@@ -26,44 +26,32 @@ export function HeroStartButton({
   const isDisabled = disabled || isStarting;
 
   return (
-    <div className="relative inline-flex items-center justify-center">
-      {/* Soft pulsing halo behind the button — purely decorative, signals
-          "ready to record". `pointer-events-none` is critical because the
-          ping animation expands the halo well past the button's radius
-          (overlapping the device-chip row above) and would otherwise
-          intercept clicks during the "large" frames of each cycle. */}
-      {!isDisabled && (
-        <span
-          aria-hidden
-          className="
-            pointer-events-none absolute inset-0 -m-2 animate-ping
-            rounded-full bg-destructive/20
-          "
-        />
+    // No constant pulse animation — the button is already visually loud
+    // (big, red, circular) and the recording page can sit idle for long
+    // periods. We rely on hover/active scale + a soft hover ring for
+    // interactive feedback instead.
+    <button
+      type="button"
+      onClick={onStart}
+      disabled={isDisabled}
+      aria-label="Start recording"
+      className={`
+        relative flex size-28 items-center justify-center rounded-full
+        text-white shadow-lg transition-all duration-150
+        ${isDisabled
+          ? "cursor-not-allowed bg-muted text-muted-foreground"
+          : `
+            bg-destructive
+            hover:scale-105 hover:shadow-xl hover:ring-8 hover:ring-destructive/15
+            active:scale-95
+          `}
+      `}
+    >
+      {isStarting ? (
+        <Spinner size="lg" className="text-background" />
+      ) : (
+        <Mic className="size-12" />
       )}
-      <button
-        type="button"
-        onClick={onStart}
-        disabled={isDisabled}
-        aria-label="Start recording"
-        className={`
-          relative flex size-28 items-center justify-center rounded-full
-          text-white shadow-lg transition-transform
-          ${isDisabled
-            ? "cursor-not-allowed bg-muted text-muted-foreground"
-            : `
-              bg-destructive
-              hover:scale-105
-              active:scale-95
-            `}
-        `}
-      >
-        {isStarting ? (
-          <Spinner size="lg" className="text-background" />
-        ) : (
-          <Mic className="size-12" />
-        )}
-      </button>
-    </div>
+    </button>
   );
 }
