@@ -314,14 +314,11 @@ export function BuiltInModelManager({
             <div
               key={model.name}
               className={cn(
-                "rounded-lg border p-4 transition-colors",
+                "rounded-lg border p-4",
                 modelIsDownloading ? "border-border bg-background" : "bg-card",
                 selectedModel === model.name
                   ? "border-foreground ring-2 ring-foreground"
-                  : `
-                    border-border
-                    hover:border-border
-                  `,
+                  : "border-border",
                 isAvailable && !modelIsDownloading && "cursor-pointer",
               )}
               onClick={() => {
@@ -485,7 +482,7 @@ export function BuiltInModelManager({
                     selectedModel !== model.name && (
                       <button
                         className="
-                          rounded-md p-2 text-muted-foreground transition-colors
+                          rounded-md p-2 text-muted-foreground
                           hover:bg-muted hover:text-destructive
                         "
                         onClick={(e) => {

@@ -30,9 +30,13 @@ export function SidebarFooter({
   onSettings,
   versionLabel,
 }: SidebarFooterProps) {
+  // No hover transition — same reason as the meeting list rows. The
+  // footer has 2–3 buttons stacked, and scrubbing across them with the
+  // cursor was firing simultaneous color transitions that compounded
+  // into wide paint frames.
   const rowClass = `
     flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm
-    text-foreground transition-colors
+    text-foreground
     hover:bg-muted
   `;
 

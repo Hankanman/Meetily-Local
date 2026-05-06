@@ -41,8 +41,14 @@ export function SettingsSidebar({
   return (
     <nav
       aria-label="Settings categories"
+      // Solid `bg-muted` (not `bg-muted/30`) — translucent backgrounds
+      // force the compositor to recomposite the rail every time anything
+      // beneath the layer changes (hover effects on the page sidebar to
+      // the left, content updates in the panel to the right). With a
+      // page that has frequent hovers, that recomposite cost shows up as
+      // wide paint frames on the WebKit timeline.
       className="
-        flex w-56 shrink-0 flex-col border-r border-border bg-muted/30 py-4
+        flex w-56 shrink-0 flex-col border-r border-border bg-muted py-4
       "
     >
       <div className="relative px-3 pb-3">

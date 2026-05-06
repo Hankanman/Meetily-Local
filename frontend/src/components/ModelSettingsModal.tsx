@@ -1581,16 +1581,13 @@ export function ModelSettingsModal({
                           <div
                             key={model.id}
                             className={cn(
-                              `
-                                m-0 rounded-md border bg-card p-2
-                                transition-colors
-                              `,
+                              "m-0 rounded-md border bg-card p-2",
                               modelConfig.model === model.name
                                 ? `
                                   background-blue-100 border-info ring-1
                                   ring-info
                                 `
-                                : "hover:bg-muted/50",
+                                : "hover:bg-muted",
                               !modelIsDownloading && "cursor-pointer",
                             )}
                             onClick={() => {
