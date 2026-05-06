@@ -274,10 +274,7 @@ export function DeviceSelection({
             <SelectContent>
               <SelectItem value="default">Default Microphone</SelectItem>
               {inputDevices.map((device) => (
-                <SelectItem
-                  key={device.name}
-                  value={`${device.name} (${device.device_type.toLowerCase()})`}
-                >
+                <SelectItem key={device.name} value={device.name}>
                   {device.name}
                 </SelectItem>
               ))}
@@ -354,10 +351,7 @@ export function DeviceSelection({
             <SelectContent>
               <SelectItem value="default">Default System Audio</SelectItem>
               {outputDevices.map((device) => (
-                <SelectItem
-                  key={device.name}
-                  value={`${device.name} (${device.device_type.toLowerCase()})`}
-                >
+                <SelectItem key={device.name} value={device.name}>
                   {device.name}
                 </SelectItem>
               ))}
