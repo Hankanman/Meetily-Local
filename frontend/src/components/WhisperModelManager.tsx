@@ -602,7 +602,15 @@ function ModelCard({
       : null;
 
   return (
-    <div
+    // `initial={false}` skips the entry animation — that fade-in was
+    // perceived as a flash on the settings page where loads are fast.
+    // The motion.div is kept (rather than a plain div) because nested
+    // <AnimatePresence> + motion.button on the hover-only delete
+    // button benefits from framer-motion's enclosing render context;
+    // a plain div parent worked but reportedly introduced interaction
+    // lag during model-selection clicks.
+    <motion.div
+      initial={false}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       className={`
@@ -844,6 +852,6 @@ function ModelCard({
           </motion.div>
         )}
       </div>
-    </div>
+    </motion.div>
   );
 }
