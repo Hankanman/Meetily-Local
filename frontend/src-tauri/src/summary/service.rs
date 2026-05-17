@@ -319,7 +319,7 @@ impl SummaryService {
                 if let Err(e) = SummaryProcessesRepository::update_process_completed(
                     &pool,
                     &meeting_id,
-                    result_json,
+                    result_json.clone(),
                     num_chunks,
                     duration,
                 )
@@ -328,6 +328,23 @@ impl SummaryService {
                     error!("Failed to save completed process for {}: {}", meeting_id, e);
                 } else {
                     info!("Summary saved successfully for meeting_id: {}", meeting_id);
+
+                    // Best-effort: drop a portable summary.md alongside
+                    // metadata.json / transcripts.json in the meeting
+                    // folder. Failure is non-fatal — the DB row is the
+                    // source of truth; the .md is a convenience export.
+                    if let Err(e) = crate::summary::markdown_export::write_summary_md(
+                        &pool,
+                        &meeting_id,
+                        &result_json,
+                    )
+                    .await
+                    {
+                        warn!(
+                            "Failed to write summary.md sidecar for {}: {}",
+                            meeting_id, e
+                        );
+                    }
                 }
             }
             Err(e) => {

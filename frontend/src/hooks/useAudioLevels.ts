@@ -18,7 +18,7 @@ interface AudioLevelUpdate {
 }
 
 /**
- * Subscribe to the backend `audio-level-updates` event and start/stop the
+ * Subscribe to the backend `audio-levels` event and start/stop the
  * monitor for the requested device names. Returns the latest level keyed
  * by device_name.
  *
@@ -64,7 +64,7 @@ export function useAudioLevels(
 
       try {
         unlisten = await listen<AudioLevelUpdate>(
-          "audio-level-updates",
+          "audio-levels",
           (event) => {
             const next = new Map<string, AudioLevel>();
             for (const lvl of event.payload.levels) {
@@ -74,7 +74,7 @@ export function useAudioLevels(
           },
         );
       } catch (err) {
-        console.error("Failed to subscribe to audio-level-updates:", err);
+        console.error("Failed to subscribe to audio-levels:", err);
       }
     })();
 

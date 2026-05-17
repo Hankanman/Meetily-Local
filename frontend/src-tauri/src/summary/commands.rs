@@ -46,6 +46,24 @@ pub async fn api_save_meeting_summary<R: Runtime>(
     match SummaryProcessesRepository::update_meeting_summary(pool, &meeting_id, &summary).await {
         Ok(true) => {
             log_info!("Summary saved successfully for meeting_id: {}", meeting_id);
+
+            // Mirror the saved markdown to summary.md in the meeting folder.
+            // Best-effort: if the meeting has no folder (auto_save was off)
+            // or the disk write fails, the DB save still succeeded.
+            if let Err(e) = crate::summary::markdown_export::write_summary_md(
+                pool,
+                &meeting_id,
+                &summary,
+            )
+            .await
+            {
+                log_warn!(
+                    "Failed to write summary.md sidecar for {}: {}",
+                    meeting_id,
+                    e
+                );
+            }
+
             Ok(serde_json::json!({
                 "message": "Meeting summary saved successfully"
             }))

@@ -64,7 +64,41 @@ pub fn configure_linux_audio(host: &cpal::Host) -> Result<Vec<AudioDevice>> {
     }
 
     // Monitor sources = system-audio capture (meeting participants).
-    if let Ok(alsa_host) = cpal::host_from_id(cpal::HostId::Alsa) {
+    //
+    // On modern Fedora / Arch / Ubuntu the host is PipeWire (with the
+    // `pipewire-alsa` shim). cpal's ALSA backend only sees ALSA PCMs
+    // (`arecord -L`), and per-sink `*.monitor` sources are PulseAudio
+    // / PipeWire concepts that don't appear in that list — so the
+    // previous `name.contains("monitor")` filter on
+    // `alsa_host.input_devices()` returned nothing on every modern
+    // Linux setup. We now ask `pactl` directly, which is the
+    // authoritative source. The capture path
+    // (`get_device_and_config` for `DeviceType::Output`) translates
+    // the user's pick back to a source name and redirects via
+    // `PIPEWIRE_NODE`.
+    let monitors_via_pactl = match super::pulseaudio::list_pulseaudio_monitors() {
+        Ok(m) => m,
+        Err(e) => {
+            log::warn!("pactl monitor enumeration failed: {}", e);
+            Vec::new()
+        }
+    };
+    if !monitors_via_pactl.is_empty() {
+        for monitor in monitors_via_pactl {
+            // Use the human description as the device name so the
+            // picker shows "Monitor of Arctis Pro Wireless Game"
+            // rather than the raw alsa_output.usb-... source name.
+            // Resolution back to the source name happens at capture
+            // time.
+            devices.push(AudioDevice::new(
+                format!("{} (System Audio)", monitor.description),
+                DeviceType::Output,
+            ));
+        }
+    } else if let Ok(alsa_host) = cpal::host_from_id(cpal::HostId::Alsa) {
+        // Fallback for hosts where pactl isn't installed but cpal
+        // somehow surfaces monitor sources (rare, mostly legacy
+        // PulseAudio + alsa-plugins-pulseaudio setups).
         for device in alsa_host.input_devices()? {
             if let Ok(name) = device.name() {
                 if name.contains("monitor") && is_user_facing_linux_device(&name) {

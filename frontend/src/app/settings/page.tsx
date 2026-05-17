@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   ArrowLeft,
+  CalendarDays,
   Database as DatabaseIcon,
   FlaskConical,
   Mic,
@@ -18,6 +19,7 @@ import { PreferenceSettings } from "@/components/PreferenceSettings";
 import { SummaryModelSettings } from "@/components/SummaryModelSettings";
 import { BetaSettings } from "@/components/BetaSettings";
 import { SpeakerSettings } from "@/components/SpeakerSettings";
+import { CalendarSettings } from "@/components/CalendarSettings";
 import { useConfig } from "@/contexts/ConfigContext";
 import { Button } from "@/components/ui/button";
 import { Page, PageBody } from "@/components/layout/Page";
@@ -55,6 +57,12 @@ const CATEGORIES: readonly SettingsCategory[] = [
     label: "Summary",
     description: "AI engine + model that generates meeting summaries.",
     icon: SparkleIcon,
+  },
+  {
+    id: "calendar",
+    label: "Calendar",
+    description: "Public ICS feeds. Link recordings to calendar events.",
+    icon: CalendarDays,
   },
   {
     id: "beta",
@@ -140,6 +148,7 @@ export default function SettingsPage() {
                 />
               )}
               {active.id === "summary" && <SummaryModelSettings />}
+              {active.id === "calendar" && <CalendarSettings />}
               {active.id === "beta" && <BetaSettings />}
             </SettingsSection>
           </main>

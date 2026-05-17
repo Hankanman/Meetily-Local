@@ -68,23 +68,32 @@ impl AudioDevice {
             return Err(anyhow!("Device name cannot be empty"));
         }
 
-        let (name, device_type) = if name.to_lowercase().ends_with("(input)") {
+        let lower = name.to_lowercase();
+        // Output devices on Linux are surfaced as
+        // `<description> (System Audio)` from `configure_linux_audio`,
+        // so accept that as an Output marker too. Keep the device name
+        // intact (suffix included) — capture-side resolution
+        // (`open_linux_system_audio_input`) trims it back to the
+        // description before doing the pactl lookup.
+        let (clean_name, device_type) = if lower.ends_with("(input)") {
             (
                 name.trim_end_matches("(input)").trim().to_string(),
                 DeviceType::Input,
             )
-        } else if name.to_lowercase().ends_with("(output)") {
+        } else if lower.ends_with("(output)") {
             (
                 name.trim_end_matches("(output)").trim().to_string(),
                 DeviceType::Output,
             )
+        } else if lower.ends_with("(system audio)") {
+            (name.to_string(), DeviceType::Output)
         } else {
             return Err(anyhow!(
                 "Device type (input/output) not specified in the name"
             ));
         };
 
-        Ok(AudioDevice::new(name, device_type))
+        Ok(AudioDevice::new(clean_name, device_type))
     }
 }
 
@@ -180,6 +189,77 @@ fn preferred_output_config(device: &cpal::Device) -> Result<cpal::SupportedStrea
         .map_err(|e| anyhow!("Failed to get default output config: {}", e))
 }
 
+/// Open the cpal default input *redirected* to a specific PulseAudio /
+/// PipeWire monitor source. The picker exposes monitor sources by their
+/// `pactl` description (e.g. "Monitor of Arctis Pro Wireless Game (System Audio)");
+/// here we translate that back to the source name (e.g.
+/// `alsa_output.usb-SteelSeries...stereo-game.monitor`) and set
+/// `PIPEWIRE_NODE` so `pipewire-alsa` binds the next opened PCM to that
+/// source. The env var is only read at `snd_pcm_open` time, so streams
+/// already running are unaffected and we restore the previous value
+/// once the open completes.
+#[cfg(target_os = "linux")]
+fn open_linux_system_audio_input(
+    device_name: &str,
+) -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
+    use cpal::traits::HostTrait;
+    use log::info;
+
+    // The picker labels are `<description> (System Audio)`; trim the
+    // suffix to get the raw description we matched on in pactl.
+    let description = device_name
+        .trim()
+        .trim_end_matches("(System Audio)")
+        .trim()
+        .to_string();
+
+    let source_name = match super::platform::resolve_source_name_by_description(&description) {
+        Ok(Some(n)) => n,
+        Ok(None) => {
+            return Err(anyhow!(
+                "No PulseAudio monitor source matches description '{}'. Refresh device list.",
+                description
+            ));
+        }
+        Err(e) => {
+            return Err(anyhow!(
+                "Failed to enumerate PulseAudio sources for '{}': {}",
+                description,
+                e
+            ));
+        }
+    };
+
+    info!(
+        "🔊 Linux system audio: redirecting cpal default input to PIPEWIRE_NODE={}",
+        source_name
+    );
+
+    let host = cpal::default_host();
+    let prev = std::env::var("PIPEWIRE_NODE").ok();
+    // SAFETY: this process is single-threaded with respect to env at
+    // this exact moment — `start_streams` opens streams sequentially.
+    // The env value is only consumed by snd_pcm_open under us, and we
+    // restore it before returning so subsequent opens (e.g. the level
+    // monitor) see the original setting.
+    std::env::set_var("PIPEWIRE_NODE", &source_name);
+
+    let opened = (|| -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
+        let device = host
+            .default_input_device()
+            .ok_or_else(|| anyhow!("no default input device available for system-audio redirect"))?;
+        let config = preferred_input_config(&device)?;
+        Ok((device, config))
+    })();
+
+    match prev {
+        Some(v) => std::env::set_var("PIPEWIRE_NODE", v),
+        None => std::env::remove_var("PIPEWIRE_NODE"),
+    }
+
+    opened
+}
+
 /// Get device and config for audio operations
 pub async fn get_device_and_config(
     audio_device: &AudioDevice,
@@ -223,19 +303,7 @@ pub async fn get_device_and_config(
 
                 #[cfg(target_os = "linux")]
                 {
-                    // For Linux, we use PulseAudio monitor sources for system audio.
-                    // Monitor sources are *input* PCMs in ALSA terms, so the same
-                    // 48 kHz preference applies.
-                    if let Ok(pulse_host) = cpal::host_from_id(cpal::HostId::Alsa) {
-                        for device in pulse_host.input_devices()? {
-                            if let Ok(name) = device.name() {
-                                if name == audio_device.name {
-                                    let config = preferred_input_config(&device)?;
-                                    return Ok((device, config));
-                                }
-                            }
-                        }
-                    }
+                    return open_linux_system_audio_input(&audio_device.name);
                 }
             }
         }

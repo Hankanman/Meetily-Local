@@ -10,6 +10,7 @@ import { EmptyStateSummary } from "@/components/EmptyStateSummary";
 import { ModelConfig } from "@/components/ModelSettingsModal";
 import { SummaryGeneratorButtonGroup } from "./SummaryGeneratorButtonGroup";
 import { SummaryUpdaterButtonGroup } from "./SummaryUpdaterButtonGroup";
+import { CalendarEventPanel } from "./CalendarEventPanel";
 import { RefObject } from "react";
 
 interface SummaryPanelProps {
@@ -121,6 +122,14 @@ export function SummaryPanel({
           onFinishEditing={onFinishEditTitle}
           onChange={onTitleChange}
         /> */}
+
+        {/* Calendar event link / metadata */}
+        <div className="mb-3">
+          <CalendarEventPanel
+            meetingId={meeting.id}
+            meetingCreatedAt={meeting.created_at}
+          />
+        </div>
 
         {/* Button groups - only show when summary exists */}
         {aiSummary && !isSummaryLoading && (
