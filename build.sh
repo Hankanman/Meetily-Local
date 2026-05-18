@@ -15,7 +15,10 @@
 #
 # Produces:
 #   target/release/bundle/appimage/meetily_<ver>_amd64.AppImage
-#   target/release/bundle/deb/meetily_<ver>_amd64.deb
+#
+# (The .deb target is intentionally skipped — it doesn't bundle
+# libsherpa-onnx-c-api.so so the resulting package wouldn't run on a clean
+# host. Use the AppImage, which embeds all native libs via linuxdeploy.)
 
 set -euo pipefail
 
@@ -68,8 +71,20 @@ case "$(uname -s)" in
             echo "==> CUDAARCHS=$CUDAARCHS"
         fi
 
+        # rust-lld on modern Rust requires every input to be PIE-relocatable.
+        # llama-cpp-sys-2's CUDA .cu.o files default to non-PIC, which triggers
+        # `R_X86_64_32 cannot be used against local symbol; recompile with -fPIC`
+        # when linking the llama-helper binary.
+        export CMAKE_POSITION_INDEPENDENT_CODE="${CMAKE_POSITION_INDEPENDENT_CODE:-ON}"
+
         # linuxdeploy's bundled `strip` chokes on SHT_RELR sections in modern Fedora libs.
         export NO_STRIP="${NO_STRIP:-1}"
+
+        # sherpa-onnx-sys drops `libsherpa-onnx-c-api.so` into target/release/ but
+        # leaves the meetily binary without a RUNPATH, so linuxdeploy fails with
+        # `Could not find dependency: libsherpa-onnx-c-api.so`. Point its
+        # dependency-resolver at the cargo output dir so it can bundle the lib.
+        export LD_LIBRARY_PATH="$ROOT/target/release${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         ;;
     Darwin)
         # macOS Metal/CoreML auto-enabled by whisper-rs feature flags
@@ -100,33 +115,71 @@ if [[ ! -d node_modules ]]; then
 fi
 
 # ----- build -----
-SCRIPT="tauri:build"
+# Feature flag matches the tauri:build:* npm scripts, but we drop the npm-script
+# layer so we can pass `--bundles appimage` to tauri without touching
+# tauri.conf.json (which still needs deb/msi/dmg for other platforms).
+TAURI_FEATURES=()
 case "$MODE" in
-    cuda)   SCRIPT="tauri:build:cuda" ;;
-    vulkan) SCRIPT="tauri:build:vulkan" ;;
-    cpu)    SCRIPT="tauri:build:cpu" ;;
+    cuda)   TAURI_FEATURES=(--features cuda) ;;
+    vulkan) TAURI_FEATURES=(--features vulkan) ;;
+    cpu)    ;;
 esac
 
-echo "==> Running pnpm run $SCRIPT"
+# ----- llama-helper sidecar -----
+# Tauri's externalBin expects binaries/llama-helper-<target-triple>; build it
+# with the same GPU backend as the main app.
+TARGET_TRIPLE="$(rustc -vV | awk '/^host:/ {print $2}')"
+HELPER_BIN_NAME="llama-helper"
+HELPER_SIDECAR_NAME="llama-helper-${TARGET_TRIPLE}"
+if [[ "$(uname -s)" == "MINGW"* || "$(uname -s)" == "MSYS"* ]]; then
+    HELPER_BIN_NAME="llama-helper.exe"
+    HELPER_SIDECAR_NAME="llama-helper-${TARGET_TRIPLE}.exe"
+fi
+
+HELPER_FEATURES=()
+case "$MODE" in
+    cuda)   HELPER_FEATURES=(--features cuda) ;;
+    vulkan) HELPER_FEATURES=(--features vulkan) ;;
+    cpu)    ;;  # no GPU feature
+esac
+
+echo "==> Building llama-helper sidecar (${MODE})"
+( cd "$ROOT/llama-helper" && cargo build --release "${HELPER_FEATURES[@]}" )
+
+HELPER_SRC="$ROOT/target/release/$HELPER_BIN_NAME"
+HELPER_DEST_DIR="$ROOT/frontend/src-tauri/binaries"
+HELPER_DEST="$HELPER_DEST_DIR/$HELPER_SIDECAR_NAME"
+mkdir -p "$HELPER_DEST_DIR"
+find "$HELPER_DEST_DIR" -maxdepth 1 -name 'llama-helper-*' -delete
+cp "$HELPER_SRC" "$HELPER_DEST"
+echo "==> Staged sidecar: $HELPER_DEST"
+
+echo "==> Running tauri build --bundles appimage (${MODE})"
 # Tauri exits 1 on the post-bundle TAURI_SIGNING_PRIVATE_KEY warning even when
 # bundles succeeded — verify by artifact existence rather than exit code.
+# `--` separates tauri-cli flags from cargo flags; only emit it when we have
+# cargo features to pass, otherwise tauri sees a bare `--` and parses oddly.
 set +e
-pnpm run "$SCRIPT"
+if (( ${#TAURI_FEATURES[@]} )); then
+    pnpm exec tauri build --bundles appimage -- "${TAURI_FEATURES[@]}"
+else
+    pnpm exec tauri build --bundles appimage
+fi
 BUILD_RC=$?
 set -e
 
 # ----- post-flight: locate artifacts -----
-APPIMAGE=$(ls -t "$ROOT"/target/release/bundle/appimage/*.AppImage 2>/dev/null | head -1)
-DEB=$(ls -t "$ROOT"/target/release/bundle/deb/*.deb 2>/dev/null | head -1)
+# `set -o pipefail` makes the ls-glob-then-head idiom abort the script when no
+# match exists, so use find — which simply emits zero lines without failing.
+APPIMAGE=$(find "$ROOT/target/release/bundle/appimage" -maxdepth 1 -name '*.AppImage' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
 
-if [[ -n "$APPIMAGE" || -n "$DEB" ]]; then
+if [[ -n "$APPIMAGE" ]]; then
     echo
     echo "==> Build succeeded"
-    [[ -n "$APPIMAGE" ]] && echo "    AppImage: $APPIMAGE ($(du -h "$APPIMAGE" | cut -f1))"
-    [[ -n "$DEB" ]]      && echo "    .deb:     $DEB ($(du -h "$DEB" | cut -f1))"
+    echo "    AppImage: $APPIMAGE ($(du -h "$APPIMAGE" | cut -f1))"
     exit 0
 else
     echo
-    echo "==> Build FAILED (no artifacts found, tauri exit code $BUILD_RC)" >&2
+    echo "==> Build FAILED (no AppImage found, tauri exit code $BUILD_RC)" >&2
     exit "$BUILD_RC"
 fi
