@@ -178,7 +178,7 @@ export function PermissionsStep() {
           <Button
             variant="link"
             onClick={handleSkip}
-            className="text-sm text-neutral-500 hover:text-neutral-700 hover:no-underline"
+            className="text-sm text-muted-foreground hover:text-foreground hover:no-underline"
           >
             I&apos;ll do this later
           </Button>

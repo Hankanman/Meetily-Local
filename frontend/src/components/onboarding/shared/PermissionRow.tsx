@@ -32,7 +32,7 @@ export function PermissionRow({
           ? "border-foreground bg-muted"
           : isDenied
             ? "border-destructive/30 bg-destructive/10"
-            : "border-neutral-200 bg-background",
+            : "border-border bg-background",
       )}
     >
       {/* Left side: Icon + Info */}
@@ -45,7 +45,7 @@ export function PermissionRow({
               ? "bg-muted"
               : isDenied
                 ? "bg-destructive/10"
-                : "bg-neutral-50",
+                : "bg-muted",
           )}
         >
           <div
@@ -54,7 +54,7 @@ export function PermissionRow({
                 ? "text-foreground"
                 : isDenied
                   ? "text-destructive"
-                  : "text-neutral-500",
+                  : "text-muted-foreground",
             )}
           >
             {icon}
@@ -63,7 +63,7 @@ export function PermissionRow({
 
         {/* Title + Description */}
         <div className="min-w-0 flex-1">
-          <div className="truncate font-medium text-neutral-900">{title}</div>
+          <div className="truncate font-medium text-foreground">{title}</div>
           <div className="text-sm text-muted-foreground">
             {isAuthorized ? (
               <span className="flex items-center gap-1 text-success">
