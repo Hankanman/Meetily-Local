@@ -26,6 +26,15 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
+      <head>
+        {/* Apply the saved theme before first paint to avoid a light/dark
+            flash. Mirrors ThemeContext's resolution; runs synchronously. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem('meetily-theme')||'system';var d=t==='dark'||(t!=='light'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches);var r=document.documentElement;r.classList.toggle('dark',d);r.style.colorScheme=d?'dark':'light';}catch(e){}})();`,
+          }}
+        />
+      </head>
       <body className={`${sourceSans3.variable} font-sans antialiased`}>
         <RootLayoutClient>{children}</RootLayoutClient>
       </body>
