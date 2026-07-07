@@ -8,6 +8,7 @@ import React, {
 import {
   Upload,
   Globe,
+  Users,
   AlertCircle,
   CheckCircle2,
   X,
@@ -85,6 +86,8 @@ export function ImportAudioDialog({
 
   const [title, setTitle] = useState("");
   const [selectedLang, setSelectedLang] = useState(selectedLanguage || "auto");
+  // 0 = auto-estimate the number of speakers; >0 forces exactly that many.
+  const [numSpeakers, setNumSpeakers] = useState(0);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [titleModifiedByUser, setTitleModifiedByUser] = useState(false);
 
@@ -215,6 +218,7 @@ export function ImportAudioDialog({
       effectiveLang === "auto" ? null : effectiveLang,
       selectedModel?.name || null,
       selectedModel?.provider || null,
+      numSpeakers,
     );
   };
 
@@ -421,6 +425,36 @@ export function ImportAudioDialog({
                             ))}
                           </SelectContent>
                         </Select>
+                      </div>
+
+                      {/* Number of speakers (accurate offline diarization) */}
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Users className="size-4 text-muted-foreground" />
+                          <span className="text-sm font-medium">
+                            Number of speakers
+                          </span>
+                        </div>
+                        <Select
+                          value={String(numSpeakers)}
+                          onValueChange={(v) => setNumSpeakers(Number(v))}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Auto-detect" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="0">Auto-detect</SelectItem>
+                            {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                              <SelectItem key={n} value={String(n)}>
+                                {n} speaker{n > 1 ? "s" : ""}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          Set the exact count for the most accurate labels, or
+                          leave on Auto-detect.
+                        </p>
                       </div>
 
                       {/* Model selector */}

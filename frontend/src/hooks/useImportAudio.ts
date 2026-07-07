@@ -54,6 +54,7 @@ export interface UseImportAudioReturn {
     language?: string | null,
     model?: string | null,
     provider?: string | null,
+    numSpeakers?: number | null,
   ) => Promise<void>;
   cancelImport: () => Promise<void>;
   reset: () => void;
@@ -213,6 +214,7 @@ export function useImportAudio({
       language?: string | null,
       model?: string | null,
       provider?: string | null,
+      numSpeakers?: number | null,
     ) => {
       isCancelledRef.current = false;
       setStatus("processing");
@@ -226,6 +228,8 @@ export function useImportAudio({
           language: language || null,
           model: model || null,
           provider: provider || null,
+          // 0 / null → auto-estimate the number of speakers.
+          numSpeakers: numSpeakers ?? null,
         });
       } catch (err: any) {
         setStatus("error");
