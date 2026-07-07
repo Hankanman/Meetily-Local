@@ -502,6 +502,28 @@ async fn ensure_required_models_downloaded<R: Runtime>(app: &AppHandle<R>) {
         }
     }
 
+    // ── Pyannote segmentation (offline / accurate diarization) ──
+    if let Some(seg_path) = speaker_diarization::model::pyannote_segmentation_path() {
+        if !speaker_diarization::model::model_is_ready(&seg_path) {
+            let url = speaker_diarization::model::pyannote_segmentation_download_url();
+            log::info!(
+                "[startup-download] pyannote segmentation missing — fetching {} (~5.7MB, one-time)",
+                url
+            );
+            match download_file_to(url, &seg_path).await {
+                Ok(()) => log::info!(
+                    "[startup-download] pyannote segmentation downloaded → {}",
+                    seg_path.display()
+                ),
+                Err(e) => log::warn!(
+                    "[startup-download] pyannote segmentation download failed: {} \
+                     (accurate offline diarization falls back to the online clusterer)",
+                    e
+                ),
+            }
+        }
+    }
+
     // ── Speaker embedding ──
     let Some(speaker_path) = speaker_diarization::default_model_path() else {
         log::warn!(

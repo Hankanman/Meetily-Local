@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex};
 pub(crate) mod clusterer;
 mod embedder;
 pub mod model;
+pub mod offline;
 mod profile_matcher;
 mod refinement;
 

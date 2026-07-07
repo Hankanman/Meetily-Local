@@ -22,6 +22,16 @@ pub const DEFAULT_MODEL_FILENAME: &str =
 /// runtime artefacts. Tiny (~2.3 MB).
 pub const SILERO_VAD_FILENAME: &str = "silero_vad.onnx";
 
+/// Pyannote segmentation model (ONNX) used by sherpa-onnx's *offline* speaker
+/// diarization. Unlike the online cosine clusterer, offline diarization does
+/// proper global clustering (and can be told the exact number of speakers),
+/// which is far more accurate. ~5.7 MB. Only needed for Import / re-diarize.
+pub const PYANNOTE_SEG_FILENAME: &str = "pyannote_segmentation_3_0.onnx";
+
+/// Direct ONNX download (HuggingFace), matching the single-file downloader.
+const PYANNOTE_SEG_URL: &str =
+    "https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/main/model.onnx";
+
 const MODEL_BASE_URL: &str =
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models";
 
@@ -80,6 +90,16 @@ pub fn silero_vad_path() -> Option<PathBuf> {
 /// Download URL for the silero-vad model.
 pub fn silero_vad_download_url() -> &'static str {
     SILERO_VAD_URL
+}
+
+/// Path to the pyannote segmentation model (offline diarization).
+pub fn pyannote_segmentation_path() -> Option<PathBuf> {
+    models_dir().map(|d| d.join(PYANNOTE_SEG_FILENAME))
+}
+
+/// Download URL for the pyannote segmentation model.
+pub fn pyannote_segmentation_download_url() -> &'static str {
+    PYANNOTE_SEG_URL
 }
 
 /// True when the model file exists on disk and is non-empty.
