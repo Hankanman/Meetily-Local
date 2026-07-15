@@ -54,18 +54,30 @@ pub fn list_pulseaudio_monitors() -> Result<Vec<MonitorSource>> {
     Ok(parse_pactl_sources(&stdout))
 }
 
-/// Find the PA source name whose `Description` matches `description`.
-/// Used to translate the user-picked label (which we expose as the
-/// device name) back to the actual source name we set as
-/// `PIPEWIRE_NODE`. Description match is exact and case-insensitive
-/// trimmed; PA descriptions are stable enough that this is safe.
+/// Find the PA source whose `Description` matches `description` and
+/// return the PipeWire node name to set as `PIPEWIRE_NODE`. Description
+/// match is exact and case-insensitive trimmed; PA descriptions are
+/// stable enough that this is safe.
 pub fn resolve_source_name_by_description(description: &str) -> Result<Option<String>> {
     let monitors = list_pulseaudio_monitors()?;
     let needle = description.trim().to_lowercase();
     Ok(monitors
         .into_iter()
         .find(|m| m.description.trim().to_lowercase() == needle)
-        .map(|m| m.name))
+        .map(|m| capture_node_name(m.name)))
+}
+
+/// `PIPEWIRE_NODE` must name a real PipeWire node. The pulse-compat
+/// `<sink>.monitor` source is not one — passing it leaves the capture
+/// stream waiting forever for a node that doesn't exist (the PCM opens
+/// fine but no data ever arrives). Target the sink node itself instead;
+/// PipeWire connects capture streams to a sink's monitor ports
+/// automatically.
+fn capture_node_name(source_name: String) -> String {
+    match source_name.strip_suffix(".monitor") {
+        Some(sink) => sink.to_string(),
+        None => source_name,
+    }
 }
 
 fn parse_pactl_sources(stdout: &str) -> Vec<MonitorSource> {
@@ -133,6 +145,18 @@ Source #13141\n\
 \tProperties:\n\
 \t\tdevice.class = \"monitor\"\n\
 ";
+
+    #[test]
+    fn capture_node_name_strips_monitor_suffix() {
+        assert_eq!(
+            capture_node_name("alsa_output.pci-0000_2d_00.1.hdmi-stereo.monitor".into()),
+            "alsa_output.pci-0000_2d_00.1.hdmi-stereo"
+        );
+        assert_eq!(
+            capture_node_name("alsa_input.usb-mic-00.pro-input-0".into()),
+            "alsa_input.usb-mic-00.pro-input-0"
+        );
+    }
 
     #[test]
     fn parses_only_monitor_sources() {
