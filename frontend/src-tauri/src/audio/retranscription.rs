@@ -4,7 +4,7 @@ use super::common::{
     create_transcript_segments, split_segment_at_silence, write_transcripts_json, BatchTranscript,
 };
 use super::constants::AUDIO_EXTENSIONS;
-use crate::audio::decoder::decode_audio_file;
+use crate::audio::decoder::{decode_audio_file_with_progress, ProgressCallback};
 use crate::audio::vad::get_speech_chunks_with_progress;
 use crate::config::DEFAULT_WHISPER_MODEL;
 use crate::state::AppState;
@@ -216,11 +216,18 @@ async fn run_retranscription<R: Runtime>(
         return Err(anyhow!("Retranscription cancelled"));
     }
 
-    // Decode the audio file (CPU-intensive, run in blocking task)
+    // Decode the audio file (CPU-intensive, run in blocking task). The
+    // progress callback here only exists to honor cancellation mid-decode
+    // (same convention as the VAD callback below) — retranscription doesn't
+    // surface per-percentage decode progress today.
     let path_for_decode = audio_path.clone();
-    let decoded = tokio::task::spawn_blocking(move || decode_audio_file(&path_for_decode))
-        .await
-        .map_err(|e| anyhow!("Decode task panicked: {}", e))??;
+    let decoded = tokio::task::spawn_blocking(move || {
+        let cancel_check: ProgressCallback =
+            Box::new(|_progress, _msg| !RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst));
+        decode_audio_file_with_progress(&path_for_decode, Some(cancel_check))
+    })
+    .await
+    .map_err(|e| anyhow!("Decode task panicked: {}", e))??;
     let duration_seconds = decoded.duration_seconds;
 
     info!(
@@ -241,10 +248,15 @@ async fn run_retranscription<R: Runtime>(
         return Err(anyhow!("Retranscription cancelled"));
     }
 
-    // Convert to 16kHz mono format (CPU-intensive, run in blocking task)
-    let audio_samples = tokio::task::spawn_blocking(move || decoded.to_whisper_format())
-        .await
-        .map_err(|e| anyhow!("Resample task panicked: {}", e))?;
+    // Convert to 16kHz mono format (CPU-intensive, run in blocking task).
+    // Same cancellation-only callback convention as the decode step above.
+    let audio_samples = tokio::task::spawn_blocking(move || {
+        let cancel_check: ProgressCallback =
+            Box::new(|_progress, _msg| !RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst));
+        decoded.to_whisper_format_with_progress(Some(cancel_check))
+    })
+    .await
+    .map_err(|e| anyhow!("Resample task panicked: {}", e))??;
     info!(
         "Converted to 16kHz mono format: {} samples",
         audio_samples.len()

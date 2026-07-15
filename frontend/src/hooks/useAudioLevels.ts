@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -29,17 +29,17 @@ export function useAudioLevels(
   deviceNames: string[] | null,
 ): Map<string, AudioLevel> {
   const [levels, setLevels] = useState<Map<string, AudioLevel>>(new Map());
-  // Track the most-recently-requested set so we don't flap the backend on
-  // every re-render — only restart monitoring when the names actually change.
-  const lastKey = useRef<string | null>(null);
+  // Derive a stable, content-based key instead of depending on the
+  // `deviceNames` array reference directly — callers commonly rebuild the
+  // array on every render, and keying the effect on the reference would
+  // tear down the listener (React always runs the previous effect's
+  // cleanup when a dep changes) without ever re-subscribing, since the
+  // effect itself has no way to "undo" a cleanup that already ran.
+  const key = deviceNames === null ? null : [...deviceNames].sort().join("|");
 
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-
-    const key = deviceNames === null ? null : [...deviceNames].sort().join("|");
-    if (key === lastKey.current) return;
-    lastKey.current = key;
 
     (async () => {
       // Stop any prior monitor before starting (or stopping) again.
@@ -85,7 +85,12 @@ export function useAudioLevels(
       // The cleanup-on-unmount case is handled by the parent component
       // dropping `deviceNames` to null before unmount.
     };
-  }, [deviceNames]);
+    // `deviceNames` is intentionally omitted — the effect keys on the
+    // content-derived `key` above so a fresh array with the same names
+    // doesn't restart monitoring, but `deviceNames` itself always reflects
+    // the same content as `key` whenever this effect actually runs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
 
   // Stop monitoring on full unmount.
   useEffect(() => {

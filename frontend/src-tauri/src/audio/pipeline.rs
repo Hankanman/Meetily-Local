@@ -29,21 +29,21 @@ struct AudioMixerRingBuffer {
 impl AudioMixerRingBuffer {
     fn new(sample_rate: u32) -> Self {
         // Use 50ms windows for mixing
-        let window_ms = 600.0;
+        let window_ms = 50.0;
         let window_size_samples = (sample_rate as f32 * window_ms / 1000.0) as usize;
 
-        // CRITICAL FIX: Increase max buffer to 400ms for system audio stability
-        // System audio (especially Core Audio on macOS) can have significant jitter
-        // due to sample-by-sample streaming → batching → channel transmission
-        // Accounts for: RNNoise buffering + Core Audio jitter + processing delays
-        let max_buffer_size = window_size_samples * 8; // 400ms (was 200ms)
+        // CRITICAL FIX: Size the safety buffer in absolute time, independent of
+        // the mixing window, so shrinking the window (for latency) doesn't also
+        // shrink our jitter tolerance. System audio (especially Core Audio on
+        // macOS) can have significant jitter due to sample-by-sample streaming
+        // → batching → channel transmission. Accounts for: RNNoise buffering +
+        // Core Audio jitter + processing delays.
+        let max_buffer_ms = 4800.0;
+        let max_buffer_size = (sample_rate as f32 * max_buffer_ms / 1000.0) as usize;
 
         info!(
             "🔊 Ring buffer initialized: window={}ms ({} samples), max={}ms ({} samples)",
-            window_ms,
-            window_size_samples,
-            window_ms * 8.0,
-            max_buffer_size
+            window_ms, window_size_samples, max_buffer_ms, max_buffer_size
         );
 
         Self {
@@ -181,8 +181,7 @@ impl ProfessionalAudioMixer {
             // Pre-scale system audio to 70% to leave headroom
             // This prevents constant soft scaling which can cause pumping artifacts
             // Mic is normalized to -23 LUFS (already optimal), system needs reduction
-            let sys_scaled = sys * 1.0;
-            let _mic_scaled = mic * 0.8; // Reserved for future mic scaling
+            let sys_scaled = sys * 0.7;
 
             // Sum without ducking - mic stays at full volume, system slightly reduced
             let sum = mic + sys_scaled;

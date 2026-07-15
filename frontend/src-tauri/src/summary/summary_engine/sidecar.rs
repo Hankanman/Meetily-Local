@@ -44,6 +44,12 @@ pub struct SidecarManager {
     /// Active request count (for graceful shutdown)
     active_request_count: Arc<AtomicUsize>,
 
+    /// Serializes the full write-request + read-response round trip so
+    /// concurrent callers (including the background health-check ping)
+    /// can never interleave their stdin writes/stdout reads and end up
+    /// reading back a response meant for a different request.
+    request_lock: Arc<Mutex<()>>,
+
     /// Path to llama-helper binary
     helper_binary_path: PathBuf,
 
@@ -98,6 +104,7 @@ impl SidecarManager {
             is_healthy: Arc::new(AtomicBool::new(false)),
             should_shutdown: Arc::new(AtomicBool::new(false)),
             active_request_count: Arc::new(AtomicUsize::new(0)),
+            request_lock: Arc::new(Mutex::new(())),
             helper_binary_path,
             current_model_path: Arc::new(RwLock::new(None)),
             idle_timeout_secs,
@@ -421,6 +428,12 @@ impl SidecarManager {
         // Track active request
         let _guard = RequestGuard::new(self.active_request_count.clone());
 
+        // Hold the request lock across the full write+read round trip so no
+        // other request (or the health-check ping) can write to stdin or
+        // read from stdout in between and end up matched to the wrong
+        // response line.
+        let _req_lock = self.request_lock.lock().await;
+
         // Write request to stdin
         {
             let mut stdin_lock = self.stdin_writer.lock().await;
@@ -479,6 +492,22 @@ impl SidecarManager {
 
     /// Send ping to keep sidecar alive
     async fn send_ping(&self) -> Result<()> {
+        // Try to grab the same lock `send_request` uses for its write+read
+        // round trip, without blocking. If a real request is in flight (or
+        // another ping already holds it), skip this cycle instead of
+        // waiting behind a possibly long-running generation — and, more
+        // importantly, instead of racing a real request for the same
+        // stdin/stdout pair, which could otherwise read back the wrong
+        // response (e.g. a generation result mistaken for a pong, or vice
+        // versa). The next health-check tick will simply try again.
+        let _req_lock = match self.request_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                log::debug!("Health check: sidecar busy, skipping ping this cycle");
+                return Ok(());
+            }
+        };
+
         let request = serde_json::json!({"type": "ping"}).to_string();
         let timeout = Duration::from_secs(5);
 
@@ -635,6 +664,7 @@ impl SidecarManager {
             is_healthy: self.is_healthy.clone(),
             should_shutdown: self.should_shutdown.clone(),
             active_request_count: self.active_request_count.clone(),
+            request_lock: self.request_lock.clone(),
             helper_binary_path: self.helper_binary_path.clone(),
             current_model_path: self.current_model_path.clone(),
             idle_timeout_secs: self.idle_timeout_secs,
@@ -657,7 +687,9 @@ impl SidecarManager {
                     continue;
                 }
 
-                // Don't ping if we are busy with a request
+                // Don't ping if we are busy with a request. This is just a
+                // cheap pre-filter — send_ping() also try-locks request_lock
+                // so any race left over from this check is handled safely.
                 if manager.active_request_count.load(Ordering::SeqCst) > 0 {
                     continue;
                 }
@@ -683,6 +715,7 @@ impl SidecarManager {
             is_healthy: self.is_healthy.clone(),
             should_shutdown: self.should_shutdown.clone(),
             active_request_count: self.active_request_count.clone(),
+            request_lock: self.request_lock.clone(),
             helper_binary_path: self.helper_binary_path.clone(),
             current_model_path: self.current_model_path.clone(),
             idle_timeout_secs: self.idle_timeout_secs,

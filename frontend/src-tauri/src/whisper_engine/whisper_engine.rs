@@ -39,7 +39,10 @@ pub struct ModelInfo {
 
 pub struct WhisperEngine {
     models_dir: PathBuf,
-    current_context: Arc<RwLock<Option<WhisperContext>>>,
+    // Wrapped in an Arc so a cheap clone can be handed to spawn_blocking for
+    // inference/model-loading without holding the RwLock guard (or the
+    // WhisperContext itself) across the blocking call.
+    current_context: Arc<RwLock<Option<Arc<WhisperContext>>>>,
     current_model: Arc<RwLock<Option<String>>>,
     available_models: Arc<RwLock<HashMap<String, ModelInfo>>>,
     // State tracking for smart logging
@@ -286,7 +289,12 @@ impl WhisperEngine {
         match model_info.status {
             ModelStatus::Available => {
                 // FIX 5: Check if this model is already loaded
-                if let Some(current_model) = self.current_model.read().await.as_ref() {
+                // Clone into an owned value so the read guard is dropped
+                // before we potentially call unload_model() below — holding
+                // it across that call deadlocks, since unload_model() needs
+                // a write lock on this same field.
+                let currently_loaded = self.current_model.read().await.clone();
+                if let Some(current_model) = currently_loaded {
                     if current_model == model_name {
                         log::info!("Model {} is already loaded, skipping reload", model_name);
                         return Ok(());
@@ -333,17 +341,26 @@ impl WhisperEngine {
 
                 // PERFORMANCE: Suppress verbose C library logs during model loading
                 // This hides the excessive Metal/GGML initialization logs in release builds
-                let ctx = {
+                //
+                // Parsing model weights and allocating GPU buffers is a slow,
+                // synchronous operation (can take seconds for large models) —
+                // run it on a blocking-pool thread so it doesn't stall the
+                // async runtime.
+                let model_path = model_info.path.clone();
+                let model_name_owned = model_name.to_string();
+                let ctx = tokio::task::spawn_blocking(move || {
                     // let _suppressor = crate::whisper_engine::StderrSuppressor::new();
 
                     // Load whisper context with hardware-optimized parameters
-                    WhisperContext::new_with_params(&model_info.path, context_param)
-                        .map_err(|e| anyhow!("Failed to load model {}: {}", model_name, e))?
+                    WhisperContext::new_with_params(&model_path, context_param)
+                        .map_err(|e| anyhow!("Failed to load model {}: {}", model_name_owned, e))
                     // Suppressor dropped here, stderr restored
-                };
+                })
+                .await
+                .map_err(|e| anyhow!("Model loading task panicked: {}", e))??;
 
                 // Update current context and model
-                *self.current_context.write().await = Some(ctx);
+                *self.current_context.write().await = Some(Arc::new(ctx));
                 *self.current_model.write().await = Some(model_name.to_string());
 
                 // Enhanced acceleration status reporting
@@ -560,112 +577,127 @@ impl WhisperEngine {
         audio_data: Vec<f32>,
         language: Option<String>,
     ) -> Result<(String, f32, bool)> {
-        let ctx_lock = self.current_context.read().await;
-        let ctx = ctx_lock
-            .as_ref()
-            .ok_or_else(|| anyhow!("No model loaded. Please load a model first."))?;
-
-        // Get adaptive configuration based on hardware
-        let hardware_profile = crate::audio::HardwareProfile::detect();
-        let adaptive_config = hardware_profile.get_whisper_config();
-
-        // ADAPTIVE parameters - optimized for current hardware
-        let mut params = FullParams::new(SamplingStrategy::BeamSearch {
-            beam_size: adaptive_config.beam_size as i32,
-            patience: 1.0,
-        });
-
-        // Configure with adaptive settings
-        // If language is "auto" or None, use automatic language detection (pass None)
-        // If language is "auto-translate", enable translation to English
-        // Otherwise, use the specified language code
-        let (language_code, should_translate) = match language.as_deref() {
-            Some("auto") | None => (None, false),
-            Some("auto-translate") => (None, true),
-            Some(lang) => (Some(lang), false),
+        let ctx = {
+            let ctx_lock = self.current_context.read().await;
+            ctx_lock
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| anyhow!("No model loaded. Please load a model first."))?
         };
-        params.set_language(language_code);
-        params.set_translate(should_translate);
-
-        // CRITICAL: Disable timestamp tokens to prevent whisper.cpp chunking heuristics
-        // The "single timestamp ending - skip entire chunk" optimization incorrectly discards
-        // complete, valid transcriptions. Disabling timestamps forces whisper to return ALL text.
-        params.set_no_timestamps(true); // Prevent timestamp-based segment skipping
-        params.set_token_timestamps(true); // Keep for any timestamp-aware features
-
-        // PERFORMANCE: Disable ALL whisper.cpp internal printing
-        // This reduces C library log spam significantly
-        params.set_print_special(false); // Don't print special tokens
-        params.set_print_progress(false); // Don't print progress
-        params.set_print_realtime(false); // Don't print realtime info
-        params.set_print_timestamps(false); // Don't print timestamps
-
-        // Additional suppression to reduce C library verbosity
-        params.set_suppress_blank(true);
-        params.set_suppress_nst(true);
-        params.set_temperature(adaptive_config.temperature);
-        params.set_max_initial_ts(1.0);
-        params.set_entropy_thold(2.4);
-        params.set_logprob_thold(-1.0);
-        // BALANCED FIX: Lowered from 0.75 to 0.55 to allow quiet speech detection
-        // Previous value was too aggressive and rejected valid quiet speech
-        // 0.55 is balanced - prevents hallucinations while preserving quiet speech
-        params.set_no_speech_thold(0.55);
-        params.set_max_len(200);
-        params.set_single_segment(false);
-
-        // Set thread count based on hardware (if supported by whisper.cpp)
-        if let Some(_max_threads) = adaptive_config.max_threads {
-            // Note: whisper.cpp may or may not expose thread control through params
-            // Removed debug log to reduce I/O overhead in transcription hot path
-        }
 
         let duration_seconds = audio_data.len() as f64 / 16000.0;
         let is_partial = duration_seconds < 15.0; // Consider chunks under 15s as partial
 
         // PERFORMANCE: Suppress verbose C library logs during transcription
         // This hides whisper_full_with_state debug logs and beam search details
-        let (num_segments, state) = {
-            // let _suppressor = crate::whisper_engine::StderrSuppressor::new();
+        //
+        // Whisper inference — including building `FullParams`, which is CPU-
+        // bound and can take seconds — runs on a blocking-pool thread so it
+        // doesn't stall the async runtime. `FullParams::set_language` borrows
+        // from `language`, so building it here (rather than outside and
+        // moving it in) keeps that borrow entirely local to this closure;
+        // `language` is captured by value, so nothing non-'static crosses
+        // the spawn_blocking boundary.
+        let (result, total_confidence, segment_count) =
+            tokio::task::spawn_blocking(move || -> Result<(String, f32, i32)> {
+                // let _suppressor = crate::whisper_engine::StderrSuppressor::new();
 
-            let mut state = ctx.create_state()?;
-            state.full(params, &audio_data)?;
-            let num_segments = state.full_n_segments();
+                // Get adaptive configuration based on hardware
+                let hardware_profile = crate::audio::HardwareProfile::detect();
+                let adaptive_config = hardware_profile.get_whisper_config();
 
-            (num_segments, state)
-            // Suppressor dropped here, stderr restored
-        };
-        let mut result = String::new();
-        let mut total_confidence = 0.0;
-        let mut segment_count = 0;
+                // ADAPTIVE parameters - optimized for current hardware
+                let mut params = FullParams::new(SamplingStrategy::BeamSearch {
+                    beam_size: adaptive_config.beam_size as i32,
+                    patience: 1.0,
+                });
 
-        for i in 0..num_segments {
-            let Some(segment) = state.get_segment(i) else {
-                continue;
-            };
-            let segment_text = match segment.to_str_lossy() {
-                Ok(text) => text.into_owned(),
-                Err(_) => continue,
-            };
+                // Configure with adaptive settings
+                // If language is "auto" or None, use automatic language detection (pass None)
+                // If language is "auto-translate", enable translation to English
+                // Otherwise, use the specified language code
+                let (language_code, should_translate) = match language.as_deref() {
+                    Some("auto") | None => (None, false),
+                    Some("auto-translate") => (None, true),
+                    Some(lang) => (Some(lang), false),
+                };
+                params.set_language(language_code);
+                params.set_translate(should_translate);
 
-            // Calculate confidence based on segment length and duration (simplified approach)
-            let segment_length = segment_text.len() as f32;
-            let segment_confidence = if segment_length > 0.0 {
-                (segment_length / 100.0).min(0.9) + 0.1 // 0.1 to 1.0 confidence based on text length
-            } else {
-                0.1
-            };
-            total_confidence += segment_confidence;
-            segment_count += 1;
+                // CRITICAL: Disable timestamp tokens to prevent whisper.cpp chunking heuristics
+                // The "single timestamp ending - skip entire chunk" optimization incorrectly discards
+                // complete, valid transcriptions. Disabling timestamps forces whisper to return ALL text.
+                params.set_no_timestamps(true); // Prevent timestamp-based segment skipping
+                params.set_token_timestamps(true); // Keep for any timestamp-aware features
 
-            let cleaned_text = segment_text.trim();
-            if !cleaned_text.is_empty() {
-                if !result.is_empty() {
-                    result.push(' ');
+                // PERFORMANCE: Disable ALL whisper.cpp internal printing
+                // This reduces C library log spam significantly
+                params.set_print_special(false); // Don't print special tokens
+                params.set_print_progress(false); // Don't print progress
+                params.set_print_realtime(false); // Don't print realtime info
+                params.set_print_timestamps(false); // Don't print timestamps
+
+                // Additional suppression to reduce C library verbosity
+                params.set_suppress_blank(true);
+                params.set_suppress_nst(true);
+                params.set_temperature(adaptive_config.temperature);
+                params.set_max_initial_ts(1.0);
+                params.set_entropy_thold(2.4);
+                params.set_logprob_thold(-1.0);
+                // BALANCED FIX: Lowered from 0.75 to 0.55 to allow quiet speech detection
+                // Previous value was too aggressive and rejected valid quiet speech
+                // 0.55 is balanced - prevents hallucinations while preserving quiet speech
+                params.set_no_speech_thold(0.55);
+                params.set_max_len(200);
+                params.set_single_segment(false);
+
+                // Set thread count based on hardware (if supported by whisper.cpp)
+                if let Some(_max_threads) = adaptive_config.max_threads {
+                    // Note: whisper.cpp may or may not expose thread control through params
+                    // Removed debug log to reduce I/O overhead in transcription hot path
                 }
-                result.push_str(cleaned_text);
-            }
-        }
+
+                let mut state = ctx.create_state()?;
+                state.full(params, &audio_data)?;
+                let num_segments = state.full_n_segments();
+                // Suppressor dropped here, stderr restored
+
+                let mut result = String::new();
+                let mut total_confidence = 0.0f32;
+                let mut segment_count = 0;
+
+                for i in 0..num_segments {
+                    let Some(segment) = state.get_segment(i) else {
+                        continue;
+                    };
+                    let segment_text = match segment.to_str_lossy() {
+                        Ok(text) => text.into_owned(),
+                        Err(_) => continue,
+                    };
+
+                    // Calculate confidence based on segment length and duration (simplified approach)
+                    let segment_length = segment_text.len() as f32;
+                    let segment_confidence = if segment_length > 0.0 {
+                        (segment_length / 100.0).min(0.9) + 0.1 // 0.1 to 1.0 confidence based on text length
+                    } else {
+                        0.1
+                    };
+                    total_confidence += segment_confidence;
+                    segment_count += 1;
+
+                    let cleaned_text = segment_text.trim();
+                    if !cleaned_text.is_empty() {
+                        if !result.is_empty() {
+                            result.push(' ');
+                        }
+                        result.push_str(cleaned_text);
+                    }
+                }
+
+                Ok((result, total_confidence, segment_count))
+            })
+            .await
+            .map_err(|e| anyhow!("Transcription task panicked: {}", e))??;
 
         let final_result = result.trim().to_string();
         let cleaned_result = Self::clean_repetitive_text(&final_result);
@@ -684,62 +716,13 @@ impl WhisperEngine {
         audio_data: Vec<f32>,
         language: Option<String>,
     ) -> Result<String> {
-        let ctx_lock = self.current_context.read().await;
-        let ctx = ctx_lock
-            .as_ref()
-            .ok_or_else(|| anyhow!("No model loaded. Please load a model first."))?;
-
-        // Get adaptive configuration based on hardware
-        let hardware_profile = crate::audio::HardwareProfile::detect();
-        let adaptive_config = hardware_profile.get_whisper_config();
-
-        // ADAPTIVE parameters - optimized for current hardware
-        let mut params = FullParams::new(SamplingStrategy::BeamSearch {
-            beam_size: adaptive_config.beam_size as i32,
-            patience: 1.0,
-        });
-
-        // Configure for good quality
-        // If language is "auto" or None, use automatic language detection (pass None)
-        // If language is "auto-translate", enable translation to English
-        // Otherwise, use the specified language code
-        let (language_code, should_translate) = match language.as_deref() {
-            Some("auto") | None => (None, false),
-            Some("auto-translate") => (None, true),
-            Some(lang) => (Some(lang), false),
+        let ctx = {
+            let ctx_lock = self.current_context.read().await;
+            ctx_lock
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| anyhow!("No model loaded. Please load a model first."))?
         };
-        params.set_language(language_code);
-        params.set_translate(should_translate);
-
-        // CRITICAL: Disable timestamp tokens to prevent whisper.cpp chunking heuristics
-        // The "single timestamp ending - skip entire chunk" optimization incorrectly discards
-        // complete, valid transcriptions. Disabling timestamps forces whisper to return ALL text.
-        params.set_no_timestamps(true); // Prevent timestamp-based segment skipping
-        params.set_token_timestamps(true); // Keep for any timestamp-aware features
-
-        params.set_print_special(false);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(false);
-
-        // BALANCED settings - good quality with reasonable speed
-        params.set_suppress_blank(true);
-        params.set_suppress_nst(true);
-        params.set_temperature(0.3); // Lower than 0.4 for consistency, higher than 0.0 for quality
-        params.set_max_initial_ts(1.0);
-        params.set_entropy_thold(2.4);
-        params.set_logprob_thold(-1.0);
-        // BALANCED FIX: Lowered from 0.75 to 0.55 to allow quiet speech detection
-        // Previous value was too aggressive and rejected valid quiet speech
-        // 0.55 is balanced - prevents hallucinations while preserving quiet speech
-        params.set_no_speech_thold(0.55);
-
-        // Reasonable length limits
-        params.set_max_len(200); // Reasonable length
-        params.set_single_segment(false); // Allow multiple segments for better accuracy
-
-        // Note: compression_ratio_threshold would be ideal but not available in current whisper-rs
-        // This would help detect repetitive outputs: params.set_compression_ratio_threshold(2.4);
 
         // Duration-based optimization is handled by beam search parameters
         let duration_seconds = audio_data.len() as f64 / 16000.0; // Assuming 16kHz
@@ -794,60 +777,125 @@ impl WhisperEngine {
                 duration_seconds
             );
         }
-        let mut state = ctx.create_state()?;
-        state.full(params, &audio_data)?;
+        // Whisper inference — including building `FullParams`, which is CPU-
+        // bound and can take seconds — runs on a blocking-pool thread so it
+        // doesn't stall the async runtime. `FullParams::set_language` borrows
+        // from `language`, so building it here (rather than outside and
+        // moving it in) keeps that borrow entirely local to this closure;
+        // `language` is captured by value, so nothing non-'static crosses
+        // the spawn_blocking boundary.
+        let result = tokio::task::spawn_blocking(move || -> Result<String> {
+            // Get adaptive configuration based on hardware
+            let hardware_profile = crate::audio::HardwareProfile::detect();
+            let adaptive_config = hardware_profile.get_whisper_config();
 
-        // Extract text with improved segment handling
-        let num_segments = state.full_n_segments();
+            // ADAPTIVE parameters - optimized for current hardware
+            let mut params = FullParams::new(SamplingStrategy::BeamSearch {
+                beam_size: adaptive_config.beam_size as i32,
+                patience: 1.0,
+            });
 
-        // Performance optimization: reduce segment completion logging
-        // Only log for significant transcriptions to avoid I/O overhead
-        if (should_log_transcription || num_segments > 0)
-            && (num_segments > 3 || duration_seconds > 5.0)
-        {
-            perf_debug!(
-                "Transcription #{} completed with {} segments ({:.1}s)",
-                transcription_count,
-                num_segments,
-                duration_seconds
-            );
-        }
-        let mut result = String::new();
-
-        for i in 0..num_segments {
-            let Some(segment) = state.get_segment(i) else {
-                continue;
+            // Configure for good quality
+            // If language is "auto" or None, use automatic language detection (pass None)
+            // If language is "auto-translate", enable translation to English
+            // Otherwise, use the specified language code
+            let (language_code, should_translate) = match language.as_deref() {
+                Some("auto") | None => (None, false),
+                Some("auto-translate") => (None, true),
+                Some(lang) => (Some(lang), false),
             };
-            let segment_text = match segment.to_str_lossy() {
-                Ok(text) => text.into_owned(),
-                Err(_) => continue,
-            };
+            params.set_language(language_code);
+            params.set_translate(should_translate);
 
-            let _start_time = segment.start_timestamp();
-            let _end_time = segment.end_timestamp();
+            // CRITICAL: Disable timestamp tokens to prevent whisper.cpp chunking heuristics
+            // The "single timestamp ending - skip entire chunk" optimization incorrectly discards
+            // complete, valid transcriptions. Disabling timestamps forces whisper to return ALL text.
+            params.set_no_timestamps(true); // Prevent timestamp-based segment skipping
+            params.set_token_timestamps(true); // Keep for any timestamp-aware features
 
-            // Performance optimization: remove per-segment debug logging
-            // This was causing significant I/O overhead during transcription
-            // Only log segments for very long audio (>30s) or when explicitly debugging
-            if duration_seconds > 30.0 {
-                perf_trace!(
-                    "Segment {} ({:.2}s-{:.2}s): '{}'",
-                    i,
-                    _start_time as f64 / 100.0,
-                    _end_time as f64 / 100.0,
-                    segment_text
+            params.set_print_special(false);
+            params.set_print_progress(false);
+            params.set_print_realtime(false);
+            params.set_print_timestamps(false);
+
+            // BALANCED settings - good quality with reasonable speed
+            params.set_suppress_blank(true);
+            params.set_suppress_nst(true);
+            params.set_temperature(0.3); // Lower than 0.4 for consistency, higher than 0.0 for quality
+            params.set_max_initial_ts(1.0);
+            params.set_entropy_thold(2.4);
+            params.set_logprob_thold(-1.0);
+            // BALANCED FIX: Lowered from 0.75 to 0.55 to allow quiet speech detection
+            // Previous value was too aggressive and rejected valid quiet speech
+            // 0.55 is balanced - prevents hallucinations while preserving quiet speech
+            params.set_no_speech_thold(0.55);
+
+            // Reasonable length limits
+            params.set_max_len(200); // Reasonable length
+            params.set_single_segment(false); // Allow multiple segments for better accuracy
+
+            // Note: compression_ratio_threshold would be ideal but not available in current whisper-rs
+            // This would help detect repetitive outputs: params.set_compression_ratio_threshold(2.4);
+
+            let mut state = ctx.create_state()?;
+            state.full(params, &audio_data)?;
+
+            // Extract text with improved segment handling
+            let num_segments = state.full_n_segments();
+
+            // Performance optimization: reduce segment completion logging
+            // Only log for significant transcriptions to avoid I/O overhead
+            if (should_log_transcription || num_segments > 0)
+                && (num_segments > 3 || duration_seconds > 5.0)
+            {
+                perf_debug!(
+                    "Transcription #{} completed with {} segments ({:.1}s)",
+                    transcription_count,
+                    num_segments,
+                    duration_seconds
                 );
             }
+            let mut result = String::new();
 
-            // Clean and append segment text
-            let cleaned_text = segment_text.trim();
-            if !cleaned_text.is_empty() {
-                if !result.is_empty() {
-                    result.push(' ');
+            for i in 0..num_segments {
+                let Some(segment) = state.get_segment(i) else {
+                    continue;
+                };
+                let segment_text = match segment.to_str_lossy() {
+                    Ok(text) => text.into_owned(),
+                    Err(_) => continue,
+                };
+
+                let _start_time = segment.start_timestamp();
+                let _end_time = segment.end_timestamp();
+
+                // Performance optimization: remove per-segment debug logging
+                // This was causing significant I/O overhead during transcription
+                // Only log segments for very long audio (>30s) or when explicitly debugging
+                if duration_seconds > 30.0 {
+                    perf_trace!(
+                        "Segment {} ({:.2}s-{:.2}s): '{}'",
+                        i,
+                        _start_time as f64 / 100.0,
+                        _end_time as f64 / 100.0,
+                        segment_text
+                    );
                 }
-                result.push_str(cleaned_text);
+
+                // Clean and append segment text
+                let cleaned_text = segment_text.trim();
+                if !cleaned_text.is_empty() {
+                    if !result.is_empty() {
+                        result.push(' ');
+                    }
+                    result.push_str(cleaned_text);
+                }
             }
-        }
+
+            Ok(result)
+        })
+        .await
+        .map_err(|e| anyhow!("Transcription task panicked: {}", e))??;
 
         let final_result = result.trim().to_string();
 
@@ -1034,22 +1082,18 @@ impl WhisperEngine {
     ) -> Result<()> {
         log::info!("Starting download for model: {}", model_name);
 
-        // Check if download is already in progress for this model
+        // Atomically check-and-insert under a single write lock so two
+        // concurrent calls for the same model can't both pass the check and
+        // race to write the same file.
         {
-            let active = self.active_downloads.read().await;
-            if active.contains(model_name) {
+            let mut active = self.active_downloads.write().await;
+            if !active.insert(model_name.to_string()) {
                 log::warn!("Download already in progress for model: {}", model_name);
                 return Err(anyhow!(
                     "Download already in progress for model: {}",
                     model_name
                 ));
             }
-        }
-
-        // Add to active downloads
-        {
-            let mut active = self.active_downloads.write().await;
-            active.insert(model_name.to_string());
         }
 
         // Clear any previous cancellation flag for this model
@@ -1221,6 +1265,38 @@ impl WhisperEngine {
 
         log::info!("Streaming download completed: {} bytes", downloaded);
 
+        // Verify we actually received the whole file before trusting it — a
+        // stream that ends early without the HTTP client surfacing an error
+        // would otherwise get marked Available while truncated.
+        if total_size > 0 && downloaded != total_size {
+            log::warn!(
+                "Download for {} ended early: got {} of {} bytes",
+                model_name,
+                downloaded,
+                total_size
+            );
+            drop(file);
+            if let Err(e) = fs::remove_file(&file_path).await {
+                log::warn!("Failed to clean up truncated download file: {}", e);
+            }
+            {
+                let mut models = self.available_models.write().await;
+                if let Some(model_info) = models.get_mut(model_name) {
+                    model_info.status = ModelStatus::Missing;
+                }
+            }
+            {
+                let mut active = self.active_downloads.write().await;
+                active.remove(model_name);
+            }
+            return Err(anyhow!(
+                "Download incomplete for model {}: got {} of {} bytes",
+                model_name,
+                downloaded,
+                total_size
+            ));
+        }
+
         // Ensure 100% progress is always reported
         {
             let mut models = self.available_models.write().await;
@@ -1236,8 +1312,33 @@ impl WhisperEngine {
         file.flush()
             .await
             .map_err(|e| anyhow!("Failed to flush file: {}", e))?;
+        drop(file);
 
         log::info!("Download completed for model: {}", model_name);
+
+        // Validate the completed file's header before trusting it as usable
+        // (reuses the same GGML/GGUF magic-number check discover_models runs).
+        if let Err(e) = self.validate_model_file(&file_path).await {
+            log::warn!("Downloaded model {} failed validation: {}", model_name, e);
+            if let Err(remove_err) = fs::remove_file(&file_path).await {
+                log::warn!("Failed to clean up invalid download file: {}", remove_err);
+            }
+            {
+                let mut models = self.available_models.write().await;
+                if let Some(model_info) = models.get_mut(model_name) {
+                    model_info.status = ModelStatus::Missing;
+                }
+            }
+            {
+                let mut active = self.active_downloads.write().await;
+                active.remove(model_name);
+            }
+            return Err(anyhow!(
+                "Downloaded model {} failed validation: {}",
+                model_name,
+                e
+            ));
+        }
 
         // Update model status to available
         {

@@ -62,6 +62,10 @@ pub struct RecordingSaver {
     transcript_segments: Arc<Mutex<Vec<TranscriptSegment>>>,
     chunk_receiver: Option<mpsc::UnboundedReceiver<AudioChunk>>,
     is_saving: Arc<Mutex<bool>>,
+    // Handle to the accumulation task spawned in `start_accumulation`, so
+    // `stop_and_save` can wait for it to fully drain the channel (and write
+    // every already-queued chunk) instead of racing it with a fixed sleep.
+    accumulation_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl RecordingSaver {
@@ -74,6 +78,7 @@ impl RecordingSaver {
             transcript_segments: Arc::new(Mutex::new(Vec::new())),
             chunk_receiver: None,
             is_saving: Arc::new(Mutex::new(false)),
+            accumulation_task: None,
         }
     }
 
@@ -198,29 +203,23 @@ impl RecordingSaver {
         }
 
         // Start accumulation task
-        let is_saving_clone = self.is_saving.clone();
         let incremental_saver_arc = self.incremental_saver.clone();
         let save_audio = auto_save;
 
         if let Some(mut receiver) = self.chunk_receiver.take() {
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 info!(
                     "Recording saver accumulation task started (save_audio: {})",
                     save_audio
                 );
 
+                // Run until the channel closes and drains, not until some external
+                // "stop" flag flips. This guarantees every chunk already queued by
+                // the pipeline (including trailing chunks sent right before the
+                // pipeline shuts down) gets written before the task ends - the
+                // sender side is dropped only once the pipeline itself is fully
+                // stopped, so recv() naturally returns None only after that.
                 while let Some(chunk) = receiver.recv().await {
-                    // Check if we should continue
-                    let should_continue = if let Ok(is_saving) = is_saving_clone.lock() {
-                        *is_saving
-                    } else {
-                        false
-                    };
-
-                    if !should_continue {
-                        break;
-                    }
-
                     // Only process audio chunks if auto_save is enabled
                     if save_audio {
                         // Add chunk to incremental saver
@@ -240,6 +239,7 @@ impl RecordingSaver {
 
                 info!("Recording saver accumulation task ended");
             });
+            self.accumulation_task = Some(handle);
         }
 
         // Set saving flag
@@ -415,13 +415,27 @@ impl RecordingSaver {
     ) -> Result<Option<String>, String> {
         info!("Stopping recording saver");
 
-        // Stop accumulation
+        // Mark accumulation as stopping (informational only - the accumulation
+        // task itself only terminates once its channel closes and drains, so
+        // no chunk already queued at this point is lost).
         if let Ok(mut is_saving) = self.is_saving.lock() {
             *is_saving = false;
         }
 
-        // Give time for final chunks
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        // Wait for the accumulation task to fully drain and write every chunk
+        // the pipeline already queued before finalizing. The pipeline's sender
+        // is dropped before stop_and_save is called, so recv() returns None -
+        // and this resolves - once the queue is empty. Bounded so a leaked
+        // sender elsewhere can't hang shutdown forever.
+        if let Some(task) = self.accumulation_task.take() {
+            match tokio::time::timeout(tokio::time::Duration::from_secs(5), task).await {
+                Ok(Ok(())) => info!("Recording saver accumulation task drained cleanly"),
+                Ok(Err(e)) => warn!("Recording saver accumulation task panicked: {}", e),
+                Err(_) => {
+                    warn!("Timed out waiting for recording saver accumulation task to drain")
+                }
+            }
+        }
 
         // Check if incremental saver exists (indicates auto_save was enabled)
         let should_save_audio = self.incremental_saver.is_some();

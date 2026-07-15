@@ -25,7 +25,7 @@ pub fn sanitize_filename(name: &str) -> String {
 }
 
 /// Create a meeting folder with timestamp and return the path
-/// Creates structure: base_path/MeetingName_YYYY-MM-DD_HH-MM/
+/// Creates structure: base_path/MeetingName_YYYY-MM-DD_HH-MM-SS/
 ///                    ├── .checkpoints/  (for incremental saves, optional)
 ///
 /// # Arguments
@@ -37,10 +37,21 @@ pub fn create_meeting_folder(
     meeting_name: &str,
     create_checkpoints_dir: bool,
 ) -> Result<PathBuf> {
-    let timestamp = Utc::now().format("%Y-%m-%d_%H-%M").to_string();
+    let timestamp = Utc::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let sanitized_name = sanitize_filename(meeting_name);
-    let folder_name = format!("{}_{}", sanitized_name, timestamp);
-    let meeting_folder = base_path.join(folder_name);
+    let base_folder_name = format!("{}_{}", sanitized_name, timestamp);
+
+    // Guard against name collisions: two meetings with the same (sanitized)
+    // title created within the same second would otherwise resolve to the
+    // same path, and create_dir_all() on an existing folder succeeds
+    // silently — the second meeting's files would then overwrite the
+    // first's. Append a numeric suffix until we land on a free path.
+    let mut meeting_folder = base_path.join(&base_folder_name);
+    let mut suffix = 1u32;
+    while meeting_folder.exists() {
+        meeting_folder = base_path.join(format!("{}_{}", base_folder_name, suffix));
+        suffix += 1;
+    }
 
     // Create main meeting folder
     std::fs::create_dir_all(&meeting_folder)?;

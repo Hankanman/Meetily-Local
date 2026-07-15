@@ -362,6 +362,9 @@ async fn run_import<R: Runtime>(
         // Map decode progress: 15% + (progress * 0.05) to go from 15% to 20%
         let overall_progress = 15 + ((progress as f32 * 0.05) as u32);
         emit_progress(&app_for_decode, "decoding", overall_progress, msg);
+        // Returning false aborts decode_audio_file_with_progress immediately,
+        // same convention as the VAD progress callback below.
+        !IMPORT_CANCELLED.load(Ordering::SeqCst)
     });
 
     let path_for_decode = dest_path.clone();
@@ -391,13 +394,14 @@ async fn run_import<R: Runtime>(
         // Map resample progress: 20% + (progress * 0.05) to go from 20% to 25%
         let overall_progress = 20 + ((progress as f32 * 0.05) as u32);
         emit_progress(&app_for_resample, "resampling", overall_progress, msg);
+        !IMPORT_CANCELLED.load(Ordering::SeqCst)
     });
 
     let audio_samples = tokio::task::spawn_blocking(move || {
         decoded.to_whisper_format_with_progress(Some(resample_progress))
     })
     .await
-    .map_err(|e| anyhow!("Resample task join error: {}", e))?;
+    .map_err(|e| anyhow!("Resample task join error: {}", e))??;
     info!(
         "Converted to 16kHz mono format: {} samples",
         audio_samples.len()

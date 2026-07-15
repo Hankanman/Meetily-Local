@@ -535,7 +535,11 @@ export function ModelManager({
       {/* Basic Models */}
       <div className="space-y-3">
         {basicModels.map((model) => {
-          const isRecommended = model.name === "base";
+          // "medium-q5_0" is the app's default recommended model (see
+          // getRecommendedModel()'s no-specs fallback in lib/whisper.ts)
+          // and, unlike "base", is actually present in basicModelNames
+          // above — so this badge can actually render.
+          const isRecommended = model.name === "medium-q5_0";
           return (
             <ModelCard
               key={model.name}

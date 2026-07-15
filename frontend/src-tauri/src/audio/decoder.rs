@@ -22,9 +22,11 @@ use super::ffmpeg::find_ffmpeg_path;
 /// Extensions requiring ffmpeg pre-conversion (Symphonia lacks these demuxers/codecs)
 const FFMPEG_ONLY_EXTENSIONS: &[&str] = &["mkv", "webm", "wma"];
 
-/// Progress callback for long-running operations
-/// Returns current progress (0-100) and a message
-pub type ProgressCallback = Box<dyn Fn(u32, &str) + Send>;
+/// Progress callback for long-running operations.
+/// Called with the current progress (0-100) and a message. Return `false`
+/// to request cancellation of the current operation (mirrors the VAD
+/// progress callback convention).
+pub type ProgressCallback = Box<dyn Fn(u32, &str) -> bool + Send>;
 
 /// Decoded audio data from a file
 #[derive(Debug, Clone)]
@@ -46,14 +48,18 @@ impl DecodedAudio {
     /// (>5 min at 48kHz) use chunked sinc resampling to keep memory bounded
     /// while preserving audio quality for downstream VAD and transcription.
     pub fn to_whisper_format(&self) -> Vec<f32> {
+        // No callback is supplied, so cancellation can never be requested —
+        // this can't actually fail.
         self.to_whisper_format_with_progress(None)
+            .unwrap_or_default()
     }
 
-    /// Convert decoded audio to Whisper format with optional progress callback
+    /// Convert decoded audio to Whisper format with optional progress callback.
+    /// Returns `Err` if the callback requests cancellation mid-resample.
     pub fn to_whisper_format_with_progress(
         &self,
         progress_callback: Option<ProgressCallback>,
-    ) -> Vec<f32> {
+    ) -> Result<Vec<f32>> {
         // Step 1: Convert to mono if needed
         let mono_samples = if self.channels > 1 {
             info!(
@@ -92,7 +98,7 @@ impl DecodedAudio {
                     self.sample_rate,
                     WHISPER_SAMPLE_RATE,
                     progress_callback,
-                )
+                )?
             } else {
                 info!(
                     "Resampling {} samples from {}Hz to {}Hz",
@@ -109,9 +115,9 @@ impl DecodedAudio {
             for s in &mut resampled {
                 *s = s.clamp(-1.0, 1.0);
             }
-            resampled
+            Ok(resampled)
         } else {
-            mono_samples
+            Ok(mono_samples)
         }
     }
 }
@@ -136,9 +142,9 @@ fn chunked_resample_with_progress(
     from_rate: u32,
     to_rate: u32,
     progress_callback: Option<ProgressCallback>,
-) -> Vec<f32> {
+) -> Result<Vec<f32>> {
     if input.is_empty() || from_rate == to_rate {
-        return input.to_vec();
+        return Ok(input.to_vec());
     }
 
     // 60 seconds of audio at the source sample rate per chunk
@@ -206,7 +212,7 @@ fn chunked_resample_with_progress(
                     total_chunks,
                     e
                 );
-                return resample_audio(input, from_rate, to_rate);
+                return Ok(resample_audio(input, from_rate, to_rate));
             }
         }
 
@@ -220,10 +226,18 @@ fn chunked_resample_with_progress(
                     progress_pct
                 );
             }
-            callback(
+            if !callback(
                 progress_pct as u32,
                 &format!("Resampling audio: {:.0}%", progress_pct),
-            );
+            ) {
+                info!(
+                    "Resampling cancelled by callback at chunk {}/{} ({:.0}%)",
+                    chunk_idx + 1,
+                    total_chunks,
+                    progress_pct
+                );
+                return Err(anyhow!("Resampling cancelled"));
+            }
         }
     }
 
@@ -232,7 +246,7 @@ fn chunked_resample_with_progress(
         input.len(),
         output.len()
     );
-    output
+    Ok(output)
 }
 
 /// Normalize audio samples to the valid range (-1.0 to 1.0)
@@ -499,10 +513,11 @@ pub fn decode_audio_file_with_progress(
         .codec_params
         .n_frames
         .map(|frames| frames as f64 / sample_rate as f64);
-    let expected_samples =
+    let mut expected_samples =
         expected_duration.map(|dur| (dur * sample_rate as f64 * channels as f64) as usize);
 
     let mut last_progress = 0u32;
+    let mut packet_count: u64 = 0;
 
     loop {
         // Get the next packet
@@ -528,6 +543,8 @@ pub fn decode_audio_file_with_progress(
         // Decode the packet
         match decoder.decode(&packet) {
             Ok(decoded) => {
+                packet_count += 1;
+
                 // Initialize sample buffer if needed
                 if sample_buf.is_none() {
                     let spec = *decoded.spec();
@@ -540,6 +557,11 @@ pub fn decode_audio_file_with_progress(
                             channels, actual_channels
                         );
                         channels = actual_channels;
+                        // Recompute the expected sample count now that we know
+                        // the real channel count, so decode progress
+                        // percentages stay accurate for the rest of the file.
+                        expected_samples = expected_duration
+                            .map(|dur| (dur * sample_rate as f64 * channels as f64) as usize);
                     }
                     sample_buf = Some(SampleBuffer::<f32>::new(duration, spec));
                 }
@@ -550,16 +572,34 @@ pub fn decode_audio_file_with_progress(
                     all_samples.extend_from_slice(buf.samples());
                 }
 
-                // Emit progress updates (every 10%)
-                if let (Some(callback), Some(expected)) = (&progress_callback, expected_samples) {
-                    let current_progress =
-                        ((all_samples.len() as f64 / expected as f64) * 100.0) as u32;
-                    if current_progress >= last_progress + 10 && current_progress <= 100 {
-                        last_progress = current_progress;
-                        callback(
-                            current_progress,
-                            &format!("Decoding audio: {}%", current_progress),
-                        );
+                // Emit progress updates (every 10%) and honor cancellation.
+                if let Some(callback) = &progress_callback {
+                    let update = if let Some(expected) = expected_samples {
+                        let current_progress =
+                            ((all_samples.len() as f64 / expected as f64) * 100.0) as u32;
+                        if current_progress >= last_progress + 10 && current_progress <= 100 {
+                            last_progress = current_progress;
+                            Some((
+                                current_progress,
+                                format!("Decoding audio: {}%", current_progress),
+                            ))
+                        } else {
+                            None
+                        }
+                    } else if packet_count % 200 == 0 {
+                        // No duration metadata available to compute a
+                        // percentage — still poll periodically so
+                        // cancellation stays responsive on such files.
+                        Some((last_progress, "Decoding audio...".to_string()))
+                    } else {
+                        None
+                    };
+
+                    if let Some((progress, message)) = update {
+                        if !callback(progress, &message) {
+                            info!("Decoding cancelled by callback at packet {}", packet_count);
+                            return Err(anyhow!("Decoding cancelled"));
+                        }
                     }
                 }
             }
@@ -659,7 +699,7 @@ mod tests {
     #[test]
     fn test_chunked_resample_same_rate() {
         let input = vec![0.1, 0.2, 0.3, 0.4, 0.5];
-        let result = chunked_resample_with_progress(&input, 16000, 16000, None);
+        let result = chunked_resample_with_progress(&input, 16000, 16000, None).unwrap();
         assert_eq!(result.len(), input.len());
         for (i, &sample) in result.iter().enumerate() {
             assert!((sample - input[i]).abs() < 0.001);
@@ -669,7 +709,7 @@ mod tests {
     #[test]
     fn test_chunked_resample_empty_input() {
         let input: Vec<f32> = vec![];
-        let result = chunked_resample_with_progress(&input, 48000, 16000, None);
+        let result = chunked_resample_with_progress(&input, 48000, 16000, None).unwrap();
         assert!(result.is_empty());
     }
 
@@ -677,7 +717,7 @@ mod tests {
     fn test_chunked_resample_downsamples_correctly() {
         // 48kHz to 16kHz = 3x downsampling with a 2-second signal
         let input: Vec<f32> = (0..96000).map(|i| i as f32 / 96000.0).collect();
-        let result = chunked_resample_with_progress(&input, 48000, 16000, None);
+        let result = chunked_resample_with_progress(&input, 48000, 16000, None).unwrap();
 
         // Output should be approximately 1/3 the length
         let expected_len = 96000.0 * (16000.0 / 48000.0);
@@ -695,7 +735,7 @@ mod tests {
         let input: Vec<f32> = (0..44100)
             .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 44100.0).sin())
             .collect();
-        let result = chunked_resample_with_progress(&input, 44100, 16000, None);
+        let result = chunked_resample_with_progress(&input, 44100, 16000, None).unwrap();
 
         for sample in &result {
             assert!(
@@ -714,7 +754,7 @@ mod tests {
             .collect();
 
         let single_pass = resample_audio(&input, 48000, 16000);
-        let chunked = chunked_resample_with_progress(&input, 48000, 16000, None);
+        let chunked = chunked_resample_with_progress(&input, 48000, 16000, None).unwrap();
 
         // Lengths should be very close
         let len_diff = (single_pass.len() as i64 - chunked.len() as i64).unsigned_abs();

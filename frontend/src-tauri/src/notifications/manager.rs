@@ -246,8 +246,18 @@ impl<R: Runtime> NotificationManager<R> {
 
     /// Check if Do Not Disturb is active (system or manual)
     pub async fn is_dnd_active(&self) -> bool {
-        let settings = self.settings.read().await;
+        let settings = self.settings.read().await.clone();
+        self.is_dnd_active_for(&settings).await
+    }
 
+    /// DND check against an already-obtained settings snapshot.
+    ///
+    /// Split out so callers that already hold (or have cloned) the settings
+    /// — like `should_show_notification` — don't need to re-acquire
+    /// `self.settings`. tokio's RwLock is not reentrant: re-acquiring a read
+    /// lock while already holding one can deadlock if a writer (e.g.
+    /// `update_settings`) is queued in between the two acquisitions.
+    async fn is_dnd_active_for(&self, settings: &NotificationSettings) -> bool {
         // Check manual DND first
         if settings.manual_dnd_mode {
             return true;
@@ -304,7 +314,12 @@ impl<R: Runtime> NotificationManager<R> {
 
     /// Check if we should show a specific notification based on settings
     async fn should_show_notification(&self, notification: &Notification) -> bool {
-        let settings = self.settings.read().await;
+        // Clone the settings and drop the read guard immediately, rather
+        // than holding it across the `is_dnd_active_for` call below —
+        // holding a read guard across an await that can (transitively)
+        // re-acquire the same RwLock risks a deadlock against a concurrent
+        // writer (see `is_dnd_active_for`'s doc comment).
+        let settings = self.settings.read().await.clone();
 
         // Check basic consent and permissions
         if !settings.consent_given || !settings.system_permission_granted {
@@ -312,7 +327,7 @@ impl<R: Runtime> NotificationManager<R> {
         }
 
         // Check DND status
-        if self.is_dnd_active().await {
+        if self.is_dnd_active_for(&settings).await {
             // Only show critical notifications when DND is active
             match notification.priority {
                 crate::notifications::types::NotificationPriority::Critical => {}

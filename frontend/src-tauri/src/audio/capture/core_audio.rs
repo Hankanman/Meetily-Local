@@ -376,6 +376,20 @@ impl Stream for CoreAudioStream {
             state.waker = Some(cx.waker().clone());
         }
 
+        // CRITICAL: Re-check the ring buffer after registering the waker.
+        // The producer (audio_proc, on a real-time OS callback thread) may have
+        // pushed a sample in the gap between the try_pop() above and the lock
+        // just released. At that instant `has_data` could still have held its
+        // stale `true` value from an earlier cycle, so the producer's dedup
+        // check (`if !waker_state.has_data`) would have skipped calling
+        // `wake()`, believing a wake was already pending - leaving us parked
+        // with unread data. Since we've just reset `has_data` to `false`
+        // above, popping again here recovers any sample that landed in that
+        // window without relying on a wake that was never sent.
+        if let Some(sample) = self.consumer.try_pop() {
+            return Poll::Ready(Some(sample));
+        }
+
         Poll::Pending
     }
 }

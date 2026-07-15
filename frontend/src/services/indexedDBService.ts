@@ -49,7 +49,7 @@ class IndexedDBService {
       return Promise.resolve();
     }
 
-    this.initPromise = new Promise((resolve, reject) => {
+    const initPromise = new Promise<void>((resolve, reject) => {
       try {
         const request = indexedDB.open(this.DB_NAME, this.DB_VERSION);
 
@@ -97,9 +97,18 @@ class IndexedDBService {
         console.error("Exception during IndexedDB initialization:", error);
         reject(error);
       }
+    }).catch((error) => {
+      // Don't cache a permanently-rejected promise — a failure here may be
+      // transient (e.g. a momentary storage/quota error), so clear it and
+      // let the next init() call retry indexedDB.open() from scratch
+      // instead of getting stuck forever on a stale rejection.
+      this.initPromise = null;
+      this.db = null;
+      throw error;
     });
 
-    return this.initPromise;
+    this.initPromise = initPromise;
+    return initPromise;
   }
 
   // Meeting operations

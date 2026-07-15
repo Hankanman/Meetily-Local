@@ -12,6 +12,29 @@ import { AlertTriangle as ExclamationTriangleIcon } from "lucide-react";
 const generateUniqueId = (sectionKey: string) =>
   `${sectionKey}-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
+// Whether a keydown's target is a native text-editing control (or an
+// ARIA contentEditable region). The block-editor's global keyboard
+// shortcuts (undo/redo, copy selected blocks, delete selected blocks)
+// must not hijack native editing behavior while the user is typing/
+// selecting inside an input, textarea, or contentEditable element.
+const isEditableTarget = (target: EventTarget | null): boolean => {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.isContentEditable
+  );
+};
+
+// True when the user currently has a non-collapsed native text
+// selection (e.g. highlighting a phrase inside a block's textarea, or
+// anywhere else on the page) — native copy should win over the
+// block-selection copy shortcut in that case.
+const hasActiveTextSelection = (): boolean => {
+  const selection = window.getSelection();
+  return !!selection && !selection.isCollapsed;
+};
+
 interface Props {
   summary: Summary | null;
   status:
@@ -493,6 +516,9 @@ export const AISummary = ({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey) {
         if (e.key === "z") {
+          // Let native undo/redo win while typing in a text field —
+          // only hijack for the block-editor's own history stack.
+          if (isEditableTarget(e.target)) return;
           e.preventDefault();
           if (e.shiftKey) {
             handleRedo();
@@ -500,6 +526,14 @@ export const AISummary = ({
             handleUndo();
           }
         } else if (e.key === "c") {
+          // Only treat this as "copy the selected blocks" when that's
+          // clearly the intent: there must be a block selection, and the
+          // user must not be editing/selecting native text elsewhere
+          // (an input/textarea/contentEditable, or any active text
+          // selection) — in those cases native copy should win.
+          if (selectedBlocks.length === 0) return;
+          if (isEditableTarget(e.target) || hasActiveTextSelection()) return;
+
           const blockContents = selectedBlocks
             .map((blockId) => {
               for (const [sectionKey, section] of Object.entries(
@@ -514,12 +548,18 @@ export const AISummary = ({
             })
             .filter(Boolean);
 
+          // Prevent native copy from also firing so it can't race with
+          // (and get overwritten by) this clipboard write.
+          e.preventDefault();
           navigator.clipboard.writeText(blockContents.join("\n"));
         }
       } else if (
         (e.key === "Delete" || e.key === "Backspace") &&
         selectedBlocks.length > 1
       ) {
+        // Don't hijack normal text editing (e.g. backspacing inside a
+        // block's own textarea) just because multiple blocks are selected.
+        if (isEditableTarget(e.target)) return;
         e.preventDefault();
         handleDeleteSelectedBlocks();
       }

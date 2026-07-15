@@ -65,6 +65,11 @@ export function usePaginatedTranscripts({
   const loadedMeetingIdRef = useRef<string | null>(null);
   const isLoadingRef = useRef(false);
   const lastLoadTimeRef = useRef(0); // Debounce protection
+  // Tracks which meetingId is "current". Fetches capture the meetingId they
+  // were issued for and compare against this ref before applying setState,
+  // so a slow response for a meeting the user has since navigated away from
+  // doesn't clobber the newly-loaded meeting's transcripts.
+  const activeMeetingIdRef = useRef<string | null>(meetingId);
 
   // Reset state when meeting changes
   const reset = useCallback(() => {
@@ -82,14 +87,19 @@ export function usePaginatedTranscripts({
   const loadMetadata =
     useCallback(async (): Promise<MeetingMetadata | null> => {
       if (!meetingId) return null;
+      const requestMeetingId = meetingId;
 
       try {
         const data = await invoke<MeetingMetadata>("api_get_meeting_metadata", {
           meetingId,
         });
+        // Drop stale responses: the user may have navigated to a different
+        // meeting while this request was in flight.
+        if (activeMeetingIdRef.current !== requestMeetingId) return null;
         setMetadata(data);
         return data;
       } catch (err) {
+        if (activeMeetingIdRef.current !== requestMeetingId) return null;
         console.error("Failed to load meeting metadata:", err);
         setError("Failed to load meeting details");
         return null;
@@ -100,6 +110,7 @@ export function usePaginatedTranscripts({
   const loadTranscriptsAtOffset = useCallback(
     async (offset: number, append: boolean = true): Promise<Transcript[]> => {
       if (!meetingId) return [];
+      const requestMeetingId = meetingId;
 
       try {
         const response = await invoke<PaginatedTranscriptsResponse>(
@@ -110,6 +121,10 @@ export function usePaginatedTranscripts({
             offset,
           },
         );
+
+        // Drop stale responses: the user may have navigated to a different
+        // meeting while this request was in flight.
+        if (activeMeetingIdRef.current !== requestMeetingId) return [];
 
         const newTranscripts = response.transcripts;
 
@@ -135,6 +150,7 @@ export function usePaginatedTranscripts({
 
         return newTranscripts;
       } catch (err) {
+        if (activeMeetingIdRef.current !== requestMeetingId) return [];
         console.error("Failed to load transcripts:", err);
         setError("Failed to load transcripts");
         return [];
@@ -181,6 +197,7 @@ export function usePaginatedTranscripts({
   // Initial load
   useEffect(() => {
     if (!meetingId) {
+      activeMeetingIdRef.current = null;
       // eslint-disable-next-line react-hooks/set-state-in-effect
       reset();
       return;
@@ -189,6 +206,7 @@ export function usePaginatedTranscripts({
     // Avoid reloading the same meeting
     if (loadedMeetingIdRef.current === meetingId) return;
     loadedMeetingIdRef.current = meetingId;
+    activeMeetingIdRef.current = meetingId;
 
     reset();
 
