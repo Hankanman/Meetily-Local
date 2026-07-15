@@ -4,6 +4,7 @@
 // sole local ASR engine (a prior remote-provider abstraction was removed as
 // dead code — see worker.rs for TranscriptionError).
 
+pub mod echo_dedup;
 pub mod engine;
 pub mod worker;
 
@@ -13,5 +14,5 @@ pub use engine::{
     TranscriptionEngine,
 };
 pub use worker::{
-    reset_speech_detected_flag, start_transcription_task, TranscriptionError, TranscriptUpdate,
+    reset_speech_detected_flag, start_transcription_task, TranscriptUpdate, TranscriptionError,
 };

@@ -93,29 +93,27 @@ pub async fn get_or_init_whisper<R: Runtime>(
                 .unwrap_or_else(|| "unknown".to_string());
 
             // Check if loaded model matches saved config; reload if not.
-            let configured_model = match crate::api::api::api_get_transcript_config(
-                app.clone(),
-                app.clone().state(),
-            )
-            .await
-            {
-                Ok(Some(config)) => {
-                    info!(
-                        "📝 Saved transcript config - provider: {}, model: {}",
-                        config.provider, config.model
-                    );
-                    if config.provider == "localWhisper" && !config.model.is_empty() {
-                        Some(config.model)
-                    } else {
+            let configured_model =
+                match crate::api::api::api_get_transcript_config(app.clone(), app.clone().state())
+                    .await
+                {
+                    Ok(Some(config)) => {
+                        info!(
+                            "📝 Saved transcript config - provider: {}, model: {}",
+                            config.provider, config.model
+                        );
+                        if config.provider == "localWhisper" && !config.model.is_empty() {
+                            Some(config.model)
+                        } else {
+                            None
+                        }
+                    }
+                    Ok(None) => None,
+                    Err(e) => {
+                        warn!("⚠️ Failed to get transcript config: {}", e);
                         None
                     }
-                }
-                Ok(None) => None,
-                Err(e) => {
-                    warn!("⚠️ Failed to get transcript config: {}", e);
-                    None
-                }
-            };
+                };
 
             if let Some(ref expected_model) = configured_model {
                 if current_model == *expected_model {

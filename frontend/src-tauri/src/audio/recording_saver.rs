@@ -273,6 +273,7 @@ impl RecordingSaver {
             sample_rate: Some(48000),
             status: Some("recording".to_string()),
             origin: Some("recording".to_string()),
+            auto_refined_at: None,
         };
 
         // Write initial metadata.json

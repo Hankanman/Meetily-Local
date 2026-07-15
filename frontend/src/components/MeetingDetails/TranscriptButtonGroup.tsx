@@ -3,9 +3,11 @@
 import { useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
-import { Copy, FolderOpen, RefreshCw } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
+import { Copy, FolderOpen, RefreshCw, Sparkles } from "lucide-react";
 import { RetranscribeDialog } from "./RetranscribeDialog";
 import { useConfig } from "@/contexts/ConfigContext";
+import { useMeetingRefinedStatus } from "@/hooks/meeting-details/useMeetingRefinedStatus";
 
 interface TranscriptButtonGroupProps {
   transcriptCount: number;
@@ -34,8 +36,40 @@ export function TranscriptButtonGroup({
     }
   }, [onRefetchTranscripts]);
 
+  // Passive post-meeting auto-refine indicator: tracks the background
+  // high-accuracy re-pass (see spawn_auto_refine on the Rust side) without
+  // any user action. On completion, silently refetch so the upgraded
+  // transcript replaces the fast live one.
+  const refinedStatus = useMeetingRefinedStatus(meetingId, onRefetchTranscripts);
+
   return (
     <div className="flex w-full items-center justify-center gap-2">
+      {refinedStatus === "refining" && (
+        <span
+          className="
+            inline-flex shrink-0 items-center gap-1 rounded-full border
+            border-border bg-background px-2 py-0.5 text-xs
+            text-muted-foreground
+          "
+          title="Re-processing this meeting's audio with a higher-accuracy model"
+        >
+          <Spinner size="sm" />
+          <span className="hidden lg:inline">Refining transcript…</span>
+        </span>
+      )}
+      {refinedStatus === "refined" && (
+        <span
+          className="
+            inline-flex shrink-0 items-center gap-1 rounded-full border
+            border-info/30 bg-linear-to-r from-blue-600/10 to-purple-600/10
+            px-2 py-0.5 text-xs text-foreground
+          "
+          title="Automatically upgraded to a higher-accuracy transcript after recording"
+        >
+          <Sparkles className="size-3 text-info" />
+          <span className="hidden lg:inline">Refined</span>
+        </span>
+      )}
       <ButtonGroup>
         <Button
           variant="outline"

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { useTranscripts } from "@/contexts/TranscriptContext";
 import { useSidebar } from "@/components/Sidebar/SidebarProvider";
@@ -320,6 +321,23 @@ export function useRecordingStop(
             );
             console.log("   Transcripts:", freshTranscripts.length);
             console.log("   folder_path:", folderPath);
+
+            // Fire-and-forget: kick off the post-meeting auto-refine pass
+            // now that a meeting_id and folder_path both exist. Runs
+            // entirely in the background on the Rust side (its own tokio
+            // task) — never awaited here, and any failure to even start it
+            // is non-fatal since the live transcript above is already saved.
+            if (folderPath) {
+              invoke("trigger_post_meeting_refine", {
+                meetingId,
+                meetingFolderPath: folderPath,
+              }).catch((err) => {
+                console.warn(
+                  "Failed to start post-meeting auto-refine:",
+                  err,
+                );
+              });
+            }
 
             // If a calendar event was matched at recording start, link the
             // saved meeting to it now that we have a meeting_id. Failure is

@@ -669,6 +669,165 @@ async fn get_configured_whisper_model<R: Runtime>(app: &AppHandle<R>) -> Result<
     }
 }
 
+// ============================================================================
+// POST-MEETING AUTO-REFINE
+//
+// After a live recording finishes (fast model, low latency), best-effort
+// re-run the finalized audio through this same retranscription pipeline
+// with a higher-accuracy model in the background, and upgrade the stored
+// transcript in place. Triggered by `recording_commands::trigger_post_meeting_refine`
+// once the frontend has a `meeting_id` for the just-saved meeting (the Rust
+// `stop_recording` command itself never has one — the `meetings` row, and
+// its id, is created by the frontend's follow-up `api_save_transcript` call).
+// ============================================================================
+
+/// High-accuracy models to refine with, in priority order. large-v3-q5_0 is
+/// preferred (near-identical accuracy to large-v3 at roughly a third of the
+/// size/decode time); large-v3 is the fallback if only the full-precision
+/// file is on disk. Whichever of these is already the live model is treated
+/// as "nothing to gain" (see `run_auto_refine`).
+const AUTO_REFINE_MODEL_CANDIDATES: &[&str] = &["large-v3-q5_0", "large-v3"];
+
+/// Kick off a best-effort background auto-refine of a just-finished meeting.
+/// Never blocks the caller: spawns its own tokio task and returns
+/// immediately. Every skip/failure reason is logged; nothing is surfaced to
+/// the user as an error since the live transcript is already saved and
+/// stays authoritative unless/until this succeeds.
+pub fn spawn_auto_refine<R: Runtime>(
+    app: AppHandle<R>,
+    meeting_id: String,
+    meeting_folder_path: String,
+) {
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = run_auto_refine(app, meeting_id.clone(), meeting_folder_path).await {
+            info!("Auto-refine not performed for meeting {}: {}", meeting_id, e);
+        }
+    });
+}
+
+/// Decide whether an auto-refine pass is worth running, and if so, run it
+/// through the same `start_retranscription` pipeline manual retranscription
+/// uses. Returns `Err` for any skip reason (disabled, already-best model,
+/// better model not downloaded, collision with an in-flight retranscription)
+/// as well as genuine failures — callers only care that it's not `Ok`.
+async fn run_auto_refine<R: Runtime>(
+    app: AppHandle<R>,
+    meeting_id: String,
+    meeting_folder_path: String,
+) -> Result<()> {
+    // Preference check.
+    let prefs = super::recording_preferences::load_recording_preferences(&app).await?;
+    if !prefs.auto_refine {
+        return Err(anyhow!("auto-refine disabled in recording preferences"));
+    }
+
+    // Yield to a user-initiated retranscription rather than collide with it.
+    // (This is a courtesy early-out; the real race safety is the
+    // RetranscriptionGuard acquired inside start_retranscription below.)
+    if RETRANSCRIPTION_IN_PROGRESS.load(Ordering::SeqCst) {
+        return Err(anyhow!(
+            "retranscription already in progress, skipping auto-refine"
+        ));
+    }
+
+    // Which model was used live? Only worth refining if a strictly
+    // higher-accuracy one is available.
+    let live_model = get_configured_whisper_model(&app).await?;
+    if AUTO_REFINE_MODEL_CANDIDATES.contains(&live_model.as_str()) {
+        return Err(anyhow!(
+            "live model '{}' is already the high-accuracy tier, nothing to gain",
+            live_model
+        ));
+    }
+
+    // Pick the best candidate that's actually downloaded — never trigger a
+    // multi-GB download just to auto-refine.
+    let available = crate::whisper_engine::whisper_get_available_models()
+        .await
+        .map_err(|e| anyhow!(e))?;
+    let target_model = AUTO_REFINE_MODEL_CANDIDATES.iter().find_map(|candidate| {
+        available
+            .iter()
+            .find(|m| {
+                m.name == *candidate
+                    && matches!(m.status, crate::whisper_engine::ModelStatus::Available)
+            })
+            .map(|_| candidate.to_string())
+    });
+    let Some(target_model) = target_model else {
+        return Err(anyhow!(
+            "no higher-accuracy model downloaded (checked {:?}), skipping",
+            AUTO_REFINE_MODEL_CANDIDATES
+        ));
+    };
+
+    info!(
+        "✨ Auto-refine starting for meeting {}: live model '{}' -> '{}'",
+        meeting_id, live_model, target_model
+    );
+    let _ = app.emit(
+        "meeting-refining",
+        serde_json::json!({ "meeting_id": meeting_id }),
+    );
+
+    let result = start_retranscription(
+        app.clone(),
+        meeting_id.clone(),
+        meeting_folder_path.clone(),
+        None, // language: keep whatever auto-detect the live pass used
+        Some(target_model.clone()),
+        None,
+    )
+    .await;
+
+    match &result {
+        Ok(res) => {
+            let now = chrono::Utc::now().to_rfc3339();
+            let updates = super::common::MeetingMetadata {
+                auto_refined_at: Some(now),
+                ..Default::default()
+            };
+            if let Err(e) = super::common::write_metadata(
+                &PathBuf::from(&meeting_folder_path),
+                &updates,
+                super::common::MeetingMetadata::default,
+            ) {
+                warn!(
+                    "Failed to record auto_refined_at in metadata.json for meeting {}: {}",
+                    meeting_id, e
+                );
+            }
+            info!(
+                "✨ Auto-refine complete for meeting {} ({} segments, model '{}')",
+                meeting_id, res.segments_count, target_model
+            );
+            let _ = app.emit(
+                "meeting-refined",
+                serde_json::json!({
+                    "meeting_id": meeting_id,
+                    "segments_count": res.segments_count,
+                }),
+            );
+        }
+        Err(e) => {
+            // Live transcript is untouched — run_retranscription only
+            // mutates the DB/transcripts.json after a fully successful
+            // batch, so a failure here leaves the meeting exactly as good
+            // as it was, never worse.
+            warn!(
+                "Auto-refine failed for meeting {} (live transcript preserved): {}",
+                meeting_id, e
+            );
+            let _ = app.emit(
+                "meeting-refine-failed",
+                serde_json::json!({ "meeting_id": meeting_id, "error": e.to_string() }),
+            );
+        }
+    }
+
+    result.map(|_| ())
+}
+
 // Tauri commands
 
 /// Response when retranscription is started

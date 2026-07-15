@@ -215,6 +215,14 @@ pub struct MeetingMetadata {
     /// transcript: `"recording"` | `"import"` | `"retranscription"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// Set when this meeting's transcript was automatically upgraded in the
+    /// background after the live recording finished, using a higher-accuracy
+    /// Whisper model than the one used live (see
+    /// `audio::retranscription::spawn_auto_refine`). Distinct from
+    /// `retranscribed_at`/`origin` so a "was this auto-refined?" check
+    /// doesn't also match a user-initiated manual retranscription.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_refined_at: Option<String>,
 }
 
 /// Write (or merge into) metadata.json, atomically.

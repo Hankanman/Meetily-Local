@@ -709,6 +709,8 @@ pub fn run() {
             // Reload sync commands (retrieve transcript history and meeting name)
             audio::recording_commands::get_transcript_history,
             audio::recording_commands::get_recording_meeting_name,
+            // Post-meeting auto-refine (background high-accuracy re-pass)
+            audio::recording_commands::trigger_post_meeting_refine,
             // Audio recovery commands (for transcript recovery feature)
             audio::incremental_saver::recover_audio_from_checkpoints,
             audio::incremental_saver::cleanup_checkpoints,

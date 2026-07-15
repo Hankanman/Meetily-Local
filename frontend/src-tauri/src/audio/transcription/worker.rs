@@ -2,6 +2,7 @@
 //
 // Parallel transcription worker pool and chunk processing logic.
 
+use super::echo_dedup::{EchoDecision, EchoDedup};
 use super::engine::TranscriptionEngine;
 use crate::audio::recording_state::DeviceType;
 use crate::audio::AudioChunk;
@@ -180,6 +181,13 @@ pub fn start_transcription_task<R: Runtime>(
                 // spawned per recording.
                 let mut context_tail = String::new();
 
+                // Cross-source echo dedup state (mic bleed of system audio,
+                // or vice versa, in speaker-not-headphones setups). See
+                // echo_dedup.rs for the full rationale and policy. Lives
+                // per-worker-loop, i.e. per recording session, same as
+                // `context_tail` above.
+                let mut echo_dedup = EchoDedup::new();
+
                 loop {
                     // Try to get a chunk to process
                     let chunk = {
@@ -283,7 +291,35 @@ pub fn start_transcription_task<R: Runtime>(
                                         );
                                     }
 
-                                    if !transcript.trim().is_empty() && meets_threshold && !hallucinated {
+                                    // Recording-relative timestamps, computed
+                                    // early so both the echo-dedup check below
+                                    // and the emitted TranscriptUpdate further
+                                    // down share a single source of truth.
+                                    let audio_start_time = chunk_timestamp;
+                                    let audio_end_time = chunk_timestamp + chunk_duration;
+
+                                    // Cross-source echo suppression: only worth
+                                    // running for segments that would otherwise
+                                    // be accepted. Empty/low-confidence/
+                                    // hallucinated text is already headed for
+                                    // the drop path below regardless, so skip
+                                    // both the wasted check and polluting the
+                                    // dedup buffer with it.
+                                    let is_echo = !transcript.trim().is_empty()
+                                        && meets_threshold
+                                        && !hallucinated
+                                        && echo_dedup.check(
+                                            chunk_source,
+                                            &transcript,
+                                            audio_start_time,
+                                            audio_end_time,
+                                        ) == EchoDecision::DropAsMicEcho;
+
+                                    if !transcript.trim().is_empty()
+                                        && meets_threshold
+                                        && !hallucinated
+                                        && !is_echo
+                                    {
                                         // Grow the conditioning context with
                                         // accepted text, keeping only the tail
                                         // (whisper's prompt window is ~224
@@ -324,11 +360,10 @@ pub fn start_transcription_task<R: Runtime>(
                                             info!("🔍 Speech already detected in this session, not re-emitting");
                                         }
 
-                                        // Generate sequence ID and calculate timestamps FIRST
+                                        // Generate sequence ID (audio_start_time/audio_end_time
+                                        // were already computed above, ahead of the echo check)
                                         let sequence_id =
                                             SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
-                                        let audio_start_time = chunk_timestamp; // Already in seconds from recording start
-                                        let audio_end_time = chunk_timestamp + chunk_duration;
 
                                         // Save structured transcript segment to recording manager (only final results)
                                         // Save ALL segments (partial and final) to ensure complete JSON
@@ -385,6 +420,17 @@ pub fn start_transcription_task<R: Runtime>(
                                             voice_profile_id,
                                         };
 
+                                        // Record for future cross-source echo checks. Only
+                                        // accepted (emitted) segments are recorded — a
+                                        // suppressed echo should never itself become a match
+                                        // target.
+                                        echo_dedup.record(
+                                            chunk_source,
+                                            &update.text,
+                                            audio_start_time,
+                                            audio_end_time,
+                                        );
+
                                         if let Err(e) = app_clone.emit("transcript-update", &update)
                                         {
                                             error!(
@@ -393,6 +439,9 @@ pub fn start_transcription_task<R: Runtime>(
                                             );
                                         }
                                         // PERFORMANCE: Removed verbose logging of every emission
+                                    } else if is_echo {
+                                        // Already logged inside echo_dedup.check() above;
+                                        // nothing further to do.
                                     } else if !transcript.trim().is_empty() && should_log_this_chunk
                                     {
                                         // PERFORMANCE: Only log low-confidence results occasionally
@@ -679,9 +728,7 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
     // Threshold picked empirically: observed mic speech ~0.005, mic-bleed
     // system ~0.0001; 0.0005 sits comfortably between.
     const SYSTEM_AUDIO_SILENCE_THRESHOLD: f32 = 0.0005;
-    if chunk.device_type == DeviceType::System
-        && energy < SYSTEM_AUDIO_SILENCE_THRESHOLD
-    {
+    if chunk.device_type == DeviceType::System && energy < SYSTEM_AUDIO_SILENCE_THRESHOLD {
         info!(
             "Dropping near-silent system audio chunk {} (energy {:.6} < threshold {:.6})",
             chunk.chunk_id, energy, SYSTEM_AUDIO_SILENCE_THRESHOLD
@@ -780,7 +827,10 @@ mod tests {
     #[test]
     fn real_speech_survives_at_any_confidence() {
         assert!(!is_likely_hallucination("I'm getting sick", 0.27));
-        assert!(!is_likely_hallucination("Sounds good, let's do that.", 0.31));
+        assert!(!is_likely_hallucination(
+            "Sounds good, let's do that.",
+            0.31
+        ));
     }
 
     #[test]

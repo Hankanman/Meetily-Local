@@ -23,6 +23,14 @@ pub struct RecordingPreferences {
     /// settings live in one place.
     #[serde(default = "default_true")]
     pub show_recording_notification: bool,
+    /// After a recording stops and its audio is finalized, automatically
+    /// re-run it through a higher-accuracy Whisper model in the background
+    /// and upgrade the stored transcript (see
+    /// `audio::retranscription::spawn_auto_refine`). Best-effort and
+    /// non-blocking; defaults to on since it never touches the live
+    /// transcript unless the refine pass fully succeeds.
+    #[serde(default = "default_true")]
+    pub auto_refine: bool,
 }
 
 fn default_true() -> bool {
@@ -38,6 +46,7 @@ impl Default for RecordingPreferences {
             preferred_mic_device: None,
             preferred_system_device: None,
             show_recording_notification: true,
+            auto_refine: true,
         }
     }
 }

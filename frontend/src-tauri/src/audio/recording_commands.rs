@@ -904,3 +904,28 @@ pub async fn get_recording_meeting_name() -> Result<Option<String>, String> {
 // Device disconnect/reconnect polling was removed with the move to
 // native PipeWire capture: streams target nodes by name and the graph
 // reroutes/renegotiates on device changes without app involvement.
+
+/// Kick off the post-meeting auto-refine pass for a just-saved meeting.
+///
+/// `stop_recording` itself never has a `meeting_id` — the `meetings` row
+/// (and its id) is only created afterward by the frontend's
+/// `api_save_transcript` call once the live transcript has streamed in and
+/// the user confirms the save. So the frontend calls this command right
+/// after that save succeeds, passing the freshly-minted `meeting_id`
+/// alongside the `meeting_folder_path` it already has from the
+/// `recording-stopped` event.
+///
+/// Returns immediately — the actual refine work (decode, VAD, batch
+/// transcribe, diarize, DB write) runs in its own background tokio task via
+/// `retranscription::spawn_auto_refine`, so this never blocks the UI. All
+/// skip/failure reasons are logged there and surfaced only via the
+/// `meeting-refining` / `meeting-refined` / `meeting-refine-failed` events.
+#[tauri::command]
+pub async fn trigger_post_meeting_refine<R: Runtime>(
+    app: AppHandle<R>,
+    meeting_id: String,
+    meeting_folder_path: String,
+) -> Result<(), String> {
+    super::retranscription::spawn_auto_refine(app, meeting_id, meeting_folder_path);
+    Ok(())
+}
