@@ -85,6 +85,7 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       await invoke("open_recordings_folder");
     } catch (error) {
       console.error("Failed to open recordings folder:", error);
+      toast.error("Couldn't open the recordings folder.");
     }
   };
 

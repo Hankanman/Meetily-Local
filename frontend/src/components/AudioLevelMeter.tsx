@@ -70,7 +70,7 @@ export function AudioLevelMeter({
         className={`
           size-2 rounded-full
           ${
-          isActive ? "animate-pulse bg-green-400" : "bg-muted"
+          isActive ? "animate-pulse bg-success" : "bg-muted"
         }
         `}
         title={`${deviceName} - ${isActive ? "Active" : "Inactive"}`}
@@ -162,9 +162,9 @@ export function CompactAudioLevelMeter({
   const rmsPercent = Math.round(logRms * 100);
 
   const getLevelColor = (level: number) => {
-    if (level < 0.3) return "bg-green-400";
-    if (level < 0.7) return "bg-yellow-400";
-    return "bg-red-400";
+    if (level < 0.3) return "bg-success";
+    if (level < 0.7) return "bg-warning";
+    return "bg-destructive";
   };
 
   return (
@@ -177,7 +177,7 @@ export function CompactAudioLevelMeter({
         className={`
           size-1.5 rounded-full
           ${
-          isActive ? "bg-green-400" : "bg-muted"
+          isActive ? "bg-success" : "bg-muted"
         }
         `}
       />

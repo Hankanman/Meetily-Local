@@ -235,7 +235,7 @@ export function useRecordingStart(
               RecordingStatus.ERROR,
               getErrorMessage(error, "Failed to auto-start recording"),
             );
-            alert("Failed to start recording. Check console for details.");
+            toast.error("Couldn't start recording. Check your microphone selection and try again.");
           } finally {
             setIsAutoStarting(false);
           }
@@ -337,7 +337,7 @@ export function useRecordingStart(
           RecordingStatus.ERROR,
           getErrorMessage(error, "Failed to start recording from sidebar"),
         );
-        alert("Failed to start recording. Check console for details.");
+        toast.error("Couldn't start recording. Check your microphone selection and try again.");
       } finally {
         setIsAutoStarting(false);
       }

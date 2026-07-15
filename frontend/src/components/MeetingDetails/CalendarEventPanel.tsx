@@ -8,6 +8,7 @@ import {
   MapPin,
   Users,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -84,6 +85,7 @@ export function CalendarEventPanel({
       setEvent(null);
     } catch (err) {
       console.error("Failed to unlink:", err);
+      toast.error("Couldn't unlink the calendar event. Please try again.");
     } finally {
       setIsMutating(false);
     }
@@ -97,6 +99,7 @@ export function CalendarEventPanel({
       await reload();
     } catch (err) {
       console.error("Failed to link calendar event:", err);
+      toast.error("Couldn't link that calendar event. Please try again.");
     } finally {
       setIsMutating(false);
     }

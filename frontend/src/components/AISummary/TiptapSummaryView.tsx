@@ -9,6 +9,7 @@ import {
   useImperativeHandle,
 } from "react";
 import dynamic from "next/dynamic";
+import { toast } from "sonner";
 import type { Editor as TiptapEditorInstance } from "@tiptap/core";
 import { Summary, SummaryDataResponse, SummaryFormat } from "@/types";
 import { AISummary } from "./index";
@@ -118,11 +119,13 @@ export const TiptapSummaryView = forwardRef<
       if (!onSave || !isDirty) return;
       setIsSaving(true);
       try {
-        onSave({ markdown: currentMarkdownRef.current });
+        // `onSave` may be async — await it so a rejected save is actually
+        // caught here instead of escaping to an unhandled rejection.
+        await onSave({ markdown: currentMarkdownRef.current });
         setIsDirty(false);
       } catch (err) {
         console.error("Save failed:", err);
-        alert("Failed to save changes. Please try again.");
+        toast.error("Failed to save changes. Please try again.");
       } finally {
         setIsSaving(false);
       }

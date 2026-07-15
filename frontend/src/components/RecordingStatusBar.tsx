@@ -34,13 +34,13 @@ export const RecordingStatusBar: React.FC<RecordingStatusBarProps> = ({
       <div
         className={`
           size-2 rounded-full
-          ${isPaused ? "bg-orange-500" : `animate-pulse bg-destructive`}
+          ${isPaused ? "bg-warning" : `animate-pulse bg-destructive`}
         `}
       />
       <span
         className={`
           text-sm
-          ${isPaused ? "text-orange-700" : "text-foreground"}
+          ${isPaused ? "text-warning" : "text-foreground"}
         `}
       >
         {isPaused ? "Paused" : "Recording"} • {formatDuration(displaySeconds)}

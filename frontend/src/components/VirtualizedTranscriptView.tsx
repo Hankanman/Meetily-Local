@@ -352,7 +352,7 @@ export const VirtualizedTranscriptView: React.FC<
                   <div
                     className={`
                       size-3 rounded-full
-                      ${isPaused ? `bg-orange-500` : "animate-pulse bg-info"}
+                      ${isPaused ? `bg-warning` : "animate-pulse bg-info"}
                     `}
                   ></div>
                 </div>

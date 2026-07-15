@@ -427,8 +427,8 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
         console.log("✅ MAIN transcript listener setup complete");
       } catch (error) {
         console.error("❌ Failed to setup MAIN transcript listener:", error);
-        alert(
-          "Failed to setup transcript listener. Check console for details.",
+        toast.error(
+          "Failed to start live transcription. Try restarting the recording.",
         );
       }
     };

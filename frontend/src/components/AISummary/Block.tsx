@@ -239,7 +239,7 @@ export const BlockComponent: React.FC<BlockProps> = ({
       className={`
         group relative flex min-h-6 items-start rounded-sm transition-all
         duration-150 ease-in-out
-        ${isSelected ? "bg-blue-600/10 shadow-sm ring-1 ring-blue-200" : `
+        ${isSelected ? "bg-info-muted shadow-sm ring-1 ring-info/40" : `
           hover:bg-muted
         `}
       `}

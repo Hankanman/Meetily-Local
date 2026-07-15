@@ -682,7 +682,7 @@ function ModelCard({
                     getModelPerformanceBadge(model.name).color === "green"
                       ? "bg-success-muted text-success"
                       : getModelPerformanceBadge(model.name).color === "orange"
-                        ? "bg-orange-100 text-orange-700"
+                        ? "bg-warning-muted text-warning"
                         : "bg-muted text-foreground"
                   }
                   `}
@@ -840,8 +840,8 @@ function ModelCard({
             <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
               <motion.div
                 className="
-                  h-full rounded-full bg-linear-to-r from-blue-500 to-blue-600
-                "
+                  h-full rounded-full bg-info
+"
                 initial={{ width: 0 }}
                 animate={{ width: `${downloadProgress}%` }}
                 transition={{ duration: 0.3, ease: "easeOut" }}

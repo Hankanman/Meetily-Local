@@ -715,13 +715,13 @@ export const AISummary = ({
   };
 
   const renderErrorState = () => (
-    <div className="w-full rounded-lg border border-red-200 bg-red-50 p-4">
+    <div className="w-full rounded-lg border border-destructive/30 bg-destructive/10 p-4">
       <div className="mb-2 flex items-center">
-        <ExclamationTriangleIcon className="mr-2 size-5 text-red-500" />
-        <h3 className="font-medium text-red-700">Error Generating Summary</h3>
+        <ExclamationTriangleIcon className="mr-2 size-5 text-destructive" />
+        <h3 className="font-medium text-destructive">Error Generating Summary</h3>
       </div>
-      <p className="text-sm text-red-600">{error}</p>
-      <p className="mt-2 text-xs text-red-500">
+      <p className="text-sm text-destructive">{error}</p>
+      <p className="mt-2 text-xs text-destructive">
         Please check your model configuration and API keys, or try again.
       </p>
     </div>
@@ -729,20 +729,20 @@ export const AISummary = ({
 
   const renderLoadingState = () => (
     <div className="
-      w-full rounded-lg border border-blue-500/30 bg-blue-600/10 p-4
+      w-full rounded-lg border border-info/30 bg-info-muted p-4
     ">
       <div className="flex items-center space-x-3">
         <div className="
-          size-5 animate-spin rounded-full border-2 border-blue-500
+          size-5 animate-spin rounded-full border-2 border-info
           border-t-transparent
         "></div>
         <div>
-          <h3 className="font-medium text-blue-700">
+          <h3 className="font-medium text-info">
             {status === "processing"
               ? "Processing Transcript"
               : "Generating Summary"}
           </h3>
-          <p className="text-sm text-blue-600">
+          <p className="text-sm text-info">
             {status === "processing"
               ? "Analyzing your transcript..."
               : "Creating a detailed summary of your meeting..."}
@@ -826,7 +826,7 @@ export const AISummary = ({
           <button
             className="
               flex w-full items-center space-x-2 px-4 py-2 text-left
-              text-red-600
+              text-destructive
               hover:bg-muted
             "
             onClick={handleDeleteBlocks}

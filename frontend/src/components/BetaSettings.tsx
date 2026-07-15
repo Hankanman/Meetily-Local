@@ -37,7 +37,7 @@ export function BetaSettings() {
         <div
           key={featureKey}
           className="
-            rounded-lg border border-border bg-background p-6 shadow-sm
+            rounded-lg border border-border bg-card p-5 shadow-sm
           "
         >
           <div className="flex items-center justify-between">

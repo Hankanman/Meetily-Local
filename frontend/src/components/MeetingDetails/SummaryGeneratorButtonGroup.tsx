@@ -268,8 +268,8 @@ export function SummaryGeneratorButtonGroup({
           variant="outline"
           size="sm"
           className="
-            border-destructive/30 bg-linear-to-r from-red-50 to-orange-50
-            hover:from-red-100 hover:to-orange-100
+            border-destructive/30 bg-destructive/10
+            hover:bg-destructive/20
             xl:px-4
           "
           onClick={onStopGeneration}

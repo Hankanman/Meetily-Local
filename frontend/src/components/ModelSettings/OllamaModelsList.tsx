@@ -78,8 +78,8 @@ export function OllamaModelsList({
           {ollamaNotInstalled ? (
             /* Show Ollama download link when not installed */
             <div className="space-y-4">
-              <Alert className="border-orange-500 bg-orange-50">
-                <AlertDescription className="text-orange-800">
+              <Alert className="border-warning bg-warning-muted">
+                <AlertDescription className="text-warning">
                   Ollama is not installed or not running. Please download
                   and install Ollama to use local models.
                 </AlertDescription>
@@ -160,8 +160,7 @@ export function OllamaModelsList({
                         ">
                           <div
                             className="
-                              h-full rounded-full bg-linear-to-r
-                              from-blue-500 to-blue-600 transition-all
+                              h-full rounded-full bg-info transition-all
                               duration-300
                             "
                             style={{
@@ -246,8 +245,7 @@ export function OllamaModelsList({
                           ">
                             <div
                               className="
-                                h-full rounded-full bg-linear-to-r
-                                from-blue-500 to-blue-600 transition-all
+                                h-full rounded-full bg-info transition-all
                                 duration-300
                               "
                               style={{ width: `${progress}%` }}

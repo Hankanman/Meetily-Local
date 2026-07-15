@@ -73,10 +73,14 @@ export function SetupOverviewStep() {
                         <TooltipProvider>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <button className="
-                                text-muted-foreground/70
-                                hover:text-muted-foreground
-                              ">
+                              <button
+                                type="button"
+                                aria-label="About summarization engines"
+                                className="
+                                  text-muted-foreground/70
+                                  hover:text-muted-foreground
+                                "
+                              >
                                 <Info className="size-4" />
                               </button>
                             </TooltipTrigger>

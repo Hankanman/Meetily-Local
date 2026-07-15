@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Pause, Play, Square } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { appDataDir } from "@tauri-apps/api/path";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
@@ -79,6 +80,7 @@ export function RecordingTopBar({
         await invoke("resume_recording");
       } catch (err) {
         console.error("Failed to resume recording:", err);
+        toast.error("Couldn't resume recording. Please try again.");
       } finally {
         setResuming(false);
       }
@@ -88,6 +90,7 @@ export function RecordingTopBar({
         await invoke("pause_recording");
       } catch (err) {
         console.error("Failed to pause recording:", err);
+        toast.error("Couldn't pause recording. Please try again.");
       } finally {
         setPausing(false);
       }
@@ -133,7 +136,7 @@ export function RecordingTopBar({
           className={`
             size-2.5 rounded-full
             ${isPaused
-              ? "bg-orange-500"
+              ? "bg-warning"
               : "animate-pulse bg-destructive"}
           `}
         />

@@ -4,6 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Calendar, RefreshCw, Trash2, ExternalLink, Check } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { SettingsCard } from "@/app/settings/parts/SettingsCard";
 import {
   addCalendarSource,
@@ -36,6 +43,7 @@ export function CalendarSettings() {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [recentRefreshCounts, setRecentRefreshCounts] = useState<Record<string, number>>({});
+  const [pendingRemove, setPendingRemove] = useState<CalendarSource | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -92,11 +100,10 @@ export function CalendarSettings() {
     }
   };
 
-  const handleRemove = async (id: string) => {
-    const ok = confirm(
-      "Remove this calendar source? Linked meetings will keep their event metadata snapshot.",
-    );
-    if (!ok) return;
+  const confirmRemove = async () => {
+    if (!pendingRemove) return;
+    const { id } = pendingRemove;
+    setPendingRemove(null);
     try {
       await removeCalendarSource(id);
       await reload();
@@ -250,8 +257,8 @@ export function CalendarSettings() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => void handleRemove(s.id)}
-                      aria-label="Remove calendar"
+                      onClick={() => setPendingRemove(s)}
+                      aria-label="Delete calendar"
                       className="text-muted-foreground hover:text-destructive"
                     >
                       <Trash2 className="size-3.5" />
@@ -263,6 +270,35 @@ export function CalendarSettings() {
           </ul>
         )}
       </SettingsCard>
+
+      <Dialog
+        open={!!pendingRemove}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemove(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete calendar?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Removes{" "}
+            <span className="font-medium text-foreground">
+              {pendingRemove?.label?.trim() || pendingRemove?.url}
+            </span>{" "}
+            and its upcoming events. Meetings already linked to an event keep
+            their saved event details.
+          </p>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingRemove(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmRemove}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
