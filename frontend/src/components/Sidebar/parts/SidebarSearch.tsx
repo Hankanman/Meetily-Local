@@ -30,7 +30,7 @@ export function SidebarSearch({
         onChange={(e) => onChange(e.target.value)}
         placeholder="Search meetings…"
         className="
-          h-9 w-full rounded-md border border-border bg-muted/40 pr-8 pl-8
+          h-9 w-full rounded-md border border-border bg-muted/40 px-8 
           text-sm placeholder:text-muted-foreground/70
           focus:border-ring focus:bg-background focus:ring-1 focus:ring-ring
           focus:outline-none

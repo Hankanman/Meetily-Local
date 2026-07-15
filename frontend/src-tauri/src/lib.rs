@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex as StdMutex;
-// Removed unused import
 
 // Performance optimization: Conditional logging macros for hot paths
 #[cfg(debug_assertions)]
@@ -59,8 +57,6 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager, Runtime};
 use tokio::sync::RwLock;
 
-static RECORDING_FLAG: AtomicBool = AtomicBool::new(false);
-
 // Global language preference storage (default to "auto-translate" for automatic translation to English)
 static LANGUAGE_PREFERENCE: std::sync::LazyLock<StdMutex<String>> =
     std::sync::LazyLock::new(|| StdMutex::new("auto-translate".to_string()));
@@ -75,64 +71,6 @@ struct TranscriptionStatus {
     chunks_in_queue: usize,
     is_processing: bool,
     last_activity_ms: u64,
-}
-
-#[tauri::command]
-async fn start_recording<R: Runtime>(
-    app: AppHandle<R>,
-    mic_device_name: Option<String>,
-    system_device_name: Option<String>,
-    meeting_name: Option<String>,
-) -> Result<(), String> {
-    log_info!("🔥 CALLED start_recording with meeting: {:?}", meeting_name);
-    log_info!(
-        "📋 Backend received parameters - mic: {:?}, system: {:?}, meeting: {:?}",
-        mic_device_name,
-        system_device_name,
-        meeting_name
-    );
-
-    if is_recording().await {
-        return Err("Recording already in progress".to_string());
-    }
-
-    // Call the actual audio recording system with meeting name
-    match audio::recording_commands::start_recording_with_devices_and_meeting(
-        app.clone(),
-        mic_device_name,
-        system_device_name,
-        meeting_name.clone(),
-    )
-    .await
-    {
-        Ok(_) => {
-            RECORDING_FLAG.store(true, Ordering::SeqCst);
-            tray::update_tray_menu(&app);
-
-            log_info!("Recording started successfully");
-
-            // Show recording started notification through NotificationManager
-            // This respects user's notification preferences
-            let notification_manager_state = app.state::<NotificationManagerState<R>>();
-            if let Err(e) = notifications::commands::show_recording_started_notification(
-                &app,
-                &notification_manager_state,
-                meeting_name.clone(),
-            )
-            .await
-            {
-                log_error!("Failed to show recording started notification: {}", e);
-            } else {
-                log_info!("Successfully showed recording started notification");
-            }
-
-            Ok(())
-        }
-        Err(e) => {
-            log_error!("Failed to start audio recording: {}", e);
-            Err(format!("Failed to start recording: {}", e))
-        }
-    }
 }
 
 #[tauri::command]
@@ -155,7 +93,6 @@ async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> R
     .await
     {
         Ok(_) => {
-            RECORDING_FLAG.store(false, Ordering::SeqCst);
             tray::update_tray_menu(&app);
 
             // Create the save directory if it doesn't exist
@@ -188,8 +125,6 @@ async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> R
         }
         Err(e) => {
             log_error!("Failed to stop audio recording: {}", e);
-            // Still update the flag even if stopping failed
-            RECORDING_FLAG.store(false, Ordering::SeqCst);
             tray::update_tray_menu(&app);
             Err(format!("Failed to stop recording: {}", e))
         }
@@ -749,7 +684,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            start_recording,
             stop_recording,
             is_recording,
             get_transcription_status,
@@ -757,12 +691,7 @@ pub fn run() {
             save_transcript,
             whisper_engine::commands::whisper_init,
             whisper_engine::commands::whisper_get_available_models,
-            whisper_engine::commands::whisper_load_model,
-            whisper_engine::commands::whisper_get_current_model,
-            whisper_engine::commands::whisper_is_model_loaded,
             whisper_engine::commands::whisper_has_available_models,
-            whisper_engine::commands::whisper_validate_model_ready,
-            whisper_engine::commands::whisper_transcribe_audio,
             whisper_engine::commands::whisper_get_models_directory,
             whisper_engine::commands::whisper_download_model,
             whisper_engine::commands::whisper_cancel_download,

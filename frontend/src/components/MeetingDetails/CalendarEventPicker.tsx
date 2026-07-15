@@ -65,11 +65,15 @@ export function CalendarEventPicker({
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
 
+  // Fallback "now" is captured once per mount — calling Date.now() inside
+  // useMemo violates render purity (react-hooks/purity), and a per-render
+  // timestamp was never meaningful for anchoring anyway.
+  const [mountedAtMs] = useState(() => Date.now());
   const anchorMs = useMemo(() => {
-    if (!anchorIso) return Date.now();
+    if (!anchorIso) return mountedAtMs;
     const ts = Date.parse(anchorIso);
-    return Number.isFinite(ts) ? ts : Date.now();
-  }, [anchorIso]);
+    return Number.isFinite(ts) ? ts : mountedAtMs;
+  }, [anchorIso, mountedAtMs]);
 
   useEffect(() => {
     let cancelled = false;
@@ -183,7 +187,7 @@ export function CalendarEventPicker({
                       disabled={isSaving}
                       onClick={() => void onPick(e.id)}
                       className={`
-                        flex w-full items-start gap-2 rounded-md px-2 py-2
+                        flex w-full items-start gap-2 rounded-md p-2 
                         text-left text-sm
                         ${isCurrent
                           ? "bg-info/10 text-info"

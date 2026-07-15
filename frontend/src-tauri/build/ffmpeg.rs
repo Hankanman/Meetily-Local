@@ -10,11 +10,7 @@ pub fn ensure_ffmpeg_binary() {
         .or_else(|_| std::env::var("HOST"))
         .expect("Neither TARGET nor HOST environment variable set");
 
-    let binary_name = if target.contains("windows") {
-        format!("ffmpeg-{}.exe", target)
-    } else {
-        format!("ffmpeg-{}", target)
-    };
+    let binary_name = format!("ffmpeg-{}", target);
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
         .expect("CARGO_MANIFEST_DIR environment variable not set");
@@ -130,21 +126,9 @@ fn download_and_extract_ffmpeg(
     Ok(())
 }
 
-/// Get FFmpeg download URL for specific target triple
+/// Get FFmpeg download URL for specific target triple (Linux-only)
 fn get_ffmpeg_url_for_target(target: &str) -> Result<String, String> {
-    // Platform-specific URLs
-    let url = if target.contains("windows") {
-        // Windows
-        "https://github.com/Zackriya-Solutions/ffmpeg-binaries/releases/download/0.0.1/ffmpeg-8.0.1-essentials_build.zip"
-    } else if target.contains("apple") {
-        if target.contains("aarch64") {
-            // Apple Silicon (M1/M2/M3)
-            "https://github.com/Zackriya-Solutions/ffmpeg-binaries/releases/download/0.0.1/ffmpeg80arm.zip"
-        } else {
-            // Intel Mac
-            "https://github.com/Zackriya-Solutions/ffmpeg-binaries/releases/download/0.0.1/ffmpeg-8.0.1.zip"
-        }
-    } else if target.contains("linux") {
+    let url = if target.contains("linux") {
         if target.contains("aarch64") || target.contains("arm") {
             // Linux ARM64
             "https://github.com/Zackriya-Solutions/ffmpeg-binaries/releases/download/0.0.1/ffmpeg-release-arm64-static.tar.xz"
@@ -172,19 +156,17 @@ fn extract_ffmpeg_from_archive(
     std::fs::create_dir_all(&extract_dir)
         .map_err(|e| format!("Failed to create extract dir: {}", e))?;
 
-    // Determine archive format from extension
+    // Linux FFmpeg builds ship as tar.xz
     let archive_str = archive_path.to_string_lossy();
 
-    if archive_str.ends_with(".zip") {
-        extract_zip(archive_path, &extract_dir)?;
-    } else if archive_str.ends_with(".tar.xz") || archive_str.ends_with(".txz") {
+    if archive_str.ends_with(".tar.xz") || archive_str.ends_with(".txz") {
         extract_tar_xz(archive_path, &extract_dir)?;
     } else {
         return Err(format!("Unsupported archive format: {}", archive_str));
     }
 
     // Find extracted FFmpeg binary (platform-specific locations)
-    let ffmpeg_binary = find_ffmpeg_in_extracted_dir(&extract_dir, target)?;
+    let ffmpeg_binary = find_ffmpeg_in_extracted_dir(&extract_dir)?;
 
     println!("cargo:warning=📋 Found FFmpeg at: {:?}", ffmpeg_binary);
 
@@ -207,66 +189,6 @@ fn extract_ffmpeg_from_archive(
 
     // Cleanup extraction directory
     let _ = std::fs::remove_dir_all(&extract_dir);
-
-    Ok(())
-}
-
-/// Extract ZIP archive (Windows, macOS)
-fn extract_zip(
-    archive_path: &std::path::Path,
-    extract_dir: &std::path::Path,
-) -> Result<(), String> {
-    let file =
-        std::fs::File::open(archive_path).map_err(|e| format!("Failed to open ZIP: {}", e))?;
-
-    let mut archive =
-        zip::ZipArchive::new(file).map_err(|e| format!("Failed to read ZIP archive: {}", e))?;
-
-    for i in 0..archive.len() {
-        let mut file = archive
-            .by_index(i)
-            .map_err(|e| format!("Failed to read ZIP entry {}: {}", i, e))?;
-
-        // Use enclosed_name() to prevent Zip Slip path traversal attacks
-        let outpath = match file.enclosed_name() {
-            Some(name) => extract_dir.join(name),
-            None => {
-                // Skip entries with path traversal sequences (e.g., "../")
-                println!(
-                    "cargo:warning=⚠️  Skipping suspicious ZIP entry: {}",
-                    file.name()
-                );
-                continue;
-            }
-        };
-
-        if file.is_dir() {
-            // Directory
-            std::fs::create_dir_all(&outpath)
-                .map_err(|e| format!("Failed to create directory: {}", e))?;
-        } else {
-            // File
-            if let Some(parent) = outpath.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("Failed to create parent directory: {}", e))?;
-            }
-
-            let mut outfile = std::fs::File::create(&outpath)
-                .map_err(|e| format!("Failed to create output file: {}", e))?;
-
-            std::io::copy(&mut file, &mut outfile)
-                .map_err(|e| format!("Failed to extract file: {}", e))?;
-        }
-
-        // Set Unix permissions if available
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Some(mode) = file.unix_mode() {
-                std::fs::set_permissions(&outpath, std::fs::Permissions::from_mode(mode)).ok();
-            }
-        }
-    }
 
     Ok(())
 }
@@ -294,13 +216,8 @@ fn extract_tar_xz(
 /// Find FFmpeg binary in extracted directory (handles nested structures)
 fn find_ffmpeg_in_extracted_dir(
     extract_dir: &std::path::Path,
-    target: &str,
 ) -> Result<std::path::PathBuf, String> {
-    let executable_name = if target.contains("windows") {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    };
+    let executable_name = "ffmpeg";
 
     // Search patterns (in priority order)
     let search_patterns = [

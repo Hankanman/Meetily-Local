@@ -50,14 +50,6 @@ class StorageService {
   async getMeeting(meetingId: string): Promise<Meeting> {
     return invoke<Meeting>("api_get_meeting", { meetingId });
   }
-
-  /**
-   * Get list of all meetings
-   * @returns Promise with array of meetings
-   */
-  async getMeetings(): Promise<Meeting[]> {
-    return invoke<Meeting[]>("api_get_meetings");
-  }
 }
 
 // Export singleton instance

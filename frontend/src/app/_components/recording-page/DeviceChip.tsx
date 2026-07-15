@@ -79,7 +79,7 @@ export function DeviceChip({
                   setOpen(false);
                 }}
                 className={`
-                  flex w-full items-start gap-2 rounded-md px-2 py-2 text-left
+                  flex w-full items-start gap-2 rounded-md p-2  text-left
                   text-sm transition-colors
                   hover:bg-muted
                   ${isSelected ? "bg-muted" : ""}

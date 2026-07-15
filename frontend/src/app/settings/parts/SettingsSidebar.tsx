@@ -62,7 +62,7 @@ export function SettingsSidebar({
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search settings…"
           className="
-            h-9 w-full rounded-md border border-border bg-background pr-8 pl-8
+            h-9 w-full rounded-md border border-border bg-background px-8 
             text-sm placeholder:text-muted-foreground/70
             focus:border-ring focus:ring-1 focus:ring-ring focus:outline-none
           "
@@ -118,7 +118,7 @@ export function SettingsSidebar({
                     doesn't shift the row's content when toggling. */}
                 {isActive && (
                   <span className="
-                    absolute top-1.5 bottom-1.5 left-0 w-0.5 rounded-r-full
+                    absolute inset-y-1.5  left-0 w-0.5 rounded-r-full
                     bg-info
                   " />
                 )}

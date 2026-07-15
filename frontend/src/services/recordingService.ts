@@ -52,14 +52,6 @@ class RecordingService {
   }
 
   /**
-   * Start recording (no device configuration)
-   * @returns Promise<void>
-   */
-  async startRecording(): Promise<void> {
-    return invoke("start_recording");
-  }
-
-  /**
    * Start recording with device configuration and meeting name
    * @param micDeviceName - Microphone device name (null for default)
    * @param systemDeviceName - System audio device name (null for none)
@@ -78,33 +70,6 @@ class RecordingService {
       systemDeviceName,
       meetingName,
     });
-  }
-
-  /**
-   * Stop recording and save to file
-   * @param savePath - Path to save audio file
-   * @returns Promise<void>
-   */
-  async stopRecording(savePath: string): Promise<void> {
-    return invoke("stop_recording", {
-      args: { save_path: savePath },
-    });
-  }
-
-  /**
-   * Pause active recording
-   * @returns Promise<void>
-   */
-  async pauseRecording(): Promise<void> {
-    return invoke("pause_recording");
-  }
-
-  /**
-   * Resume paused recording
-   * @returns Promise<void>
-   */
-  async resumeRecording(): Promise<void> {
-    return invoke("resume_recording");
   }
 
   // Event Listeners
@@ -147,28 +112,6 @@ class RecordingService {
    */
   async onRecordingResumed(callback: () => void): Promise<UnlistenFn> {
     return listen("recording-resumed", callback);
-  }
-
-  /**
-   * Listen for chunk-drop-warning event (audio buffer overflow)
-   * @param callback - Function to call when chunks are dropped
-   * @returns Promise that resolves to unlisten function
-   */
-  async onChunkDropWarning(
-    callback: (warning: string) => void,
-  ): Promise<UnlistenFn> {
-    return listen<string>("chunk-drop-warning", (event) => {
-      callback(event.payload);
-    });
-  }
-
-  /**
-   * Listen for speech-detected event (VAD)
-   * @param callback - Function to call when speech is detected
-   * @returns Promise that resolves to unlisten function
-   */
-  async onSpeechDetected(callback: () => void): Promise<UnlistenFn> {
-    return listen("speech-detected", callback);
   }
 }
 

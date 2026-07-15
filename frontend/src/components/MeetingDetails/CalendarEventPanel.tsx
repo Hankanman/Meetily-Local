@@ -215,7 +215,7 @@ export function CalendarEventPanel({
                 "
                 title={a.email ?? undefined}
               >
-                <span className="truncate max-w-[12rem]">{label}</span>
+                <span className="truncate max-w-48">{label}</span>
                 {a.status && (
                   <span
                     className="text-[10px] uppercase tracking-wide text-muted-foreground"

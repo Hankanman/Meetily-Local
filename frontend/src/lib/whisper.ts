@@ -146,26 +146,6 @@ export class WhisperAPI {
     return await invoke("whisper_get_available_models");
   }
 
-  static async loadModel(modelName: string): Promise<void> {
-    await invoke("whisper_load_model", { modelName });
-  }
-
-  static async getCurrentModel(): Promise<string | null> {
-    return await invoke("whisper_get_current_model");
-  }
-
-  static async isModelLoaded(): Promise<boolean> {
-    return await invoke("whisper_is_model_loaded");
-  }
-
-  static async transcribeAudio(audioData: number[]): Promise<string> {
-    return await invoke("whisper_transcribe_audio", { audioData });
-  }
-
-  static async getModelsDirectory(): Promise<string> {
-    return await invoke("whisper_get_models_directory");
-  }
-
   static async downloadModel(modelName: string): Promise<void> {
     await invoke("whisper_download_model", { modelName });
   }
@@ -176,17 +156,5 @@ export class WhisperAPI {
 
   static async deleteCorruptedModel(modelName: string): Promise<string> {
     return await invoke("whisper_delete_corrupted_model", { modelName });
-  }
-
-  static async hasAvailableModels(): Promise<boolean> {
-    return await invoke("whisper_has_available_models");
-  }
-
-  static async validateModelReady(): Promise<string> {
-    return await invoke("whisper_validate_model_ready");
-  }
-
-  static async openModelsFolder(): Promise<void> {
-    await invoke("open_models_folder");
   }
 }
