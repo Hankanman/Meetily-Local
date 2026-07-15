@@ -5,7 +5,7 @@
     "type": "module",
     "scripts": {
         "dev": "next dev -p 3118",
-        "build": "next build",
+        "build": "NODE_OPTIONS=--disable-warning=DEP0205 next build",
         "export": "next export",
         "start": "next start -p 3118",
         "tauri": "tauri",
