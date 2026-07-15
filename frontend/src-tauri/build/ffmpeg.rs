@@ -10,11 +10,6 @@ pub fn ensure_ffmpeg_binary() {
         .or_else(|_| std::env::var("HOST"))
         .expect("Neither TARGET nor HOST environment variable set");
 
-    println!(
-        "cargo:warning=🎬 Checking FFmpeg binary for target: {}",
-        target
-    );
-
     let binary_name = if target.contains("windows") {
         format!("ffmpeg-{}.exe", target)
     } else {
@@ -26,17 +21,10 @@ pub fn ensure_ffmpeg_binary() {
     let binaries_dir = std::path::PathBuf::from(&manifest_dir).join("binaries");
     let binary_path = binaries_dir.join(&binary_name);
 
-    // Cache check: Skip download if binary exists and works
+    // Cache check: Skip download if binary exists and works. The happy
+    // path is silent — a cached, verified binary is the expected state.
     if binary_path.exists() {
-        println!(
-            "cargo:warning=🔍 Found cached FFmpeg binary: {}",
-            binary_name
-        );
         if verify_ffmpeg_binary(&binary_path) {
-            println!(
-                "cargo:warning=✅ FFmpeg binary already cached and verified: {}",
-                binary_name
-            );
             return;
         } else {
             println!("cargo:warning=⚠️  Cached FFmpeg binary appears corrupted, re-downloading...");
@@ -358,20 +346,7 @@ fn find_ffmpeg_in_extracted_dir(
 /// Verify FFmpeg binary is functional (runs -version successfully)
 fn verify_ffmpeg_binary(path: &std::path::PathBuf) -> bool {
     match std::process::Command::new(path).arg("-version").output() {
-        Ok(output) => {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                if let Some(version_line) = stdout.lines().next() {
-                    println!(
-                        "cargo:warning=✅ FFmpeg verification passed: {}",
-                        version_line
-                    );
-                }
-                true
-            } else {
-                false
-            }
-        }
+        Ok(output) => output.status.success(),
         Err(_) => false,
     }
 }
