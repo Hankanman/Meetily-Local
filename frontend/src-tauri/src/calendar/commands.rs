@@ -109,22 +109,6 @@ pub async fn calendar_remove_source<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn calendar_update_source_label<R: Runtime>(
-    _app: AppHandle<R>,
-    state: tauri::State<'_, AppState>,
-    source_id: String,
-    label: Option<String>,
-) -> Result<bool, String> {
-    CalendarRepository::update_source_label(
-        state.db_manager.pool(),
-        &source_id,
-        label.as_deref().filter(|s| !s.trim().is_empty()),
-    )
-    .await
-    .map_err(err)
-}
-
-#[tauri::command]
 pub async fn calendar_refresh_source<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
@@ -157,44 +141,6 @@ pub async fn calendar_refresh_source<R: Runtime>(
             Err(msg)
         }
     }
-}
-
-#[tauri::command]
-pub async fn calendar_refresh_all<R: Runtime>(
-    _app: AppHandle<R>,
-    state: tauri::State<'_, AppState>,
-) -> Result<Vec<RefreshResult>, String> {
-    let pool = state.db_manager.pool();
-    let sources = CalendarRepository::list_sources(pool).await.map_err(err)?;
-    let mut results = Vec::with_capacity(sources.len());
-    for s in sources {
-        match fetcher::fetch_and_expand(&s.url).await {
-            Ok(occurrences) => match CalendarRepository::replace_events(pool, &s.id, &occurrences)
-                .await
-            {
-                Ok(count) => {
-                    let _ =
-                        CalendarRepository::mark_source_fetched(pool, &s.id, None).await;
-                    results.push(RefreshResult {
-                        source_id: s.id,
-                        event_count: count,
-                    });
-                }
-                Err(e) => {
-                    let msg = e.to_string();
-                    log::warn!("calendar source {} replace failed: {}", s.id, msg);
-                    let _ =
-                        CalendarRepository::mark_source_fetched(pool, &s.id, Some(&msg)).await;
-                }
-            },
-            Err(e) => {
-                let msg = e.to_string();
-                log::warn!("calendar source {} fetch failed: {}", s.id, msg);
-                let _ = CalendarRepository::mark_source_fetched(pool, &s.id, Some(&msg)).await;
-            }
-        }
-    }
-    Ok(results)
 }
 
 #[derive(Debug, Deserialize)]

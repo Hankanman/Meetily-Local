@@ -147,7 +147,7 @@ function DownloadToastContent({
 }
 
 // Hook to manage download progress toasts
-export function useDownloadProgressToast() {
+function useDownloadProgressToast() {
   const [downloads, setDownloads] = useState<Map<string, DownloadProgress>>(
     new Map(),
   );

@@ -73,18 +73,3 @@ export function consumePendingCalendarEventId(): string | null {
   sessionStorage.removeItem(PENDING_EVENT_SUMMARY_KEY);
   return id;
 }
-
-/** Peek without clearing — used by UI surfaces that want to show the link
- *  during recording. */
-export function peekPendingCalendarEvent(): {
-  id: string;
-  summary: string;
-} | null {
-  if (typeof window === "undefined") return null;
-  const id = sessionStorage.getItem(PENDING_EVENT_KEY);
-  if (!id) return null;
-  return {
-    id,
-    summary: sessionStorage.getItem(PENDING_EVENT_SUMMARY_KEY) ?? "",
-  };
-}

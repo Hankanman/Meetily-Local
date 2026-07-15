@@ -64,21 +64,10 @@ export async function removeCalendarSource(sourceId: string): Promise<boolean> {
   return invoke<boolean>("calendar_remove_source", { sourceId });
 }
 
-export async function updateCalendarSourceLabel(
-  sourceId: string,
-  label: string | null,
-): Promise<boolean> {
-  return invoke<boolean>("calendar_update_source_label", { sourceId, label });
-}
-
 export async function refreshCalendarSource(
   sourceId: string,
 ): Promise<CalendarRefreshResult> {
   return invoke<CalendarRefreshResult>("calendar_refresh_source", { sourceId });
-}
-
-export async function refreshAllCalendarSources(): Promise<CalendarRefreshResult[]> {
-  return invoke<CalendarRefreshResult[]>("calendar_refresh_all");
 }
 
 export async function listCalendarEvents(

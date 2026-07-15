@@ -1,10 +1,10 @@
-// Cross-Platform Bluetooth Device Detection
+// Bluetooth Device Detection (Linux)
 //
 // This module provides intelligent device type detection to enable adaptive
 // buffering for audio devices with different latency characteristics.
 //
 // Detection Strategy (3 layers):
-// 1. Platform-native APIs (highest accuracy)
+// 1. Linux BlueZ/PulseAudio naming hints (highest accuracy)
 // 2. Cross-platform name heuristics
 // 3. Buffer size analysis (fallback)
 
@@ -38,17 +38,6 @@ impl InputDeviceKind {
         info!("🔍 Detecting device type for: '{}'", device_name);
 
         // Layer 1: Platform-specific native detection (highest accuracy)
-        #[cfg(target_os = "macos")]
-        if let Some(kind) = Self::detect_macos_native(device_name) {
-            return kind;
-        }
-
-        #[cfg(target_os = "windows")]
-        if let Some(kind) = Self::detect_windows_native(device_name) {
-            return kind;
-        }
-
-        #[cfg(target_os = "linux")]
         if let Some(kind) = Self::detect_linux_native(device_name) {
             return kind;
         }
@@ -238,130 +227,7 @@ impl InputDeviceKind {
 // Platform-Specific Implementations
 // ============================================================================
 
-// macOS: Core Audio Transport Type API
-#[cfg(target_os = "macos")]
-impl InputDeviceKind {
-    /// Detect device type using macOS Core Audio Transport Type API
-    ///
-    /// This is the most accurate detection method on macOS, querying the
-    /// actual hardware transport type from Core Audio.
-    fn detect_macos_native(device_name: &str) -> Option<Self> {
-        use cidre::core_audio::hardware::System;
-
-        // Query Core Audio device list and find device by name
-        // System::devices() returns Result<Vec<Device>, Error>
-        let devices = System::devices().ok()?;
-        let device = devices
-            .iter()
-            .find(|d| d.name().ok().map(|n| n.to_string()).as_deref() == Some(device_name))?;
-
-        // Query transport type
-        if let Ok(transport) = device.transport_type() {
-            use cidre::core_audio::DeviceTransportType;
-
-            match transport {
-                DeviceTransportType::BLUETOOTH => {
-                    info!(
-                        "✅ macOS Core Audio: Bluetooth detected for '{}'",
-                        device_name
-                    );
-                    return Some(InputDeviceKind::Bluetooth);
-                }
-                DeviceTransportType::BLUETOOTH_LE => {
-                    info!(
-                        "✅ macOS Core Audio: Bluetooth LE detected for '{}'",
-                        device_name
-                    );
-                    return Some(InputDeviceKind::Bluetooth);
-                }
-                DeviceTransportType::USB => {
-                    info!("✅ macOS Core Audio: USB detected for '{}'", device_name);
-                    return Some(InputDeviceKind::Wired);
-                }
-                DeviceTransportType::BUILT_IN => {
-                    info!(
-                        "✅ macOS Core Audio: Built-in detected for '{}'",
-                        device_name
-                    );
-                    return Some(InputDeviceKind::Wired);
-                }
-                _ => {
-                    debug!(
-                        "macOS Core Audio: Unknown transport type for '{}': {:?}",
-                        device_name, transport
-                    );
-                }
-            }
-        }
-
-        None // Fall through to heuristic detection
-    }
-}
-
-// Windows: WASAPI Device Properties
-#[cfg(target_os = "windows")]
-impl InputDeviceKind {
-    /// Detect device type using Windows WASAPI naming conventions
-    ///
-    /// Windows WASAPI exposes Bluetooth devices with specific naming patterns.
-    /// This method checks for common Windows Bluetooth device prefixes.
-    fn detect_windows_native(device_name: &str) -> Option<Self> {
-        let name_lower = device_name.to_lowercase();
-
-        // Windows-specific Bluetooth device naming patterns
-        // WASAPI exposes Bluetooth devices with specific prefixes
-
-        // Pattern 1: "Bluetooth Audio (Device Name)"
-        if name_lower.starts_with("bluetooth audio") {
-            info!(
-                "✅ Windows WASAPI: Bluetooth Audio prefix detected for '{}'",
-                device_name
-            );
-            return Some(InputDeviceKind::Bluetooth);
-        }
-
-        // Pattern 2: "Bluetooth Hands-Free Audio"
-        if name_lower.contains("bluetooth hands-free") {
-            info!(
-                "✅ Windows WASAPI: Bluetooth Hands-Free detected for '{}'",
-                device_name
-            );
-            return Some(InputDeviceKind::Bluetooth);
-        }
-
-        // Pattern 3: "Bluetooth Stereo Audio"
-        if name_lower.contains("bluetooth stereo") {
-            info!(
-                "✅ Windows WASAPI: Bluetooth Stereo detected for '{}'",
-                device_name
-            );
-            return Some(InputDeviceKind::Bluetooth);
-        }
-
-        // Pattern 4: USB Audio devices
-        if name_lower.contains("usb audio") {
-            info!(
-                "✅ Windows WASAPI: USB Audio detected for '{}'",
-                device_name
-            );
-            return Some(InputDeviceKind::Wired);
-        }
-
-        // Pattern 5: Realtek, Conexant, etc. (built-in audio chips)
-        if name_lower.contains("realtek") || name_lower.contains("conexant") {
-            info!(
-                "✅ Windows WASAPI: Built-in audio detected for '{}'",
-                device_name
-            );
-            return Some(InputDeviceKind::Wired);
-        }
-
-        None // Fall through to heuristic detection
-    }
-}
-
 // Linux: BlueZ/PulseAudio Device Hints
-#[cfg(target_os = "linux")]
 impl InputDeviceKind {
     /// Detect device type using Linux BlueZ/PulseAudio naming conventions
     ///

@@ -93,29 +93,10 @@ pub async fn open_database_folder(app: AppHandle) -> Result<(), String> {
 
     let folder_path = app_data_dir.to_string_lossy().to_string();
 
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(&folder_path)
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&folder_path)
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&folder_path)
-            .spawn()
-            .map_err(|e| format!("Failed to open folder: {}", e))?;
-    }
+    std::process::Command::new("xdg-open")
+        .arg(&folder_path)
+        .spawn()
+        .map_err(|e| format!("Failed to open folder: {}", e))?;
 
     info!("Opened database folder: {}", folder_path);
     Ok(())

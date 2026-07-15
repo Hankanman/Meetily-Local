@@ -24,7 +24,7 @@ export interface BetaFeatures {
   importAndRetranscribe: boolean;
 }
 
-export const DEFAULT_BETA_FEATURES: BetaFeatures = {
+const DEFAULT_BETA_FEATURES: BetaFeatures = {
   importAndRetranscribe: true, // Default: enabled
 };
 

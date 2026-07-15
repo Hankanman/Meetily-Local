@@ -68,23 +68,6 @@ impl CalendarRepository {
         Ok(res.rows_affected() > 0)
     }
 
-    pub async fn update_source_label(
-        pool: &SqlitePool,
-        id: &str,
-        label: Option<&str>,
-    ) -> Result<bool, sqlx::Error> {
-        let now = Utc::now().to_rfc3339();
-        let res = sqlx::query(
-            "UPDATE calendar_sources SET label = ?, updated_at = ? WHERE id = ?",
-        )
-        .bind(label)
-        .bind(&now)
-        .bind(id)
-        .execute(pool)
-        .await?;
-        Ok(res.rows_affected() > 0)
-    }
-
     pub async fn mark_source_fetched(
         pool: &SqlitePool,
         id: &str,

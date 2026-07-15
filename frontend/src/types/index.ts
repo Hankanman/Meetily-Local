@@ -1,9 +1,3 @@
-export interface Message {
-  id: string;
-  content: string;
-  timestamp: string;
-}
-
 export interface Transcript {
   id: string;
   text: string;
@@ -56,12 +50,6 @@ export interface Section {
 
 export interface Summary {
   [key: string]: Section;
-}
-
-export interface ApiResponse {
-  message: string;
-  num_chunks: number;
-  data: any[];
 }
 
 export interface SummaryResponse {

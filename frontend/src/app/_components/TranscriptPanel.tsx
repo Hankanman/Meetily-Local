@@ -1,14 +1,11 @@
 import { VirtualizedTranscriptView } from "@/components/VirtualizedTranscriptView";
-import { PermissionWarning } from "@/components/PermissionWarning";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Copy, GlobeIcon } from "lucide-react";
 import { useTranscripts } from "@/contexts/TranscriptContext";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
-import { usePermissionCheck } from "@/hooks/usePermissionCheck";
 import { ModalType } from "@/hooks/useModalState";
-import { useIsLinux } from "@/hooks/usePlatform";
 import { useMemo } from "react";
 
 /**
@@ -35,9 +32,6 @@ export function TranscriptPanel({
     useTranscripts();
   const { transcriptModelConfig } = useConfig();
   const { isRecording, isPaused } = useRecordingState();
-  const { checkPermissions, isChecking, hasSystemAudio, hasMicrophone } =
-    usePermissionCheck();
-  const isLinux = useIsLinux();
 
   // Convert transcripts to segments for virtualized view
   const segments = useMemo(
@@ -107,18 +101,6 @@ export function TranscriptPanel({
           </div>
         </div>
       </div>
-
-      {/* Permission Warning - Not needed on Linux */}
-      {!isRecording && !isChecking && !isLinux && (
-        <div className="flex justify-center px-4 pt-4">
-          <PermissionWarning
-            hasMicrophone={hasMicrophone}
-            hasSystemAudio={hasSystemAudio}
-            onRecheck={checkPermissions}
-            isRechecking={isChecking}
-          />
-        </div>
-      )}
 
       {/* Transcript content */}
       <div className="pb-20">

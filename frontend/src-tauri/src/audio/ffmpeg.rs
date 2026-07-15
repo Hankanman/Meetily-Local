@@ -9,11 +9,7 @@ use once_cell::sync::Lazy;
 use std::path::PathBuf;
 use which::which;
 
-#[cfg(not(windows))]
 const EXECUTABLE_NAME: &str = "ffmpeg";
-
-#[cfg(windows)]
-const EXECUTABLE_NAME: &str = "ffmpeg.exe";
 
 static FFMPEG_PATH: Lazy<Option<PathBuf>> = Lazy::new(find_ffmpeg_path_internal);
 
@@ -48,24 +44,6 @@ fn find_ffmpeg_path_internal() -> Option<PathBuf> {
     }
     debug!("ffmpeg not found in PATH");
 
-    // Check in $HOME/.local/bin on macOS
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(home) = std::env::var("HOME") {
-            let local_bin = PathBuf::from(home).join(".local").join("bin");
-            debug!("Checking $HOME/.local/bin: {:?}", local_bin);
-            let ffmpeg_in_local_bin = local_bin.join(EXECUTABLE_NAME);
-            if ffmpeg_in_local_bin.exists() {
-                debug!(
-                    "Found ffmpeg in $HOME/.local/bin: {:?}",
-                    ffmpeg_in_local_bin
-                );
-                return Some(ffmpeg_in_local_bin);
-            }
-            debug!("ffmpeg not found in $HOME/.local/bin");
-        }
-    }
-
     // Check in current working directory
     if let Ok(cwd) = std::env::current_dir() {
         debug!("Current working directory: {:?}", cwd);
@@ -85,33 +63,14 @@ fn find_ffmpeg_path_internal() -> Option<PathBuf> {
         if let Some(exe_folder) = exe_path.parent() {
             debug!("Executable folder: {:?}", exe_folder);
 
-            // Platform-specific checks
-            #[cfg(target_os = "macos")]
-            {
-                let resources_folder = exe_folder.join("../Resources");
-                debug!("Resources folder: {:?}", resources_folder);
-                let ffmpeg_in_resources = resources_folder.join(EXECUTABLE_NAME);
-                if ffmpeg_in_resources.exists() {
-                    debug!(
-                        "Found ffmpeg in Resources folder: {:?}",
-                        ffmpeg_in_resources
-                    );
-                    return Some(ffmpeg_in_resources);
-                }
-                debug!("ffmpeg not found in Resources folder");
+            let lib_folder = exe_folder.join("lib");
+            debug!("Lib folder: {:?}", lib_folder);
+            let ffmpeg_in_lib = lib_folder.join(EXECUTABLE_NAME);
+            if ffmpeg_in_lib.exists() {
+                debug!("Found ffmpeg in lib folder: {:?}", ffmpeg_in_lib);
+                return Some(ffmpeg_in_lib);
             }
-
-            #[cfg(target_os = "linux")]
-            {
-                let lib_folder = exe_folder.join("lib");
-                debug!("Lib folder: {:?}", lib_folder);
-                let ffmpeg_in_lib = lib_folder.join(EXECUTABLE_NAME);
-                if ffmpeg_in_lib.exists() {
-                    debug!("Found ffmpeg in lib folder: {:?}", ffmpeg_in_lib);
-                    return Some(ffmpeg_in_lib);
-                }
-                debug!("ffmpeg not found in lib folder");
-            }
+            debug!("ffmpeg not found in lib folder");
         }
     }
 
@@ -132,31 +91,6 @@ fn find_ffmpeg_path_internal() -> Option<PathBuf> {
     if ffmpeg_in_installation.is_file() {
         debug!("found ffmpeg in directory: {:?}", ffmpeg_in_installation);
         return Some(ffmpeg_in_installation);
-    }
-
-    // Windows often has nested structure like ffmpeg-6.0-full_build/bin/ffmpeg.exe
-    #[cfg(windows)]
-    {
-        debug!("Searching for nested ffmpeg in {:?}", installation_dir);
-        if let Ok(entries) = std::fs::read_dir(&installation_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    // Check bin/ffmpeg.exe
-                    let bin_ffmpeg = path.join("bin").join(EXECUTABLE_NAME);
-                    if bin_ffmpeg.exists() {
-                        debug!("found ffmpeg in nested bin: {:?}", bin_ffmpeg);
-                        return Some(bin_ffmpeg);
-                    }
-                    // Check root of subdir
-                    let root_ffmpeg = path.join(EXECUTABLE_NAME);
-                    if root_ffmpeg.exists() {
-                        debug!("found ffmpeg in nested root: {:?}", root_ffmpeg);
-                        return Some(root_ffmpeg);
-                    }
-                }
-            }
-        }
     }
 
     error!("ffmpeg not found even after installation");
@@ -191,44 +125,6 @@ fn handle_ffmpeg_installation() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 fn get_ffmpeg_install_dir() -> Result<PathBuf, anyhow::Error> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("couldn't find home directory"))?;
-
-    let local_bin = home.join(".local").join("bin");
-
-    // Create directory if it doesn't exist
-    if !local_bin.exists() {
-        debug!("creating .local/bin directory");
-        std::fs::create_dir_all(&local_bin)?;
-
-        // Check both .bashrc and .zshrc
-        let shell_configs = vec![
-            home.join(".bashrc"),
-            home.join(".bash_profile"), // macOS often uses .bash_profile instead of .bashrc
-            home.join(".zshrc"),
-        ];
-
-        for config in shell_configs {
-            if config.exists() {
-                let content = std::fs::read_to_string(&config)?;
-                if !content.contains(".local/bin") {
-                    debug!("adding .local/bin to PATH in {:?}", config);
-                    std::fs::write(
-                        config,
-                        format!("{}\nexport PATH=\"$HOME/.local/bin:$PATH\"\n", content),
-                    )?;
-                }
-            }
-        }
-    }
-
-    Ok(local_bin)
-}
-
-// For other platforms, keep your existing installation directory logic
-#[cfg(not(target_os = "macos"))]
-fn get_ffmpeg_install_dir() -> Result<PathBuf, anyhow::Error> {
-    // Your existing logic for other platforms
     sidecar_dir().map_err(|e| anyhow::anyhow!(e))
 }

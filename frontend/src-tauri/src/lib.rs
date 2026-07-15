@@ -883,9 +883,6 @@ pub fn run() {
             // auto-summary, provider model cache, ...)
             database::repositories::setting::api_get_ui_config,
             database::repositories::setting::api_save_ui_config,
-            // System settings commands
-            #[cfg(target_os = "macos")]
-            utils::open_system_settings,
             // Retranscription commands
             audio::retranscription::start_retranscription_command,
             audio::retranscription::cancel_retranscription_command,
@@ -900,9 +897,7 @@ pub fn run() {
             calendar::commands::calendar_list_sources,
             calendar::commands::calendar_add_source,
             calendar::commands::calendar_remove_source,
-            calendar::commands::calendar_update_source_label,
             calendar::commands::calendar_refresh_source,
-            calendar::commands::calendar_refresh_all,
             calendar::commands::calendar_list_events,
             calendar::commands::calendar_find_event_for_now,
             calendar::commands::calendar_link_meeting,

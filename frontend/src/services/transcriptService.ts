@@ -21,15 +21,11 @@ export interface TranscriptionErrorPayload {
   actionable: boolean;
 }
 
-export interface ModelDownloadCompletePayload {
-  modelName: string;
-}
-
 /**
  * Transcript Service
  * Singleton service for managing transcription operations and transcript history
  */
-export class TranscriptService {
+class TranscriptService {
   /**
    * Get transcript history from backend (for reload sync)
    * @returns Promise<Transcript[]>
@@ -95,23 +91,6 @@ export class TranscriptService {
       callback(event.payload);
     });
   }
-
-  /**
-   * Listen for Whisper model download complete event
-   * @param callback - Function to call when Whisper model download completes
-   * @returns Promise that resolves to unlisten function
-   */
-  async onModelDownloadComplete(
-    callback: (modelName: string) => void,
-  ): Promise<UnlistenFn> {
-    return listen<ModelDownloadCompletePayload>(
-      "model-download-complete",
-      (event) => {
-        callback(event.payload.modelName);
-      },
-    );
-  }
-
 }
 
 // Export singleton instance

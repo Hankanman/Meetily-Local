@@ -26,7 +26,7 @@ export interface RecordingStoppedPayload {
  * Recording Service
  * Singleton service for managing recording lifecycle operations
  */
-export class RecordingService {
+class RecordingService {
   /**
    * Check if recording is currently active
    * @returns Promise<boolean>

@@ -1,52 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef } from "react";
 import {
-  getModelDownloadsSnapshot,
   startModelDownloadListeners,
   subscribeModelDownloadEvents,
-  subscribeModelDownloads,
   type ModelDownloadEvent,
-  type ModelDownloadKind,
-  type ModelDownloadState,
 } from "@/lib/modelDownloadStore";
-
-const EMPTY_MAP: Map<string, ModelDownloadState> = new Map();
-
-function snapshotFor(
-  kind: ModelDownloadKind,
-  modelName: string | undefined | null,
-): ModelDownloadState | undefined {
-  if (!modelName) return undefined;
-  return getModelDownloadsSnapshot().get(`${kind}:${modelName}`);
-}
-
-/**
- * Full snapshot of every known download, keyed by `${kind}:${modelName}`.
- * Re-renders on ANY download update (Whisper or built-in) — use for
- * global UI that cares about "is anything downloading" (e.g. the toast).
- */
-export function useModelDownloadsMap(): Map<string, ModelDownloadState> {
-  useModelDownloadListeners();
-  return useSyncExternalStore(
-    subscribeModelDownloads,
-    getModelDownloadsSnapshot,
-    () => EMPTY_MAP,
-  );
-}
-
-/** Latest normalized state for a single model, or undefined if no event has been seen for it yet. */
-export function useModelDownload(
-  kind: ModelDownloadKind,
-  modelName: string | undefined | null,
-): ModelDownloadState | undefined {
-  useModelDownloadListeners();
-  return useSyncExternalStore(
-    subscribeModelDownloads,
-    () => snapshotFor(kind, modelName),
-    () => undefined,
-  );
-}
 
 /**
  * Edge-triggered subscription — fires once per raw backend event (progress

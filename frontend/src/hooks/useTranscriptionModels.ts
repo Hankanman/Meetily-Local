@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-export interface RawModelInfo {
+interface RawModelInfo {
   name: string;
   size_mb: number;
   status:

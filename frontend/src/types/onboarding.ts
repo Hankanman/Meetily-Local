@@ -1,5 +1,3 @@
-export type OnboardingStep = 1 | 2 | 3;
-
 export interface OnboardingContainerProps {
   title: string;
   description?: React.ReactNode;

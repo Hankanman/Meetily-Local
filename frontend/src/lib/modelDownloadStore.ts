@@ -1,4 +1,4 @@
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 
 /**
  * Single source of truth for Whisper + built-in-AI (Gemma) model download
@@ -18,14 +18,10 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
  * events and re-derived state independently (DownloadProgressToast, OnboardingContext,
  * DownloadProgressStep, WhisperModelManager, BuiltInModelManager, useModalState).
  * This module registers exactly ONE Tauri listener per event and fans data out
- * two ways:
- *
- *  - A normalized snapshot (`getModelDownloadsSnapshot` / `subscribeModelDownloads`)
- *    for "what's the current state of download X" reads, keyed by `${kind}:${modelName}`.
- *  - A raw, edge-triggered event stream (`subscribeModelDownloadEvents`) carrying the
- *    untouched backend payload (`event.raw`) alongside the normalized state
- *    (`event.state`), so existing consumers can keep their original per-event
- *    handling logic verbatim and only swap the event source.
+ * via a raw, edge-triggered event stream (`subscribeModelDownloadEvents`) carrying
+ * the untouched backend payload (`event.raw`) alongside the normalized state
+ * (`event.state`), so consumers can keep their original per-event handling logic
+ * verbatim and only swap the event source.
  */
 
 export type ModelDownloadKind = "whisper" | "builtin";
@@ -111,10 +107,6 @@ export type ModelDownloadEvent =
       raw: BuiltinDownloadProgressPayload;
     };
 
-function storeKey(kind: ModelDownloadKind, modelName: string): string {
-  return `${kind}:${modelName}`;
-}
-
 function resolveStatus(
   rawStatus: string | undefined,
   progress: number,
@@ -140,34 +132,10 @@ function eventTypeForStatus(
   }
 }
 
-let downloads = new Map<string, ModelDownloadState>();
-const snapshotListeners = new Set<() => void>();
 const eventListeners = new Set<(event: ModelDownloadEvent) => void>();
-
-function publish(
-  kind: ModelDownloadKind,
-  modelName: string,
-  state: ModelDownloadState,
-): void {
-  const updated = new Map(downloads);
-  updated.set(storeKey(kind, modelName), state);
-  downloads = updated;
-  snapshotListeners.forEach((listener) => listener());
-}
 
 function emit(event: ModelDownloadEvent): void {
   eventListeners.forEach((listener) => listener(event));
-}
-
-/** Subscribe to snapshot changes (any download, any kind). Pair with {@link getModelDownloadsSnapshot}. */
-export function subscribeModelDownloads(listener: () => void): () => void {
-  snapshotListeners.add(listener);
-  return () => snapshotListeners.delete(listener);
-}
-
-/** Current downloads, keyed by `${kind}:${modelName}`. Stable reference until the next update. */
-export function getModelDownloadsSnapshot(): Map<string, ModelDownloadState> {
-  return downloads;
 }
 
 /**
@@ -184,7 +152,6 @@ export function subscribeModelDownloadEvents(
 }
 
 let started = false;
-let unlistenFns: UnlistenFn[] = [];
 
 /**
  * Registers the singleton Tauri listeners for all model-download events.
@@ -195,7 +162,7 @@ export async function startModelDownloadListeners(): Promise<void> {
   if (started) return;
   started = true;
 
-  const unlistenWhisperProgress = await listen<WhisperDownloadProgressPayload>(
+  await listen<WhisperDownloadProgressPayload>(
     "model-download-progress",
     (event) => {
       const {
@@ -216,7 +183,6 @@ export async function startModelDownloadListeners(): Promise<void> {
         speedMbps: speed_mbps,
         status: resolved,
       };
-      publish("whisper", modelName, state);
       emit({
         kind: "whisper",
         type: resolved === "cancelled" ? "cancelled" : "progress",
@@ -227,7 +193,7 @@ export async function startModelDownloadListeners(): Promise<void> {
     },
   );
 
-  const unlistenWhisperComplete = await listen<WhisperDownloadCompletePayload>(
+  await listen<WhisperDownloadCompletePayload>(
     "model-download-complete",
     (event) => {
       const { modelName } = event.payload;
@@ -237,7 +203,6 @@ export async function startModelDownloadListeners(): Promise<void> {
         progress: 100,
         status: "completed",
       };
-      publish("whisper", modelName, state);
       emit({
         kind: "whisper",
         type: "complete",
@@ -248,7 +213,7 @@ export async function startModelDownloadListeners(): Promise<void> {
     },
   );
 
-  const unlistenWhisperError = await listen<WhisperDownloadErrorPayload>(
+  await listen<WhisperDownloadErrorPayload>(
     "model-download-error",
     (event) => {
       const { modelName, error } = event.payload;
@@ -259,7 +224,6 @@ export async function startModelDownloadListeners(): Promise<void> {
         status: "error",
         error,
       };
-      publish("whisper", modelName, state);
       emit({
         kind: "whisper",
         type: "error",
@@ -270,7 +234,7 @@ export async function startModelDownloadListeners(): Promise<void> {
     },
   );
 
-  const unlistenBuiltin = await listen<BuiltinDownloadProgressPayload>(
+  await listen<BuiltinDownloadProgressPayload>(
     "builtin-ai-download-progress",
     (event) => {
       const { model, progress, downloaded_mb, total_mb, speed_mbps, status, error } =
@@ -286,7 +250,6 @@ export async function startModelDownloadListeners(): Promise<void> {
         status: resolved,
         error: resolved === "error" ? error : undefined,
       };
-      publish("builtin", model, state);
       emit({
         kind: "builtin",
         type: eventTypeForStatus(resolved),
@@ -296,18 +259,4 @@ export async function startModelDownloadListeners(): Promise<void> {
       });
     },
   );
-
-  unlistenFns = [
-    unlistenWhisperProgress,
-    unlistenWhisperComplete,
-    unlistenWhisperError,
-    unlistenBuiltin,
-  ];
-}
-
-/** Tear down the singleton listeners. Mainly for tests / HMR. */
-export function stopModelDownloadListeners(): void {
-  started = false;
-  unlistenFns.forEach((fn) => fn());
-  unlistenFns = [];
 }

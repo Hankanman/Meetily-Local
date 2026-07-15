@@ -14,7 +14,6 @@ pub struct HardwareProfile {
 #[derive(Debug, Clone, PartialEq)]
 pub enum GpuType {
     None,
-    Metal,  // Apple Silicon
     Cuda,   // NVIDIA
     Vulkan, // AMD/Intel
     OpenCL, // Generic GPU compute
@@ -82,14 +81,6 @@ impl HardwareProfile {
 
     /// Detect GPU acceleration capabilities
     fn detect_gpu() -> (bool, GpuType) {
-        // Check for Metal (Apple Silicon)
-        #[cfg(target_os = "macos")]
-        {
-            if Self::has_metal_support() {
-                return (true, GpuType::Metal);
-            }
-        }
-
         // Check for CUDA (NVIDIA)
         if Self::has_cuda_support() {
             return (true, GpuType::Cuda);
@@ -123,13 +114,6 @@ impl HardwareProfile {
         memory_gb: u8,
     ) -> PerformanceTier {
         match gpu_type {
-            GpuType::Metal => {
-                if memory_gb >= 16 && cpu_cores >= 8 {
-                    PerformanceTier::Ultra
-                } else {
-                    PerformanceTier::High
-                }
-            }
             GpuType::Cuda => {
                 if memory_gb >= 16 && cpu_cores >= 8 {
                     PerformanceTier::Ultra
@@ -154,12 +138,6 @@ impl HardwareProfile {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    fn has_metal_support() -> bool {
-        // Simple check for Apple Silicon (Metal is available on Intel Macs too, but less optimal for ML)
-        std::env::consts::ARCH == "aarch64"
-    }
-
     fn has_cuda_support() -> bool {
         // Check for CUDA environment or libraries
         std::env::var("CUDA_PATH").is_ok()
@@ -176,51 +154,35 @@ impl HardwareProfile {
 
     /// Generate adaptive Whisper configuration based on hardware
     pub fn get_whisper_config(&self) -> AdaptiveWhisperConfig {
-        // Windows-specific override: Always use beam size 2 for stability
-        #[cfg(target_os = "windows")]
-        {
-            return AdaptiveWhisperConfig {
-                beam_size: 2,
-                temperature: 0.2,
+        match self.performance_tier {
+            PerformanceTier::Ultra => AdaptiveWhisperConfig {
+                beam_size: 5, // Maximum quality
+                temperature: 0.1,
                 use_gpu: self.has_gpu_acceleration,
                 max_threads: Some(self.cpu_cores.min(8) as usize),
+                chunk_size_preference: ChunkSizePreference::Quality,
+            },
+            PerformanceTier::High => AdaptiveWhisperConfig {
+                beam_size: 3, // High quality
+                temperature: 0.2,
+                use_gpu: self.has_gpu_acceleration,
+                max_threads: Some(self.cpu_cores.min(6) as usize),
                 chunk_size_preference: ChunkSizePreference::Balanced,
-            };
-        }
-
-        // Platform-adaptive configuration for non-Windows systems
-        #[cfg(not(target_os = "windows"))]
-        {
-            match self.performance_tier {
-                PerformanceTier::Ultra => AdaptiveWhisperConfig {
-                    beam_size: 5, // Maximum quality
-                    temperature: 0.1,
-                    use_gpu: self.has_gpu_acceleration,
-                    max_threads: Some(self.cpu_cores.min(8) as usize),
-                    chunk_size_preference: ChunkSizePreference::Quality,
-                },
-                PerformanceTier::High => AdaptiveWhisperConfig {
-                    beam_size: 3, // High quality
-                    temperature: 0.2,
-                    use_gpu: self.has_gpu_acceleration,
-                    max_threads: Some(self.cpu_cores.min(6) as usize),
-                    chunk_size_preference: ChunkSizePreference::Balanced,
-                },
-                PerformanceTier::Medium => AdaptiveWhisperConfig {
-                    beam_size: 2, // Balanced
-                    temperature: 0.3,
-                    use_gpu: self.has_gpu_acceleration,
-                    max_threads: Some(self.cpu_cores.min(4) as usize),
-                    chunk_size_preference: ChunkSizePreference::Balanced,
-                },
-                PerformanceTier::Low => AdaptiveWhisperConfig {
-                    beam_size: 1, // Fast processing
-                    temperature: 0.4,
-                    use_gpu: false, // Force CPU to avoid GPU overhead on weak hardware
-                    max_threads: Some(2),
-                    chunk_size_preference: ChunkSizePreference::Fast,
-                },
-            }
+            },
+            PerformanceTier::Medium => AdaptiveWhisperConfig {
+                beam_size: 2, // Balanced
+                temperature: 0.3,
+                use_gpu: self.has_gpu_acceleration,
+                max_threads: Some(self.cpu_cores.min(4) as usize),
+                chunk_size_preference: ChunkSizePreference::Balanced,
+            },
+            PerformanceTier::Low => AdaptiveWhisperConfig {
+                beam_size: 1, // Fast processing
+                temperature: 0.4,
+                use_gpu: false, // Force CPU to avoid GPU overhead on weak hardware
+                max_threads: Some(2),
+                chunk_size_preference: ChunkSizePreference::Fast,
+            },
         }
     }
 
@@ -277,7 +239,7 @@ mod tests {
         let low_tier = HardwareProfile::calculate_performance_tier(2, &GpuType::None, 4);
         assert_eq!(low_tier, PerformanceTier::Low);
 
-        let high_tier = HardwareProfile::calculate_performance_tier(8, &GpuType::Metal, 16);
+        let high_tier = HardwareProfile::calculate_performance_tier(8, &GpuType::Cuda, 16);
         assert_eq!(high_tier, PerformanceTier::Ultra);
     }
 }

@@ -162,19 +162,13 @@ pub fn scan_catalog_entry(
 impl WhisperEngine {
     /// Detect available GPU acceleration capabilities
     fn detect_gpu_acceleration() -> bool {
-        // On macOS, prefer Metal GPU acceleration
-        if cfg!(target_os = "macos") {
-            log::info!("macOS detected - attempting to enable Metal GPU acceleration");
-            return true; // Enable GPU by default on macOS, whisper-rs will fallback if needed
-        }
-
-        // Check for CUDA support on other platforms
+        // Check for CUDA support
         if cfg!(feature = "cuda") {
             log::info!("CUDA feature enabled - attempting GPU acceleration");
             return true;
         }
 
-        // Check for Vulkan support on other platforms
+        // Check for Vulkan support
         if cfg!(feature = "vulkan") {
             log::info!("Vulkan feature enabled - attempting GPU acceleration");
             return true;
@@ -358,22 +352,18 @@ impl WhisperEngine {
                 let hardware_profile = crate::audio::HardwareProfile::detect();
                 let adaptive_config = hardware_profile.get_whisper_config();
 
-                // Enable flash attention for high-end GPUs (Metal on Apple Silicon, CUDA on NVIDIA)
+                // Enable flash attention for high-end GPUs (CUDA on NVIDIA)
                 // Flash attention provides 20-40% speedup but requires stable GPU drivers
-                let flash_attn_enabled = match (
-                    &hardware_profile.gpu_type,
-                    &hardware_profile.performance_tier,
-                ) {
+                let flash_attn_enabled = matches!(
                     (
-                        crate::audio::GpuType::Metal,
-                        crate::audio::PerformanceTier::Ultra | crate::audio::PerformanceTier::High,
-                    ) => true,
+                        &hardware_profile.gpu_type,
+                        &hardware_profile.performance_tier,
+                    ),
                     (
                         crate::audio::GpuType::Cuda,
                         crate::audio::PerformanceTier::Ultra | crate::audio::PerformanceTier::High,
-                    ) => true,
-                    _ => false, // Conservative: disable for other GPU types and lower tiers
-                };
+                    )
+                ); // Conservative: disable for other GPU types and lower tiers
 
                 let context_param = WhisperContextParameters {
                     use_gpu: adaptive_config.use_gpu,
@@ -408,10 +398,6 @@ impl WhisperEngine {
 
                 // Enhanced acceleration status reporting
                 let acceleration_status = match (&hardware_profile.gpu_type, flash_attn_enabled) {
-                    (crate::audio::GpuType::Metal, true) => {
-                        "Metal GPU with Flash Attention (Ultra-Fast)"
-                    }
-                    (crate::audio::GpuType::Metal, false) => "Metal GPU acceleration",
                     (crate::audio::GpuType::Cuda, true) => {
                         "CUDA GPU with Flash Attention (Ultra-Fast)"
                     }

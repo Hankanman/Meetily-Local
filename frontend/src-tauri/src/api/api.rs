@@ -789,30 +789,10 @@ pub async fn open_meeting_folder<R: Runtime>(
                     return Err(format!("Recording folder not found: {}", folder_path));
                 }
 
-                // Open folder based on OS
-                #[cfg(target_os = "macos")]
-                {
-                    std::process::Command::new("open")
-                        .arg(&folder_path)
-                        .spawn()
-                        .map_err(|e| format!("Failed to open folder: {}", e))?;
-                }
-
-                #[cfg(target_os = "windows")]
-                {
-                    std::process::Command::new("explorer")
-                        .arg(&folder_path)
-                        .spawn()
-                        .map_err(|e| format!("Failed to open folder: {}", e))?;
-                }
-
-                #[cfg(target_os = "linux")]
-                {
-                    std::process::Command::new("xdg-open")
-                        .arg(&folder_path)
-                        .spawn()
-                        .map_err(|e| format!("Failed to open folder: {}", e))?;
-                }
+                std::process::Command::new("xdg-open")
+                    .arg(&folder_path)
+                    .spawn()
+                    .map_err(|e| format!("Failed to open folder: {}", e))?;
 
                 log_info!("Successfully opened folder: {}", folder_path);
                 Ok(())
@@ -832,14 +812,7 @@ pub async fn open_meeting_folder<R: Runtime>(
 pub async fn open_external_url(url: String) -> Result<(), String> {
     use std::process::Command;
 
-    let result = if cfg!(target_os = "windows") {
-        Command::new("cmd").args(&["/C", "start", &url]).output()
-    } else if cfg!(target_os = "macos") {
-        Command::new("open").arg(&url).output()
-    } else {
-        // Linux and other Unix-like systems
-        Command::new("xdg-open").arg(&url).output()
-    };
+    let result = Command::new("xdg-open").arg(&url).output();
 
     match result {
         Ok(_) => Ok(()),

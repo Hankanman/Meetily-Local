@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getErrorMessage } from "@/lib/utils";
 
-export interface PermissionStatus {
+interface PermissionStatus {
   hasMicrophone: boolean;
   hasSystemAudio: boolean;
   isChecking: boolean;

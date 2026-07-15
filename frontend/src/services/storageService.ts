@@ -8,12 +8,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Transcript } from "@/types";
 
-export interface SaveMeetingRequest {
-  meetingTitle: string;
-  transcripts: Transcript[];
-  folderPath: string | null;
-}
-
 export interface SaveMeetingResponse {
   meeting_id: string;
 }
@@ -28,7 +22,7 @@ export interface Meeting {
  * Storage Service
  * Singleton service for managing meeting storage operations
  */
-export class StorageService {
+class StorageService {
   /**
    * Save meeting transcript to SQLite database
    * @param meetingTitle - Title of the meeting

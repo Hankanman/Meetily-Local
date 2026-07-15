@@ -64,7 +64,7 @@ export interface UiConfig {
  * Configuration Service
  * Singleton service for managing app configuration
  */
-export class ConfigService {
+class ConfigService {
   /**
    * Get saved transcript model configuration
    * @returns Promise with { provider, model, apiKey }
