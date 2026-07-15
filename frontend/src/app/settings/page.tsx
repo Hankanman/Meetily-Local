@@ -7,6 +7,7 @@ import {
   Database as DatabaseIcon,
   FlaskConical,
   Mic,
+  Plug,
   Settings2,
   SparkleIcon,
   Users,
@@ -20,6 +21,7 @@ import { SummaryModelSettings } from "@/components/SummaryModelSettings";
 import { BetaSettings } from "@/components/BetaSettings";
 import { SpeakerSettings } from "@/components/SpeakerSettings";
 import { CalendarSettings } from "@/components/CalendarSettings";
+import { McpSettings } from "@/components/McpSettings";
 import { useConfig } from "@/contexts/ConfigContext";
 import { Button } from "@/components/ui/button";
 import { Page, PageBody } from "@/components/layout/Page";
@@ -63,6 +65,12 @@ const CATEGORIES: readonly SettingsCategory[] = [
     label: "Calendar",
     description: "Public ICS feeds. Link recordings to calendar events.",
     icon: CalendarDays,
+  },
+  {
+    id: "integrations",
+    label: "Integrations",
+    description: "Connect an AI assistant to your meeting data via MCP.",
+    icon: Plug,
   },
   {
     id: "beta",
@@ -149,6 +157,7 @@ export default function SettingsPage() {
               )}
               {active.id === "summary" && <SummaryModelSettings />}
               {active.id === "calendar" && <CalendarSettings />}
+              {active.id === "integrations" && <McpSettings />}
               {active.id === "beta" && <BetaSettings />}
             </SettingsSection>
           </main>

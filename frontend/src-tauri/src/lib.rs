@@ -25,6 +25,7 @@ pub mod config;
 pub mod database;
 pub mod groq;
 pub mod llm_providers;
+pub mod mcp_config;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;
@@ -811,6 +812,9 @@ pub fn run() {
             // Database and Models path commands
             database::commands::get_database_directory,
             database::commands::open_database_folder,
+            // MCP server config surface (Settings → Integrations)
+            mcp_config::get_mcp_server_info,
+            mcp_config::reveal_mcp_binary,
             whisper_engine::commands::open_models_folder,
             // Onboarding commands
             onboarding::get_onboarding_status,
