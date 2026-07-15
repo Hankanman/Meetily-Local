@@ -149,14 +149,8 @@ impl WhisperEngine {
             if gpu_support { "enabled" } else { "disabled" }
         );
 
-        #[cfg(feature = "metal")]
-        log::info!("Apple Metal GPU support: enabled");
-
         #[cfg(feature = "openblas")]
         log::info!("OpenBLAS CPU optimization: enabled");
-
-        #[cfg(feature = "coreml")]
-        log::info!("Apple CoreML support: enabled");
 
         #[cfg(feature = "cuda")]
         log::info!("NVIDIA CUDA support: enabled");

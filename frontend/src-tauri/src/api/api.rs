@@ -183,12 +183,8 @@ pub struct TranscriptSegment {
 pub async fn api_get_meetings<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
-    auth_token: Option<String>,
 ) -> Result<Vec<Meeting>, String> {
-    log_info!(
-        "api_get_meetings called with auth_token(native) : {}",
-        auth_token.is_some()
-    );
+    log_info!("api_get_meetings called (native)");
     let pool = state.db_manager.pool();
     let meetings: Result<Vec<MeetingModel>, sqlx::Error> =
         MeetingsRepository::get_meetings(pool).await;
@@ -218,13 +214,8 @@ pub async fn api_search_transcripts<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     query: String,
-    auth_token: Option<String>,
 ) -> Result<Vec<TranscriptSearchResult>, String> {
-    log_info!(
-        "api_search_transcripts called with query: '{}', auth_token: {}",
-        query,
-        auth_token.is_some()
-    );
+    log_info!("api_search_transcripts called with query: '{}'", query);
 
     let pool = state.db_manager.pool();
 
@@ -247,7 +238,6 @@ pub async fn api_search_transcripts<R: Runtime>(
 pub async fn api_get_model_config<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
-    _auth_token: Option<String>,
 ) -> Result<Option<ModelConfig>, String> {
     log_info!("api_get_model_config called (native)");
     let pool = state.db_manager.pool();
@@ -302,7 +292,6 @@ pub async fn api_save_model_config<R: Runtime>(
     whisper_model: String,
     api_key: Option<String>,
     ollama_endpoint: Option<String>,
-    _auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
     log_info!(
         "💾 api_save_model_config called (native): provider='{}', model='{}', whisperModel='{}', ollamaEndpoint={:?}",
@@ -355,7 +344,6 @@ pub async fn api_get_api_key<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     provider: String,
-    _auth_token: Option<String>,
 ) -> Result<String, String> {
     log_info!(
         "api_get_api_key called (native) for provider '{}'",
@@ -380,7 +368,6 @@ pub async fn api_get_api_key<R: Runtime>(
 pub async fn api_get_transcript_config<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
-    _auth_token: Option<String>,
 ) -> Result<Option<TranscriptConfig>, String> {
     log_info!("api_get_transcript_config called (native)");
     let pool = state.db_manager.pool();
@@ -433,7 +420,6 @@ pub async fn api_save_transcript_config<R: Runtime>(
     provider: String,
     model: String,
     api_key: Option<String>,
-    _auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
     log_info!(
         "api_save_transcript_config called (native) for provider '{}'",
@@ -468,7 +454,6 @@ pub async fn api_get_transcript_api_key<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     provider: String,
-    _auth_token: Option<String>,
 ) -> Result<String, String> {
     log_info!(
         "api_get_transcript_api_key called (native) for provider '{}'",
@@ -498,7 +483,6 @@ pub async fn api_delete_api_key<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     provider: String,
-    _auth_token: Option<String>,
 ) -> Result<(), String> {
     log_info!(
         "log_api_delete_api_key called (native) for provider '{}'",
@@ -525,12 +509,10 @@ pub async fn api_delete_meeting<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     meeting_id: String,
-    auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
     log_info!(
-        "api_delete_meeting called for meeting_id(native): {}, auth_token: {}",
-        meeting_id,
-        auth_token.is_some()
+        "api_delete_meeting called for meeting_id(native): {}",
+        meeting_id
     );
 
     let pool = state.db_manager.pool();
@@ -562,12 +544,10 @@ pub async fn api_get_meeting<R: Runtime>(
     _app: AppHandle<R>,
     meeting_id: String,
     state: tauri::State<'_, AppState>,
-    auth_token: Option<String>,
 ) -> Result<MeetingDetails, String> {
     log_info!(
-        "api_get_meeting called(native) for meeting_id: {}, auth_token: {}",
-        meeting_id,
-        auth_token.is_some()
+        "api_get_meeting called(native) for meeting_id: {}",
+        meeting_id
     );
 
     let pool = state.db_manager.pool();
@@ -693,12 +673,10 @@ pub async fn api_save_meeting_title<R: Runtime>(
     state: tauri::State<'_, AppState>,
     meeting_id: String,
     title: String,
-    auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
     log_info!(
-        "api_save_meeting_title called for meeting_id: {}, auth_token: {}",
-        meeting_id,
-        auth_token.is_some()
+        "api_save_meeting_title called for meeting_id: {}",
+        meeting_id
     );
     let pool = state.db_manager.pool();
     match MeetingsRepository::update_meeting_title(pool, &meeting_id, &title).await {
@@ -724,14 +702,12 @@ pub async fn api_save_transcript<R: Runtime>(
     meeting_title: String,
     transcripts: Vec<serde_json::Value>,
     folder_path: Option<String>,
-    auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
     log_info!(
-        "api_save_transcript called for meeting: {}, transcripts: {}, folder_path: {:?}, auth_token: {}",
+        "api_save_transcript called for meeting: {}, transcripts: {}, folder_path: {:?}",
         meeting_title,
         transcripts.len(),
-        folder_path,
-        auth_token.is_some()
+        folder_path
     );
 
     // Log first transcript for debugging

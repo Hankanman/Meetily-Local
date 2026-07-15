@@ -172,8 +172,13 @@ Key configuration:
 
 ## Related Workflows
 
-- `build-macos.yml` - macOS-specific builds with signing
-- `build-windows.yml` - Windows-specific builds with signing
 - `build-linux.yml` - Linux-specific builds with signing
-- `build-test.yml` - All platforms with signing (pre-release)
-- `release.yml` - Production release workflow
+- `build-test.yml` - Uses the (Linux-only) reusable `build.yml`, though its
+  matrix still carries stale macOS/Windows legs — see `WORKFLOWS_OVERVIEW.md`
+- `release.yml` - Production release workflow (Linux AppImage)
+
+**Note:** Meetily-Local is Linux-only (see [CLAUDE.md](../../CLAUDE.md)).
+`build-macos.yml` and `build-windows.yml` were removed. `build-devtest.yml`
+itself still carries macOS/Windows matrix legs and inline signing steps from
+before the platform drop — this doc describes it as it currently stands, but
+those legs are candidates for removal in a follow-up pass.

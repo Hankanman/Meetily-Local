@@ -15,7 +15,6 @@ export function SetupOverviewStep() {
   const { goNext } = useOnboarding();
   const [recommendedModel, setRecommendedModel] = useState<string>("gemma3:1b");
   const [modelSize, setModelSize] = useState<string>("~806 MB");
-  const [isMac, setIsMac] = useState(false);
 
   // Fetch recommended model on mount
   useEffect(() => {
@@ -30,17 +29,6 @@ export function SetupOverviewStep() {
       }
     };
     fetchRecommendedModel();
-
-    // Detect platform for totalSteps
-    const checkPlatform = async () => {
-      try {
-        const { platform } = await import("@tauri-apps/plugin-os");
-        setIsMac(platform() === "macos");
-      } catch (e) {
-        setIsMac(navigator.userAgent.includes("Mac"));
-      }
-    };
-    checkPlatform();
   }, []);
 
   const steps = [
@@ -65,7 +53,7 @@ export function SetupOverviewStep() {
       title="Setup Overview"
       description="Meetily requires that you download the Transcription & Summarization AI models for the software to work."
       step={2}
-      totalSteps={isMac ? 4 : 3}
+      totalSteps={3}
     >
       <div className="flex flex-col items-center space-y-10">
         {/* Steps Card */}

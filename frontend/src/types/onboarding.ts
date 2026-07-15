@@ -1,16 +1,4 @@
-export type OnboardingStep = 1 | 2 | 3 | 4;
-
-export type PermissionStatus =
-  | "checking"
-  | "not_determined"
-  | "authorized"
-  | "denied";
-
-export interface OnboardingPermissions {
-  microphone: PermissionStatus;
-  systemAudio: PermissionStatus;
-  screenRecording: PermissionStatus;
-}
+export type OnboardingStep = 1 | 2 | 3;
 
 export interface OnboardingContainerProps {
   title: string;
@@ -26,15 +14,6 @@ export interface OnboardingContainerProps {
   onPrevious?: () => void;
   canGoNext?: boolean;
   canGoPrevious?: boolean;
-}
-
-export interface PermissionRowProps {
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-  status: PermissionStatus;
-  isPending?: boolean;
-  onAction: () => void;
 }
 
 export interface StatusIndicatorProps {

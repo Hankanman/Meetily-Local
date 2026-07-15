@@ -10,10 +10,6 @@ import React, {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type {
-  PermissionStatus,
-  OnboardingPermissions,
-} from "@/types/onboarding";
 
 // Default local Whisper model downloaded during onboarding. Quantized turbo
 // variant — comparable accuracy to large-v3 but ~3x faster on GPU.
@@ -67,9 +63,6 @@ interface OnboardingContextType {
   selectedSummaryModel: string;
   databaseExists: boolean;
   isBackgroundDownloading: boolean;
-  // Permissions
-  permissions: OnboardingPermissions;
-  permissionsSkipped: boolean;
   // Navigation
   goToStep: (step: number) => void;
   goNext: () => void;
@@ -79,11 +72,6 @@ interface OnboardingContextType {
   setSummaryModelDownloaded: (value: boolean) => void;
   setSelectedSummaryModel: (value: string) => void;
   setDatabaseExists: (value: boolean) => void;
-  setPermissionStatus: (
-    permission: keyof OnboardingPermissions,
-    status: PermissionStatus,
-  ) => void;
-  setPermissionsSkipped: (skipped: boolean) => void;
   completeOnboarding: () => Promise<void>;
   startBackgroundDownloads: (includeGemma: boolean) => Promise<void>;
   retryParakeetDownload: () => Promise<void>;
@@ -123,14 +111,6 @@ export function OnboardingProvider({
     useState<string>("gemma3:1b");
   const [databaseExists, setDatabaseExists] = useState(false);
   const [isBackgroundDownloading, setIsBackgroundDownloading] = useState(false);
-
-  // Permissions state
-  const [permissions, setPermissions] = useState<OnboardingPermissions>({
-    microphone: "not_determined",
-    systemAudio: "not_determined",
-    screenRecording: "not_determined",
-  });
-  const [permissionsSkipped, setPermissionsSkipped] = useState(false);
 
   const saveTimeoutRef = useRef<NodeJS.Timeout>(undefined);
   const isCompletingRef = useRef(false);
@@ -277,12 +257,12 @@ export function OnboardingProvider({
       }
 
       // Determine the correct step based on verified status
-      // New simplified flow: Step 1: Welcome, Step 2: Setup Overview, Step 3: Download Progress, Step 4: Permissions (macOS)
+      // Simplified flow: Step 1: Welcome, Step 2: Setup Overview, Step 3: Download Progress
       let currentStep = savedStatus.current_step;
       const completed = savedStatus.completed;
 
-      // Clamp step to new max (4)
-      if (currentStep > 4) {
+      // Clamp step to new max (3)
+      if (currentStep > 3) {
         currentStep = 3; // Go to download progress step
       }
 
@@ -569,7 +549,7 @@ export function OnboardingProvider({
         error,
       );
       isCompletingRef.current = false; // Reset flag on error
-      throw error; // Re-throw so PermissionsStep can handle it
+      throw error; // Re-throw so the caller (DownloadProgressStep) can handle it
     }
   };
 
@@ -629,25 +609,15 @@ export function OnboardingProvider({
     }
   };
 
-  const setPermissionStatus = useCallback(
-    (permission: keyof OnboardingPermissions, status: PermissionStatus) => {
-      setPermissions((prev: OnboardingPermissions) => ({
-        ...prev,
-        [permission]: status,
-      }));
-    },
-    [],
-  );
-
   const goToStep = useCallback((step: number) => {
-    setCurrentStep(Math.max(1, Math.min(step, 4)));
+    setCurrentStep(Math.max(1, Math.min(step, 3)));
   }, []);
 
   const goNext = useCallback(() => {
     setCurrentStep((prev: number) => {
       const next = prev + 1;
-      // Don't go past step 4
-      return Math.min(next, 4);
+      // Don't go past step 3
+      return Math.min(next, 3);
     });
   }, []);
 
@@ -674,8 +644,6 @@ export function OnboardingProvider({
         selectedSummaryModel,
         databaseExists,
         isBackgroundDownloading,
-        permissions,
-        permissionsSkipped,
         goToStep,
         goNext,
         goPrevious,
@@ -683,8 +651,6 @@ export function OnboardingProvider({
         setSummaryModelDownloaded,
         setSelectedSummaryModel,
         setDatabaseExists,
-        setPermissionStatus,
-        setPermissionsSkipped,
         completeOnboarding,
         startBackgroundDownloads,
         retryParakeetDownload,

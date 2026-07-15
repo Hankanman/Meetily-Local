@@ -3,7 +3,7 @@
         Meetily-Local — Privacy-First AI Meeting Assistant
     </h1>
     <a href="https://github.com/Hankanman/Meetily-Local/releases"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License"></a>
-    <a href="https://github.com/Hankanman/Meetily-Local/releases"><img src="https://img.shields.io/badge/Supported_OS-Linux,_macOS,_Windows-white" alt="Supported OS"></a>
+    <a href="https://github.com/Hankanman/Meetily-Local/releases"><img src="https://img.shields.io/badge/Supported_OS-Linux-white" alt="Supported OS"></a>
     <a href="https://github.com/Hankanman/Meetily-Local/releases"><img alt="GitHub Tag" src="https://img.shields.io/github/v/tag/Hankanman/Meetily-Local?include_prereleases&color=yellow"></a>
     <br>
     <h3>Open Source • Privacy-First • Independent Fork</h3>
@@ -26,7 +26,7 @@ This fork is **fully independent** — not technically a GitHub fork anymore —
 
 **What's different in Meetily-Local vs. upstream as of v0.4.0:**
 
-- ✅ **Linux is a first-class target.** Audio capture (cpal/PipeWire), WebKitGTK rendering, and ALSA device enumeration all fixed and tested.
+- ✅ **Linux-only.** This fork dropped macOS/Windows support to focus on one platform done well — native PipeWire audio capture (mic + system, no cpal/BlackHole-style virtual device needed), WebKitGTK rendering, and ALSA device enumeration all fixed and tested.
 - ✅ **Modern dependencies.** `whisper-rs` 0.13 → 0.16 (drops ~30 MB of vendored patches), Tauri 2.6 → 2.11, all plugins current.
 
 Credit for the original architecture, models, and significant feature work goes to [Sujith S](https://github.com/sujithatzackriya) and the original Zackriya-Solutions community. See [Acknowledgments](#acknowledgments).
@@ -51,10 +51,10 @@ While many meeting transcription tools exist, this one stands out by:
 - **Local-first** — All processing on your machine. No data leaves your computer unless you explicitly point it at a remote LLM endpoint.
 - **Real-time transcription** — Live transcript as the meeting happens, via Whisper or Parakeet.
 - **AI-powered summaries** — Generate meeting summaries with the LLM provider of your choice.
-- **Cross-platform** — Linux (first-class in this fork), macOS, Windows.
+- **Linux-native** — built and tested on Linux; not available for macOS or Windows.
 - **Open source** — MIT, no upsell.
 - **Flexible AI providers** — Ollama (local, recommended), Claude, Groq, OpenRouter, or any OpenAI-compatible endpoint.
-- **GPU acceleration** — Metal + CoreML on macOS; CUDA / Vulkan / HIP on Windows / Linux.
+- **GPU acceleration** — NVIDIA (CUDA) or AMD/Intel (Vulkan), auto-detected by `build.sh`; falls back to CPU.
 
 ## Installation
 
@@ -70,15 +70,7 @@ chmod +x meetily_amd64.AppImage
 ./meetily_amd64.AppImage
 ```
 
-A `.deb` is also published for Debian/Ubuntu users.
-
-### 🪟 Windows
-
-Download the latest `.msi` or `setup.exe` from [Releases](https://github.com/Hankanman/Meetily-Local/releases/latest) and run it.
-
-### 🍎 macOS
-
-Download the latest `.dmg` from [Releases](https://github.com/Hankanman/Meetily-Local/releases/latest), open it, and drag **Meetily-Local** to your Applications folder.
+The `.deb` target is intentionally not shipped — it doesn't bundle `libsherpa-onnx-c-api.so`, so it wouldn't run on a clean host. The AppImage embeds all native libs via linuxdeploy and is the only supported bundle.
 
 ## Build from source
 
@@ -144,10 +136,11 @@ Capture microphone and system audio simultaneously with intelligent RMS-based du
 
 ### ⚡ GPU acceleration
 
-- **macOS**: Apple Silicon (Metal) + CoreML
-- **Windows/Linux**: NVIDIA (CUDA), AMD/Intel (Vulkan), AMD ROCm (HIP)
+- **NVIDIA**: CUDA
+- **AMD/Intel**: Vulkan
+- **No GPU**: CPU fallback
 
-Selected automatically at build time by `build.sh`.
+Selected automatically at build time by `build.sh` (or pass `cuda` / `vulkan` / `cpu` explicitly).
 
 ## System architecture
 

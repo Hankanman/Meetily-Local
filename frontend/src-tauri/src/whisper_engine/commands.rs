@@ -304,7 +304,6 @@ pub async fn whisper_validate_model_ready_with_config<R: tauri::Runtime>(
         let model_to_load = match crate::api::api::api_get_transcript_config(
             app.clone(),
             app.state(),
-            None,
         )
         .await
         {

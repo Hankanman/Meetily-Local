@@ -27,7 +27,6 @@ interface DownloadState {
 
 export function DownloadProgressStep() {
   const {
-    goNext,
     selectedSummaryModel,
     setSelectedSummaryModel,
     parakeetDownloaded,
@@ -39,7 +38,6 @@ export function DownloadProgressStep() {
   } = useOnboarding();
 
   const [recommendedModel, setRecommendedModel] = useState<string>("gemma3:1b");
-  const [isMac, setIsMac] = useState(false);
 
   const [parakeetState, setParakeetState] = useState<DownloadState>({
     status: parakeetDownloaded ? "completed" : "waiting",
@@ -155,7 +153,7 @@ export function DownloadProgressStep() {
     }
   };
 
-  // Fetch recommended model and detect platform on mount
+  // Fetch recommended model on mount
   useEffect(() => {
     const fetchRecommendation = async () => {
       try {
@@ -168,18 +166,8 @@ export function DownloadProgressStep() {
       }
     };
 
-    const checkPlatform = async () => {
-      try {
-        const { platform } = await import("@tauri-apps/plugin-os");
-        setIsMac(platform() === "macos");
-      } catch (e) {
-        setIsMac(navigator.userAgent.includes("Mac"));
-      }
-    };
-
     fetchRecommendation();
-    checkPlatform();
-    // Mount-only — fetches recommended model from backend and detects platform once.
+    // Mount-only — fetches recommended model from backend once.
     // setSelectedSummaryModel is captured but only used after the await; depending on
     // its identity is not desirable here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -384,26 +372,22 @@ export function DownloadProgressStep() {
       });
     }
 
-    if (isMac) {
-      // macOS: Go to Permissions step (will complete after permissions granted)
-      goNext();
-    } else {
-      // Non-macOS: Complete onboarding immediately (downloads continue in background)
-      setIsCompleting(true);
-      try {
-        await completeOnboarding();
+    // Complete onboarding immediately (downloads continue in background) —
+    // there is no separate permissions step after this one.
+    setIsCompleting(true);
+    try {
+      await completeOnboarding();
 
-        // Small delay to ensure state is saved before reload
-        await new Promise((resolve) => setTimeout(resolve, 100));
+      // Small delay to ensure state is saved before reload
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
-        window.location.reload();
-      } catch (error) {
-        console.error("Failed to complete onboarding:", error);
-        toast.error("Failed to complete setup", {
-          description: "Please try again.",
-        });
-        setIsCompleting(false);
-      }
+      window.location.reload();
+    } catch (error) {
+      console.error("Failed to complete onboarding:", error);
+      toast.error("Failed to complete setup", {
+        description: "Please try again.",
+      });
+      setIsCompleting(false);
     }
   };
 
@@ -515,7 +499,7 @@ export function DownloadProgressStep() {
       title="Getting things ready"
       description="You can start using Meetily after downloading the Transcription Engine."
       step={3}
-      totalSteps={isMac ? 4 : 3}
+      totalSteps={3}
     >
       <div className="flex flex-col items-center space-y-6">
         {/* Download Cards */}

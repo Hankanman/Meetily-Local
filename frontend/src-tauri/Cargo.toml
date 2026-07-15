@@ -15,25 +15,16 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 
-# Hardware acceleration features for whisper-rs
-# Cross-platform GPU acceleration with smart defaults
+# Hardware acceleration features for whisper-rs (Linux-only build)
 #
 # BUILD INSTRUCTIONS:
 # ===================
-# macOS:     cargo build --release              (Metal GPU auto-enabledon)
-#
-# Windows:   cargo build --release              (CPU with OpenBLAS)
-#            cargo build --release --features cuda    (NVIDIA GPU)
-#            cargo build --release --features vulkan  (AMD/Intel GPU)
-#
 # Linux:     cargo build --release              (CPU with OpenBLAS)
 #            cargo build --release --features cuda    (NVIDIA GPU)
 #            cargo build --release --features hipblas (AMD GPU with ROCm)
 #            cargo build --release --features vulkan  (Other GPUs)
 #
-# QUICK START: Use the helper scripts!
-#   ./build-gpu.sh (Unix/macOS)
-#   .\build-gpu.ps1 (Windows PowerShell)
+# QUICK START: Use ./build.sh (see repo root)
 #
 [features]
 default = ["platform-default"]  # Automatically enables best backend per platform
@@ -42,10 +33,8 @@ default = ["platform-default"]  # Automatically enables best backend per platfor
 platform-default = []
 
 # Manual GPU acceleration options (for power users to override defaults)
-metal = ["whisper-rs/metal"]       # macOS: Apple Metal GPU (Auto-enabled on macOS)
-coreml = ["whisper-rs/coreml"]     # macOS: Apple CoreML acceleration
-cuda = ["whisper-rs/cuda"]         # Windows/Linux: NVIDIA CUDA GPU
-vulkan = ["whisper-rs/vulkan"]     # Windows/Linux: AMD/Intel Vulkan GPU
+cuda = ["whisper-rs/cuda"]         # Linux: NVIDIA CUDA GPU
+vulkan = ["whisper-rs/vulkan"]     # Linux: AMD/Intel Vulkan GPU
 hipblas = ["whisper-rs/hipblas"]   # Linux: AMD ROCm HIP
 
 # CPU optimizations (fallback for systems without GPU)
@@ -90,8 +79,7 @@ ebur128 = "0.1"
 nnnoiseless = "0.5"
 
 # Speech recognition and async utilities
-# NOTE: whisper-rs is declared in platform-specific sections below (macOS/Windows/Linux)
-# to ensure correct GPU features are enabled per platform
+# NOTE: whisper-rs is declared in the Linux target-specific section below
 futures-util = "0.3"
 
 # General error handling helper
@@ -158,32 +146,6 @@ tauri-plugin-store = "2.4.2"
 tauri-plugin-notification = "2.3.3"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-os = "2.3.2"
-
-# macOS-specific dependencies with Metal GPU acceleration
-[target.'cfg(target_os = "macos")'.dependencies]
-tauri = { version = "2.11.0", features = ["devtools", "protocol-asset", "macos-private-api", "tray-icon"] }
-once_cell = "1.17.1"
-objc = "0.2.7"
-tauri-plugin-log = { version = "2.8.0", features = ["colored"] }
-anyhow = "1.0"
-reqwest = { version = "0.11", features = ["multipart", "json"] }
-core-graphics = "0.23"
-cidre = { git = "https://github.com/yury/cidre", rev = "a9587fa", features = ["av"] }
-futures-channel = "0.3.31"
-
-# PERFORMANCE: Enable Metal GPU + CoreML acceleration automatically on macOS
-# CoreML provides additional acceleration for Apple Silicon chips
-whisper-rs = { version = "0.16.0", features = ["raw-api", "metal", "coreml", "log_backend"] }
-
-# Windows-specific dependencies
-# Default: CPU-only build (no BLAS)
-# Users can enable features manually:
-#   --features cuda     (NVIDIA GPUs)
-#   --features vulkan   (AMD/Intel GPUs)
-#   --features openblas (OpenBLAS optimization, requires BLAS_INCLUDE_DIRS)
-[target.'cfg(target_os = "windows")'.dependencies]
-whisper-rs = { version = "0.16.0", features = ["raw-api", "vulkan", "log_backend"] }
-futures-channel = "0.3.31"
 
 # Linux-specific dependencies
 # Default: CPU-only build (no BLAS)

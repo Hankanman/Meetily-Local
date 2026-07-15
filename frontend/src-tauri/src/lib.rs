@@ -37,7 +37,6 @@ pub mod api;
 pub mod audio;
 pub mod calendar;
 pub mod config;
-pub mod console_utils;
 pub mod database;
 pub mod groq;
 pub mod notifications;
@@ -607,7 +606,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
-        .manage(whisper_engine::parallel_commands::ParallelProcessorState::new())
         .manage(Arc::new(RwLock::new(
             None::<notifications::manager::NotificationManager<tauri::Wry>>,
         )) as NotificationManagerState<tauri::Wry>)
@@ -729,16 +727,6 @@ pub fn run() {
                 ensure_required_models_downloaded(&app_handle_for_dl).await;
             });
 
-            // Trigger system audio permission request on startup (similar to microphone permission)
-            // #[cfg(target_os = "macos")]
-            // {
-            //     tauri::async_runtime::spawn(async {
-            //         if let Err(e) = audio::permissions::trigger_system_audio_permission() {
-            //             log::warn!("Failed to trigger system audio permission: {}", e);
-            //         }
-            //     });
-            // }
-
             // Initialize database (handles first launch detection and conditional setup)
             tauri::async_runtime::block_on(async {
                 database::setup::initialize_database_on_startup(&_app.handle()).await
@@ -789,18 +777,6 @@ pub fn run() {
             speaker_diarization::commands::merge_voice_profiles,
             speaker_diarization::commands::merge_cluster_into_profile,
             speaker_diarization::commands::refine_speaker_assignments,
-            // Parallel processing commands
-            whisper_engine::parallel_commands::initialize_parallel_processor,
-            whisper_engine::parallel_commands::start_parallel_processing,
-            whisper_engine::parallel_commands::pause_parallel_processing,
-            whisper_engine::parallel_commands::resume_parallel_processing,
-            whisper_engine::parallel_commands::stop_parallel_processing,
-            whisper_engine::parallel_commands::get_parallel_processing_status,
-            whisper_engine::parallel_commands::get_system_resources,
-            whisper_engine::parallel_commands::check_resource_constraints,
-            whisper_engine::parallel_commands::calculate_optimal_workers,
-            whisper_engine::parallel_commands::prepare_audio_chunks,
-            whisper_engine::parallel_commands::test_parallel_processing_setup,
             get_audio_devices,
             trigger_microphone_permission,
             start_recording_with_devices,
@@ -821,9 +797,6 @@ pub fn run() {
             audio::incremental_saver::recover_audio_from_checkpoints,
             audio::incremental_saver::cleanup_checkpoints,
             audio::incremental_saver::has_audio_checkpoints,
-            console_utils::show_console,
-            console_utils::hide_console,
-            console_utils::toggle_console,
             ollama::get_ollama_models,
             ollama::pull_ollama_model,
             ollama::delete_ollama_model,
@@ -894,10 +867,6 @@ pub fn run() {
             notifications::commands::initialize_notification_manager_manual,
             notifications::commands::test_notification_with_auto_consent,
             notifications::commands::get_notification_stats,
-            // Screen Recording permission commands
-            audio::permissions::check_screen_recording_permission_command,
-            audio::permissions::request_screen_recording_permission_command,
-            audio::permissions::trigger_system_audio_permission_command,
             // Database import commands
             database::commands::check_first_launch,
             database::commands::select_legacy_database_path,

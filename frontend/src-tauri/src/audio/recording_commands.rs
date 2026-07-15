@@ -599,7 +599,7 @@ pub async fn stop_recording<R: Runtime>(
     // Determine which provider was used and unload the appropriate model (with timeout)
     let config = match tokio::time::timeout(
         tokio::time::Duration::from_secs(30), // 30 seconds max for DB operation
-        crate::api::api::api_get_transcript_config(app.clone(), app.clone().state(), None),
+        crate::api::api::api_get_transcript_config(app.clone(), app.clone().state()),
     )
     .await
     {

@@ -7,7 +7,6 @@ pub mod vad;
 
 // Device model + PipeWire-backed discovery
 pub mod devices;
-pub mod permissions;
 
 // Native PipeWire capture layer (Linux)
 #[cfg(target_os = "linux")]

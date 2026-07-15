@@ -1,131 +1,112 @@
 ## 🐧 Building on Linux
 
-This guide helps you build Meetily on Linux with **automatic GPU acceleration**. The build system detects your hardware and configures the best performance automatically.
+Meetily-Local is Linux-only. This guide covers building from source using the
+root-level `build.sh` / `dev.sh` / `clean.sh` scripts, which handle GPU-mode
+selection, the gnarly Fedora/CUDA build-environment quirks, and the
+`llama-helper` sidecar build for you.
 
 ---
 
-## 🚀 Quick Start (Recommended for Beginners)
+## 🚀 Quick Start
 
-If you're new to building on Linux, start here. These simple commands work for most users:
-
-### 1. Install Basic Dependencies
+### 1. Install Dependencies
 
 ```bash
 # Ubuntu/Debian
 sudo apt update
-sudo apt install build-essential cmake git
+sudo apt install build-essential cmake git \
+  libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+  libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev
 
 # Fedora/RHEL
-sudo dnf install gcc-c++ cmake git
+sudo dnf install gcc-c++ cmake git llvm openmp-devel
 
 # Arch Linux
 sudo pacman -S base-devel cmake git
 ```
 
+You'll also need [pnpm](https://pnpm.io/installation) and a Rust toolchain
+(`rustup`).
+
 ### 2. Build and Run
 
 ```bash
-# Development mode (with hot reload)
-./dev-gpu.sh
-
-# Production build
-./build-gpu.sh
+# From the repo root
+./dev.sh              # development mode, hot reload
+./build.sh             # production build → AppImage
 ```
 
-**That's it!** The scripts automatically detect your GPU and configure acceleration.
-
-### What Happens Automatically?
-
-- ✅ **NVIDIA GPU** → CUDA acceleration (if toolkit installed)
-- ✅ **AMD GPU** → ROCm acceleration (if ROCm installed)
-- ✅ **No GPU** → Optimized CPU mode (still works great!)
-
-> 💡 **Tip:** If you have an NVIDIA or AMD GPU but want better performance, jump to the [GPU Setup](#-gpu-setup-guides-intermediate) section below.
-
----
-
-## 🧠 Understanding Auto-Detection
-
-The build scripts (`dev-gpu.sh` and `build-gpu.sh`) orchestrate the entire build process. They first call `scripts/auto-detect-gpu.js` to identify your hardware, then build the `llama-helper` sidecar with the appropriate features, and finally launch the Tauri application.
-
-### Detection Priority
-
-| Priority | Hardware        | What It Checks                                               | Result                  |
-| -------- | --------------- | ------------------------------------------------------------ | ----------------------- |
-| 1️⃣       | **NVIDIA CUDA** | `nvidia-smi` exists + (`CUDA_PATH` or `nvcc` found)          | `--features cuda`       |
-| 2️⃣       | **AMD ROCm**    | `rocm-smi` exists + (`ROCM_PATH` or `hipcc` found)           | `--features hipblas`    |
-| 3️⃣       | **Vulkan**      | `vulkaninfo` exists + `VULKAN_SDK` + `BLAS_INCLUDE_DIRS` set | `--features vulkan`     |
-| 4️⃣       | **OpenBLAS**    | `BLAS_INCLUDE_DIRS` set                                      | `--features openblas`   |
-| 5️⃣       | **CPU-only**    | None of the above                                            | (no features, pure CPU) |
-
-### Common Scenarios
-
-| Your System               | Auto-Detection Result       | Why                          |
-| ------------------------- | --------------------------- | ---------------------------- |
-| Clean Linux install       | CPU-only                    | No GPU SDK detected          |
-| NVIDIA GPU + drivers only | CPU-only                    | CUDA toolkit not installed   |
-| NVIDIA GPU + CUDA toolkit | **CUDA acceleration** ✅    | Full detection successful    |
-| AMD GPU + ROCm            | **HIPBlas acceleration** ✅ | Full detection successful    |
-| Vulkan drivers only       | CPU-only                    | Vulkan SDK + env vars needed |
-| Vulkan SDK configured     | **Vulkan acceleration** ✅  | All requirements met         |
-
-> 💡 **Key Insight:** Having GPU drivers alone isn't enough. You need the **development SDK** (CUDA toolkit, ROCm, or Vulkan SDK) for acceleration.
-
----
-
-## 🔧 GPU Setup Guides (Intermediate)
-
-Want better performance? Follow these guides to enable GPU acceleration.
-
-### 🟢 NVIDIA CUDA Setup
-
-**Prerequisites:** NVIDIA GPU with compute capability 5.0+ (check: `nvidia-smi --query-gpu=compute_cap --format=csv`)
-
-#### Step 1: Install CUDA Toolkit
+**That's it.** Both scripts auto-detect NVIDIA GPUs (via `nvidia-smi`) and
+build with CUDA; everything else falls back to CPU. Pass a mode explicitly to
+override:
 
 ```bash
-# Ubuntu/Debian (CUDA 12.x)
+./dev.sh cuda          # NVIDIA CUDA
+./dev.sh vulkan        # AMD/Intel Vulkan
+./dev.sh cpu           # CPU-only
+./dev.sh frontend      # frontend-only (next dev), no Tauri shell — fastest UI loop
+
+./build.sh cuda
+./build.sh vulkan
+./build.sh cpu
+```
+
+Run `./build.sh --help` or `./dev.sh --help` for the full usage notes
+(environment variable overrides, etc.) straight from the script.
+
+---
+
+## 🧠 How It Works
+
+`build.sh` and `dev.sh` are self-contained — no separate GPU-detection script
+is involved:
+
+1. **Mode resolution**: `auto` (default) checks for a working `nvidia-smi` →
+   `cuda`, else `cpu`. Pass `cuda` / `vulkan` / `cpu` to force a mode.
+2. **Platform env setup** (Linux): auto-detects a compatible `g++` for `nvcc`
+   on Fedora (CUDA 13 needs gcc ≤ 15), sets `CUDAARCHS`, enables
+   `CMAKE_POSITION_INDEPENDENT_CODE` (required for `rust-lld` to link the CUDA
+   `.cu.o` objects), and sets `NO_STRIP=1` (linuxdeploy's bundled `strip`
+   chokes on Fedora 43+'s `SHT_RELR` sections).
+3. **Sidecar build**: builds the `llama-helper` crate with the matching GPU
+   feature and stages it into `frontend/src-tauri/binaries/`.
+4. **Tauri build/dev**: runs `pnpm exec tauri build --bundles appimage` (or
+   `tauri dev`) with `--features {cuda,vulkan}` passed through as needed.
+
+| Mode     | Feature Flag          | Typical Speedup |
+| -------- | ---------------------- | ---------------- |
+| CUDA     | `--features cuda`      | 5-10x            |
+| Vulkan   | `--features vulkan`    | 3-6x             |
+| CPU      | (none)                 | 1x (baseline)    |
+
+---
+
+## 🔧 GPU Setup
+
+### 🟢 NVIDIA CUDA
+
+**Prerequisites:** NVIDIA GPU + CUDA toolkit installed.
+
+```bash
+# Ubuntu/Debian
 sudo apt install nvidia-driver-550 nvidia-cuda-toolkit
 
-# Verify installation
+# Verify
 nvidia-smi          # Shows GPU info
-nvcc --version      # Shows CUDA version
+nvcc --version       # Shows CUDA version
+
+# Build (auto-detected if nvidia-smi works, or force it)
+./build.sh cuda
 ```
 
-#### Step 2: Build with CUDA
+`build.sh` defaults `CUDAARCHS` to `"75;80;86;89;90"` (Turing→Hopper) for a
+portable release binary. `dev.sh` instead detects your specific compute
+capability via `nvidia-smi --query-gpu=compute_cap` for a much faster
+incremental build. Override either with `CUDAARCHS=... ./build.sh cuda`.
 
-```bash
-# Set your GPU's compute capability
-# Example: RTX 3080 = 8.6 → use "86"
-# Example: GTX 1080 = 6.1 → use "61"
+### 🔵 Vulkan (Cross-Platform Fallback)
 
-CMAKE_CUDA_ARCHITECTURES=75 \
-CMAKE_CUDA_STANDARD=17 \
-CMAKE_POSITION_INDEPENDENT_CODE=ON \
-./build-gpu.sh
-```
-
-> 💡 **Finding Your Compute Capability:**
->
-> ```bash
-> nvidia-smi --query-gpu=compute_cap --format=csv
-> ```
->
-> Convert `7.5` → `75`, `8.6` → `86`, etc.
-
-**Why these flags?**
-
-- `CMAKE_CUDA_ARCHITECTURES`: Optimizes for your specific GPU
-- `CMAKE_CUDA_STANDARD=17`: Ensures C++17 compatibility
-- `CMAKE_POSITION_INDEPENDENT_CODE=ON`: Fixes linking issues on modern systems
-
----
-
-### 🔵 Vulkan Setup (Cross-Platform Fallback)
-
-Vulkan works on NVIDIA, AMD, and Intel GPUs. Good choice if CUDA/ROCm don't work.
-
-#### Step 1: Install Vulkan SDK and BLAS
+Works on NVIDIA, AMD, and Intel GPUs — good choice if CUDA isn't available.
 
 ```bash
 # Ubuntu/Debian
@@ -136,206 +117,85 @@ sudo dnf install vulkan-devel openblas-devel
 
 # Arch Linux
 sudo pacman -S vulkan-devel openblas
+
+./build.sh vulkan
 ```
 
-#### Step 2: Configure Environment
+### Other backends (AMD ROCm / OpenBLAS)
+
+`whisper-rs` also exposes `hipblas` (AMD ROCm) and `openblas` Cargo features,
+but they aren't wired into `build.sh`/`dev.sh` as a `--mode`. If you need
+them, build the workspace directly, e.g.:
 
 ```bash
-# Add to ~/.bashrc or ~/.zshrc
-export VULKAN_SDK=/usr
-export BLAS_INCLUDE_DIRS=/usr/include/x86_64-linux-gnu
-
-# Apply changes
-source ~/.bashrc
+cargo build --release -p llama-helper --features hipblas
+cd frontend && pnpm exec tauri build -- --features hipblas
 ```
 
-#### Step 3: Build
-
-```bash
-./build-gpu.sh
-```
-
-The script will automatically detect Vulkan and build with `--features vulkan`.
-
----
-
-### 🔴 AMD ROCm Setup (AMD GPUs Only)
-
-**Prerequisites:** AMD GPU with ROCm support (RX 5000+, Radeon VII, etc.)
-
-```bash
-# Ubuntu/Debian
-# Add ROCm repository (see https://rocm.docs.amd.com for latest)
-sudo apt install rocm-smi hipcc
-
-# Set environment
-export ROCM_PATH=/opt/rocm
-
-# Verify
-rocm-smi            # Shows GPU info
-hipcc --version     # Shows ROCm version
-
-# Build
-./build-gpu.sh
-```
+This path is unsupported by the helper scripts — expect to hand-manage the
+`llama-helper` sidecar staging step yourself (see step 3 above).
 
 ---
 
 ## 🎯 Advanced Usage
 
-### Manual Feature Override
+### Environment Variable Reference
 
-Want to force a specific acceleration method? Use the `TAURI_GPU_FEATURE` environment variable with the shell scripts:
-
-```bash
-# Force CUDA (ignore auto-detection)
-TAURI_GPU_FEATURE=cuda ./dev-gpu.sh
-TAURI_GPU_FEATURE=cuda ./build-gpu.sh
-
-# Force Vulkan
-TAURI_GPU_FEATURE=vulkan ./dev-gpu.sh
-TAURI_GPU_FEATURE=vulkan ./build-gpu.sh
-
-# Force ROCm (HIPBlas)
-TAURI_GPU_FEATURE=hipblas ./dev-gpu.sh
-TAURI_GPU_FEATURE=hipblas ./build-gpu.sh
-
-# Force CPU-only (for testing)
-TAURI_GPU_FEATURE="" ./dev-gpu.sh
-TAURI_GPU_FEATURE="" ./build-gpu.sh
-
-# Force OpenBLAS (CPU-optimized)
-TAURI_GPU_FEATURE=openblas ./dev-gpu.sh
-TAURI_GPU_FEATURE=openblas ./build-gpu.sh
-```
+| Variable            | Purpose                                       | Set by                    |
+| -------------------- | ---------------------------------------------- | -------------------------- |
+| `CUDAHOSTCXX`         | Host C++ compiler for `nvcc`                   | auto (Fedora g++-15/14)    |
+| `CUDAARCHS`           | CUDA arch list                                 | auto (`75;80;86;89;90` for `build.sh`, single-arch for `dev.sh`) |
+| `NO_STRIP`            | Skip AppImage symbol stripping                 | `build.sh` (`1`)           |
+| `RUST_LOG`            | Log filter                                     | `dev.sh` (`info,whisper_rs=warn`) |
+| `RUST_BACKTRACE`      | Full Rust backtraces on panic                  | `dev.sh` (`full`)          |
 
 ### Build Output Location
 
-After successful build:
+```
+target/release/bundle/appimage/meetily_<version>_amd64.AppImage
+```
 
-```
-src-tauri/target/release/bundle/appimage/Meetily_<version>_amd64.AppImage
-```
+The `.deb` bundle target is intentionally not produced — it doesn't bundle
+`libsherpa-onnx-c-api.so`, so it wouldn't run on a clean host. The AppImage
+embeds all native libs via linuxdeploy.
 
 ---
 
 ## 🧭 Troubleshooting
 
 ### "CUDA toolkit not found"
+- **Fix:** Install `nvidia-cuda-toolkit` or ensure `nvcc --version` works.
 
-- **Fix:** Install `nvidia-cuda-toolkit` or set `CUDA_PATH` environment variable
-- **Check:** `nvcc --version` should work
+### Fedora 44 build fails with a gcc/nvcc mismatch
+- **Fix:** `build.sh`/`dev.sh` auto-detect `g++-15`/`g++-14` and set
+  `CUDAHOSTCXX` for you. If neither is installed: `sudo dnf install gcc-c++15`
+  (or the appropriate compat package for your Fedora release).
 
-### "Vulkan detected but missing dependencies"
+### AppImage build strips symbols / crashes at runtime
+- **Fix:** Already handled — `build.sh` sets `NO_STRIP=1` on Linux
+  automatically (Fedora 43+'s `SHT_RELR` sections trip up linuxdeploy's
+  bundled `strip`).
 
-- **Fix:** Set both `VULKAN_SDK` and `BLAS_INCLUDE_DIRS` environment variables
-- **Example:**
-  ```bash
-  export VULKAN_SDK=/usr
-  export BLAS_INCLUDE_DIRS=/usr/include/x86_64-linux-gnu
-  ```
-
-### "AppImage build stripping symbols"
-
-- **Fix:** Already handled! `build-gpu.sh` sets `NO_STRIP=true` automatically
-- **Why:** Prevents runtime errors from missing symbols
+### `Could not find dependency: libsherpa-onnx-c-api.so`
+- **Fix:** Already handled — `build.sh` points linuxdeploy at
+  `target/release` via `LD_LIBRARY_PATH` so it can find and bundle the lib.
 
 ### Build works but no GPU acceleration
-
-- **Check detection:** Look at the build output for GPU detection messages
-- **Verify:** `nvidia-smi` (NVIDIA) or `rocm-smi` (AMD) should work
-- **Missing SDK:** Install the development toolkit, not just drivers
+- **Check:** `nvidia-smi` (NVIDIA) should work before `./build.sh` (or
+  `./dev.sh`) auto-selects CUDA; otherwise pass the mode explicitly.
 
 ---
 
-## 📊 Technical Reference
+## ✅ Compiler Cache (optional, faster rebuilds)
 
-### Complete Feature Matrix
-
-| Mode     | Feature Flag          | Requirements                                      | Acceleration  | Speed Boost   |
-| -------- | --------------------- | ------------------------------------------------- | ------------- | ------------- |
-| CUDA     | `--features cuda`     | `nvidia-smi` + (`CUDA_PATH` or `nvcc`)            | GPU           | 5-10x         |
-| ROCm     | `--features hipblas`  | `rocm-smi` + (`ROCM_PATH` or `hipcc`)             | GPU           | 4-8x          |
-| Vulkan   | `--features vulkan`   | `vulkaninfo` + `VULKAN_SDK` + `BLAS_INCLUDE_DIRS` | GPU           | 3-6x          |
-| OpenBLAS | `--features openblas` | `BLAS_INCLUDE_DIRS`                               | CPU-optimized | 1.5-2x        |
-| CPU      | (none)                | (none)                                            | CPU-only      | 1x (baseline) |
-
-### Build Scripts Internals
-
-Both `dev-gpu.sh` and `build-gpu.sh` work the same way:
-
-1. **Detect location:** Find `package.json` (works from project root or `frontend/`)
-2. **Choose package manager:** Prefer `pnpm`, fallback to `npm`
-3. **Call npm script:** Run `tauri:dev` or `tauri:build`
-4. **Auto-detect GPU:** The npm script calls `scripts/tauri-auto.js`
-5. **Feature selection:** `scripts/auto-detect-gpu.js` checks hardware
-6. **Build with features:** Tauri builds with detected `--features` flag
-
-### Environment Variables Reference
-
-| Variable                          | Purpose                             | Example                         |
-| --------------------------------- | ----------------------------------- | ------------------------------- |
-| `CUDA_PATH`                       | CUDA installation directory         | `/usr/local/cuda`               |
-| `ROCM_PATH`                       | ROCm installation directory         | `/opt/rocm`                     |
-| `VULKAN_SDK`                      | Vulkan SDK directory                | `/usr`                          |
-| `BLAS_INCLUDE_DIRS`               | BLAS headers location               | `/usr/include/x86_64-linux-gnu` |
-| `CMAKE_CUDA_ARCHITECTURES`        | GPU compute capability              | `75` (for compute 7.5)          |
-| `CMAKE_CUDA_STANDARD`             | C++ standard for CUDA               | `17`                            |
-| `CMAKE_POSITION_INDEPENDENT_CODE` | Enable PIC for linking              | `ON`                            |
-| `NO_STRIP`                        | Prevent symbol stripping (AppImage) | `true`                          |
-
----
-
-## ✅ Complete Example Builds
-
-### NVIDIA GPU (CUDA)
+If [`sccache`](https://github.com/mozilla/sccache) is installed, `build.sh`
+and `dev.sh` enable it automatically for Rust + C/C++ + CUDA compiles.
 
 ```bash
-# Install
-sudo apt install nvidia-driver-550 nvidia-cuda-toolkit
-
-# Verify
-nvidia-smi --query-gpu=compute_cap --format=csv
-
-# Build (adjust architecture for your GPU)
-CMAKE_CUDA_ARCHITECTURES=86 \ # (86 may change in your case)
-CMAKE_CUDA_STANDARD=17 \
-CMAKE_POSITION_INDEPENDENT_CODE=ON \
-./build-gpu.sh
-```
-
-### AMD GPU (ROCm)
-
-```bash
-# Install ROCm (see AMD docs for your distro)
-sudo apt install rocm-smi hipcc
-export ROCM_PATH=/opt/rocm
-
-# Build
-./build-gpu.sh
-```
-
-### Any GPU (Vulkan)
-
-```bash
-# Install
-sudo apt install vulkan-sdk libopenblas-dev
-
-# Configure
-export VULKAN_SDK=/usr
-export BLAS_INCLUDE_DIRS=/usr/include/x86_64-linux-gnu
-
-# Build
-./build-gpu.sh
-```
-
-### No GPU (CPU-only)
-
-```bash
-# Just build - works out of the box
-./build-gpu.sh
+cargo install sccache
+./dev.sh   # picks it up automatically
 ```
 
 ---
 
-**Need help?** Open an issue on GitHub with your GPU type, distro, and the output from `./build-gpu.sh`.
+**Need help?** Open an issue on [Hankanman/Meetily-Local](https://github.com/Hankanman/Meetily-Local/issues) with your GPU type, distro, and the output from `./build.sh`.

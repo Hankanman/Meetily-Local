@@ -3,7 +3,6 @@
 // Parallel transcription worker pool and chunk processing logic.
 
 use super::engine::TranscriptionEngine;
-use super::provider::TranscriptionError;
 use crate::audio::recording_state::DeviceType;
 use crate::audio::AudioChunk;
 use log::{error, info, warn};
@@ -11,6 +10,37 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Runtime};
+
+/// Granular error types for transcription operations.
+///
+/// (Formerly shared with a remote-provider abstraction that was removed as
+/// dead code; now used solely by the Whisper transcription path below.)
+#[derive(Debug, Clone)]
+pub enum TranscriptionError {
+    ModelNotLoaded,
+    AudioTooShort { samples: usize, minimum: usize },
+    EngineFailed(String),
+    UnsupportedLanguage(String),
+}
+
+impl std::fmt::Display for TranscriptionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ModelNotLoaded => write!(f, "No transcription model is loaded"),
+            Self::AudioTooShort { samples, minimum } => write!(
+                f,
+                "Audio too short: {} samples (minimum {})",
+                samples, minimum
+            ),
+            Self::EngineFailed(msg) => write!(f, "Transcription engine failed: {}", msg),
+            Self::UnsupportedLanguage(lang) => {
+                write!(f, "Language '{}' is not supported by this provider", lang)
+            }
+        }
+    }
+}
+
+impl std::error::Error for TranscriptionError {}
 
 // Sequence counter for transcript updates
 static SEQUENCE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -112,7 +142,6 @@ pub fn start_transcription_task<R: Runtime>(
         for worker_id in 0..NUM_WORKERS {
             let engine_clone = match &transcription_engine {
                 TranscriptionEngine::Whisper(e) => TranscriptionEngine::Whisper(e.clone()),
-                TranscriptionEngine::Provider(p) => TranscriptionEngine::Provider(p.clone()),
             };
             let app_clone = app.clone();
             let work_receiver_clone = work_receiver.clone();
@@ -206,8 +235,7 @@ pub fn start_transcription_task<R: Runtime>(
                                 Ok((transcript, confidence_opt, is_partial)) => {
                                     // Provider-aware confidence threshold
                                     let confidence_threshold = match &engine_clone {
-                                        TranscriptionEngine::Whisper(_)
-                                        | TranscriptionEngine::Provider(_) => 0.3,
+                                        TranscriptionEngine::Whisper(_) => 0.3,
                                     };
 
                                     let confidence_str = match confidence_opt {
@@ -598,54 +626,6 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                     );
 
                     Err(transcription_error)
-                }
-            }
-        }
-        TranscriptionEngine::Provider(provider) => {
-            // NEW: Trait-based provider (clean, unified interface)
-            let language = crate::get_language_preference_internal();
-
-            match provider.transcribe(speech_samples, language).await {
-                Ok(result) => {
-                    let cleaned_text = result.text.trim().to_string();
-                    if cleaned_text.is_empty() {
-                        return Ok((String::new(), result.confidence, result.is_partial));
-                    }
-
-                    let confidence_str = match result.confidence {
-                        Some(c) => format!("confidence: {:.2}", c),
-                        None => "no confidence".to_string(),
-                    };
-
-                    info!(
-                        "{} transcription complete for chunk {}: '{}' ({}, partial: {})",
-                        provider.provider_name(),
-                        chunk.chunk_id,
-                        cleaned_text,
-                        confidence_str,
-                        result.is_partial
-                    );
-
-                    Ok((cleaned_text, result.confidence, result.is_partial))
-                }
-                Err(e) => {
-                    error!(
-                        "{} transcription failed for chunk {}: {}",
-                        provider.provider_name(),
-                        chunk.chunk_id,
-                        e
-                    );
-
-                    let _ = app.emit(
-                        "transcription-error",
-                        &serde_json::json!({
-                            "error": e.to_string(),
-                            "userMessage": format!("Transcription failed: {}", e),
-                            "actionable": false
-                        }),
-                    );
-
-                    Err(e)
                 }
             }
         }

@@ -2,6 +2,13 @@
 
 This document explains the hardware acceleration configuration for all CI/CD workflows.
 
+> **Historical note:** Meetily-Local is now Linux-only (see [CLAUDE.md](../../CLAUDE.md)).
+> `build-macos.yml` and `build-windows.yml` (referenced below in sections 3
+> and 5 of "Updated Workflows") have been deleted; the macOS/Windows
+> acceleration details are kept here for historical context on why
+> `build.yml`'s Linux feature-selection step looks the way it does, not as a
+> guide to still-existing workflows.
+
 ## Overview
 
 All workflows now build with optimal hardware acceleration based on the platform:

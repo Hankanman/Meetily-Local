@@ -52,15 +52,6 @@ enum Response {
 
 /// Detect available VRAM in GB
 fn detect_vram_gb() -> f32 {
-    #[cfg(feature = "metal")]
-    {
-        // macOS Metal: Query recommended max working set size
-        if let Some(vram) = detect_metal_vram() {
-            eprintln!("Metal VRAM detected: {:.2} GB", vram);
-            return vram;
-        }
-    }
-
     #[cfg(feature = "cuda")]
     {
         // NVIDIA CUDA: Query device memory
@@ -74,25 +65,6 @@ fn detect_vram_gb() -> f32 {
 
     eprintln!("VRAM detection not available, using conservative estimate");
     4.0 // Conservative fallback
-}
-
-#[cfg(feature = "metal")]
-fn detect_metal_vram() -> Option<f32> {
-    if let Ok(output) = std::process::Command::new("sysctl")
-        .arg("hw.memsize")
-        .output()
-    {
-        if let Ok(stdout) = String::from_utf8(output.stdout) {
-            if let Some(bytes_str) = stdout.split(':').nth(1) {
-                if let Ok(bytes) = bytes_str.trim().parse::<u64>() {
-                    let gb = bytes as f32 / (1024.0 * 1024.0 * 1024.0);
-                    // Assume GPU can use ~60% of system memory on Apple Silicon
-                    return Some(gb * 0.6);
-                }
-            }
-        }
-    }
-    None
 }
 
 #[cfg(feature = "cuda")]

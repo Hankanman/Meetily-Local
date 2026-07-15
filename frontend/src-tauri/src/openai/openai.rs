@@ -187,11 +187,3 @@ pub async fn get_openai_models(api_key: Option<String>) -> Result<Vec<OpenAIMode
 
     Ok(models)
 }
-
-/// Clear the models cache (useful when API key changes)
-pub fn clear_cache() {
-    if let Ok(mut cache) = MODELS_CACHE.write() {
-        *cache = None;
-        log::info!("OpenAI models cache cleared");
-    }
-}

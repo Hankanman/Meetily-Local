@@ -1,10 +1,9 @@
 // audio/transcription/engine.rs
 //
 // TranscriptionEngine enum and model initialization/validation logic.
-// Whisper is the local ASR engine; remote providers (OpenAI, Groq, Deepgram,
-// etc.) plug in via the `Provider` variant + `TranscriptionProvider` trait.
+// Whisper is the sole local ASR engine (a prior remote-provider `Provider`
+// variant was removed as dead code — it had no live implementation).
 
-use super::provider::TranscriptionProvider;
 use log::{info, warn};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, Runtime};
@@ -12,28 +11,24 @@ use tauri::{AppHandle, Manager, Runtime};
 // Transcription engine abstraction.
 pub enum TranscriptionEngine {
     Whisper(Arc<crate::whisper_engine::WhisperEngine>), // Local Whisper (direct access)
-    Provider(Arc<dyn TranscriptionProvider>),           // Trait-based (remote / future engines)
 }
 
 impl TranscriptionEngine {
     pub async fn is_model_loaded(&self) -> bool {
         match self {
             Self::Whisper(engine) => engine.is_model_loaded().await,
-            Self::Provider(provider) => provider.is_model_loaded().await,
         }
     }
 
     pub async fn get_current_model(&self) -> Option<String> {
         match self {
             Self::Whisper(engine) => engine.get_current_model().await,
-            Self::Provider(provider) => provider.get_current_model().await,
         }
     }
 
     pub fn provider_name(&self) -> &str {
         match self {
             Self::Whisper(_) => "Whisper (direct)",
-            Self::Provider(provider) => provider.provider_name(),
         }
     }
 }
@@ -101,7 +96,6 @@ pub async fn get_or_init_whisper<R: Runtime>(
             let configured_model = match crate::api::api::api_get_transcript_config(
                 app.clone(),
                 app.clone().state(),
-                None,
             )
             .await
             {
@@ -167,7 +161,6 @@ pub async fn get_or_init_whisper<R: Runtime>(
     let model_to_load = match crate::api::api::api_get_transcript_config(
         app.clone(),
         app.clone().state(),
-        None,
     )
     .await
     {

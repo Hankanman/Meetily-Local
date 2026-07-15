@@ -35,7 +35,6 @@ pub async fn api_save_meeting_summary<R: Runtime>(
     state: tauri::State<'_, AppState>,
     meeting_id: String,
     summary: serde_json::Value,
-    _auth_token: Option<String>,
 ) -> Result<serde_json::Value, String> {
     log_info!(
         "api_save_meeting_summary (native) called for meeting_id: {}",
@@ -90,7 +89,6 @@ pub async fn api_get_summary<R: Runtime>(
     _app: AppHandle<R>,
     state: tauri::State<'_, AppState>,
     meeting_id: String,
-    _auth_token: Option<String>,
 ) -> Result<SummaryResponse, String> {
     log_info!(
         "api_get_summary (native) called for meeting_id: {}",
@@ -193,7 +191,6 @@ pub async fn api_process_transcript<R: Runtime>(
     _overlap: Option<i32>,
     custom_prompt: Option<String>,
     template_id: Option<String>,
-    _auth_token: Option<String>,
 ) -> Result<ProcessTranscriptResponse, String> {
     use uuid::Uuid;
 

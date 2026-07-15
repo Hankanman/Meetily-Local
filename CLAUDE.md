@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Key Technology Stack
 - **Desktop shell**: Tauri 2.11 (Rust) + Next.js 16 + React 19 + Tailwind 4
-- **Audio Processing**: Rust (cpal, whisper-rs, professional audio mixing)
+- **Audio Processing**: Rust (native PipeWire capture, whisper-rs, professional audio mixing)
 - **Transcription**: Whisper.cpp (local, GPU-accelerated, in-process via whisper-rs)
 - **Persistence**: SQLite via sqlx in the Tauri Rust process
 - **LLM Integration**: built-in llama.cpp sidecar (`llama-helper` crate), or remote Ollama / Claude / Groq / OpenRouter / OpenAI-compatible endpoint
@@ -17,29 +17,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Frontend Development (Tauri Desktop App)
 
-**Location**: `/frontend`
+Root-level scripts (recommended — handle CUDA/Vulkan env setup and the `llama-helper` sidecar build for you):
 
 ```bash
-# macOS Development
-./clean_run.sh              # Clean build and run with info logging
-./clean_run.sh debug        # Run with debug logging
-./clean_build.sh            # Production build
+./dev.sh                    # auto: full Tauri dev, CUDA on NVIDIA, CPU otherwise
+./dev.sh cuda                # NVIDIA CUDA
+./dev.sh vulkan               # AMD/Intel Vulkan
+./dev.sh cpu                  # CPU-only
+./dev.sh frontend             # frontend-only (next dev), no Tauri shell — fastest UI loop
+./build.sh                    # production build (same mode selection as dev.sh)
+./clean.sh                    # nuke target/ + node_modules/ + Next.js caches
+```
 
-# Windows Development
-clean_run_windows.bat       # Clean build and run
-clean_build_windows.bat     # Production build
+**Location**: `/frontend` (manual `pnpm` commands, if you don't want the root scripts):
 
-# Manual Commands
-pnpm install                # Install dependencies
-pnpm run dev                # Next.js dev server (port 3118)
-pnpm run tauri:dev          # Full Tauri development mode
-pnpm run tauri:build        # Production build
-
-# GPU-Specific Builds (for testing acceleration)
-pnpm run tauri:dev:metal    # macOS Metal GPU
-pnpm run tauri:dev:cuda     # NVIDIA CUDA
-pnpm run tauri:dev:vulkan   # AMD/Intel Vulkan
-pnpm run tauri:dev:cpu      # CPU-only (no GPU)
+```bash
+pnpm install                 # Install dependencies
+pnpm run dev                 # Next.js dev server (port 3118)
+pnpm run tauri:dev:cpu       # Full Tauri dev, CPU-only
+pnpm run tauri:dev:cuda      # Full Tauri dev, NVIDIA CUDA
+pnpm run tauri:dev:vulkan    # Full Tauri dev, AMD/Intel Vulkan
+pnpm run tauri:build:cpu     # Production build, CPU-only
+pnpm run tauri:build:cuda    # Production build, NVIDIA CUDA
+pnpm run tauri:build:vulkan  # Production build, AMD/Intel Vulkan
 ```
 
 ### Service Endpoint
@@ -88,35 +88,30 @@ Raw Audio (Mic + System)
 
 **Key Insight**: The pipeline performs **professional audio mixing** (RMS-based ducking, clipping prevention) for recording, while simultaneously applying **Voice Activity Detection (VAD)** to send only speech segments to Whisper for transcription.
 
-### Audio Device Modularization (Recently Completed)
+### Audio Architecture: Native PipeWire Capture
 
-**Context**: The audio system was refactored from a monolithic 1028-line `core.rs` file into focused modules. See [AUDIO_MODULARIZATION_PLAN.md](AUDIO_MODULARIZATION_PLAN.md) for details.
+**Context**: Linux audio input was rewritten to talk to PipeWire directly, replacing the previous cpal-ALSA + `pactl` + `PIPEWIRE_NODE`-env-var stack. See the module doc comment at the top of `audio/pw/mod.rs` for the rationale.
 
 ```
 audio/
-├── devices/                    # Device discovery and configuration
+├── devices/                    # Device model + PipeWire-backed discovery
 │   ├── discovery.rs           # list_audio_devices, trigger_audio_permission
-│   ├── microphone.rs          # default_input_device
-│   ├── speakers.rs            # default_output_device
-│   ├── configuration.rs       # AudioDevice types, parsing
-│   └── platform/              # Platform-specific implementations
-│       ├── windows.rs         # WASAPI logic (~200 lines)
-│       ├── macos.rs           # ScreenCaptureKit logic
-│       └── linux.rs           # ALSA/PulseAudio logic
-├── capture/                   # Audio stream capture
-│   ├── microphone.rs          # Microphone capture stream
-│   ├── system.rs              # System audio capture stream
-│   └── core_audio.rs          # macOS ScreenCaptureKit integration
-├── pipeline.rs                # Audio mixing and VAD processing
-├── recording_manager.rs       # High-level recording coordination
-├── recording_commands.rs      # Tauri command interface
-└── recording_saver.rs         # Audio file writing
+│   └── configuration.rs       # AudioDevice, DeviceType
+├── pw/                         # Native PipeWire capture layer (mic + system audio)
+├── pipeline.rs                 # Audio mixing and VAD processing
+├── device_detection.rs         # Bluetooth vs wired classification for adaptive buffering
+├── hardware_detector.rs        # GPU/perf tier detection
+├── recording_manager.rs        # High-level recording coordination
+├── recording_commands.rs       # Tauri command interface
+├── recording_saver.rs          # Audio file writing
+├── import.rs                   # Import external audio files as new meetings
+├── retranscription.rs          # Re-process stored audio with different settings
+└── transcription/               # Provider abstraction, engine management, worker pool
 ```
 
 **When working on audio features**:
-- Device detection issues → `devices/discovery.rs` or `devices/platform/{windows,macos,linux}.rs`
-- Microphone/speaker problems → `devices/microphone.rs` or `devices/speakers.rs`
-- Audio capture issues → `capture/microphone.rs` or `capture/system.rs`
+- Device detection issues → `devices/discovery.rs` or `devices/configuration.rs`
+- Capture issues (mic/system audio) → `pw/`
 - Mixing/processing problems → `pipeline.rs`
 - Recording workflow → `recording_manager.rs`
 
@@ -127,7 +122,7 @@ audio/
 // Frontend: src/app/page.tsx
 await invoke('start_recording', {
   mic_device_name: "Built-in Microphone",
-  system_device_name: "BlackHole 2ch",
+  system_device_name: "Family 17h/19h/1ah HD Audio Controller Analog Stereo",
   meeting_name: "Team Standup"
 });
 ```
@@ -166,21 +161,19 @@ await listen<TranscriptUpdate>('transcript-update', (event) => {
 
 **Model Storage Locations**:
 - **Development**: `frontend/models/`
-- **Production (macOS)**: `~/Library/Application Support/Meetily/models/`
-- **Production (Windows)**: `%APPDATA%\Meetily\models\`
+- **Production (Linux)**: `~/.local/share/com.meetily.ai/models/`
 
 **Model Loading** (frontend/src-tauri/src/whisper_engine/whisper_engine.rs):
 ```rust
 pub async fn load_model(&self, model_name: &str) -> Result<()> {
-    // Automatically detects GPU capabilities (Metal/CUDA/Vulkan)
+    // Automatically detects GPU capabilities (CUDA/Vulkan)
     // Falls back to CPU if GPU unavailable
 }
 ```
 
 **GPU Acceleration**:
-- **macOS**: Metal + CoreML (automatically enabled)
-- **Windows/Linux**: CUDA (NVIDIA), Vulkan (AMD/Intel), or CPU
-- Configure via Cargo features: `--features cuda`, `--features vulkan`
+- CUDA (NVIDIA), Vulkan (AMD/Intel), or CPU fallback
+- Configure via Cargo features: `--features cuda`, `--features vulkan` (auto-selected by `build.sh`/`dev.sh`)
 
 ## Critical Development Patterns
 
@@ -233,14 +226,6 @@ macro_rules! perf_debug {
 
 ## Common Development Tasks
 
-### Adding a New Audio Device Platform
-
-1. Create platform file: `audio/devices/platform/{platform_name}.rs`
-2. Implement device enumeration for the platform
-3. Add platform-specific configuration in `audio/devices/configuration.rs`
-4. Update `audio/devices/platform/mod.rs` to export new platform functions
-5. Test with `cargo check` and platform-specific device tests
-
 ### Adding a New Tauri Command
 
 1. Define command in `src/lib.rs`:
@@ -272,10 +257,10 @@ Key components:
 **Testing Audio Changes**:
 ```bash
 # Enable verbose audio logging
-RUST_LOG=app_lib::audio=debug ./clean_run.sh
+RUST_LOG=app_lib::audio=debug ./dev.sh
 
 # Monitor audio metrics in real-time
-# Check Developer Console in the app (Cmd+Shift+I on macOS)
+# Check Developer Console in the app (Ctrl+Shift+I)
 ```
 
 ### Adding a Tauri Command (Rust → frontend)
@@ -291,15 +276,11 @@ existing repository patterns.
 
 **Enable Rust Logging**:
 ```bash
-# macOS
-RUST_LOG=debug ./clean_run.sh
-
-# Windows (PowerShell)
-$env:RUST_LOG="debug"; ./clean_run_windows.bat
+RUST_LOG=debug ./dev.sh
 ```
 
 **Developer Tools**:
-- Open DevTools: `Cmd+Shift+I` (macOS) or `Ctrl+Shift+I` (Windows)
+- Open DevTools: `Ctrl+Shift+I`
 - Console Toggle: Built into app UI (console icon)
 - View Rust logs: Check terminal output
 
@@ -313,24 +294,13 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
 
 **Monitor via Developer Console**: The app includes real-time metrics display when recording.
 
-## Platform-Specific Notes
+## Platform Notes
 
-### macOS
-- **Audio Capture**: Uses ScreenCaptureKit for system audio (macOS 13+)
-- **GPU**: Metal + CoreML automatically enabled
-- **Permissions**: Requires microphone + screen recording permissions
-- **System Audio**: Requires virtual audio device (BlackHole) for system capture
+Linux is the only supported platform (see [Repository-Specific Conventions](#repository-specific-conventions)).
 
-### Windows
-- **Audio Capture**: Uses WASAPI (Windows Audio Session API)
-- **GPU**: CUDA (NVIDIA) or Vulkan (AMD/Intel) via Cargo features
-- **Build Tools**: Requires Visual Studio Build Tools with C++ workload
-- **System Audio**: Uses WASAPI loopback for system capture
-
-### Linux
-- **Audio Capture**: ALSA/PulseAudio
-- **GPU**: CUDA (NVIDIA) or Vulkan via Cargo features
-- **Dependencies**: Requires cmake, llvm, libomp
+- **Audio Capture**: Native PipeWire (`audio/pw/`) for both microphone and system audio — no virtual device or loopback trick needed
+- **GPU**: CUDA (NVIDIA) or Vulkan (AMD/Intel) via Cargo features, CPU fallback otherwise
+- **Dependencies**: Requires cmake, llvm, libomp — see [docs/building_in_linux.md](docs/building_in_linux.md)
 
 ## Performance Optimization Guidelines
 
@@ -356,10 +326,7 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
 
 1. **Audio Chunk Size**: Pipeline expects consistent 48kHz sample rate. Resampling happens at capture time.
 
-2. **Platform Audio Quirks**:
-   - macOS: ScreenCaptureKit requires macOS 13+, needs screen recording permission
-   - Windows: WASAPI exclusive mode can conflict with other apps
-   - System audio requires virtual device (BlackHole on macOS, WASAPI loopback on Windows)
+2. **Audio Capture**: Mic + system audio both go through native PipeWire (`audio/pw/`) — no virtual device or exclusive-mode juggling needed.
 
 3. **Whisper Model Loading**: Models are loaded once and cached. Changing models requires app restart or manual unload/reload.
 
@@ -370,7 +337,7 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
 
 5. **File Paths**: Use Tauri's path APIs (`downloadDir`, etc.) for cross-platform compatibility. Never hardcode paths.
 
-7. **Audio Permissions**: Request permissions early. macOS requires both microphone AND screen recording for system audio.
+7. **Audio Permissions**: Request microphone permission early; PipeWire handles system-audio routing without a separate OS-level screen-recording grant.
 
 ## Repository-Specific Conventions
 
@@ -381,7 +348,6 @@ $env:RUST_LOG="debug"; ./clean_run_windows.bat
   - `main`: Stable releases
   - `fix/*`: Bug fixes
   - `enhance/*`: Feature enhancements
-  - Current: `fix/audio-mixing` (working on audio pipeline improvements)
 
 ## Key Files Reference
 
