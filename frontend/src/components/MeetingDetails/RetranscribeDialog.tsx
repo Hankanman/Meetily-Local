@@ -17,6 +17,7 @@ import {
 } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
+import { Alert, AlertDescription } from "../ui/alert";
 import {
   Select,
   SelectContent,
@@ -395,9 +396,9 @@ export function RetranscribeDialog({
           )}
 
           {error && (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3">
-              <p className="text-sm text-destructive">{error}</p>
-            </div>
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
           )}
         </div>
 

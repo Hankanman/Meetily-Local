@@ -12,6 +12,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Heading } from "@/components/ui/typography";
 import { toast } from "sonner";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
@@ -95,9 +104,9 @@ export function SettingsModals({
 
             {/* Divider */}
             <div className="border-t pt-8">
-              <h4 className="mb-4 text-lg font-semibold text-foreground">
+              <Heading level={2} as="h4" className="mb-4">
                 AI Model Configuration
-              </h4>
+              </Heading>
               <div className="space-y-4">
                 <div>
                   <label
@@ -108,17 +117,10 @@ export function SettingsModals({
                     Summarization Model
                   </label>
                   <div className="flex space-x-2">
-                    <select
-                      className="
-                        rounded-md border border-border bg-background px-3
-                        py-2 text-sm shadow-sm
-                        focus:border-info focus:ring-1 focus:ring-info
-                        focus:outline-none
-                      "
+                    <Select
                       value={modelConfig.provider}
-                      onChange={(e) => {
-                        const provider = e.target
-                          .value as ModelConfig["provider"];
+                      onValueChange={(value) => {
+                        const provider = value as ModelConfig["provider"];
                         setModelConfig({
                           ...modelConfig,
                           provider,
@@ -126,44 +128,48 @@ export function SettingsModals({
                         });
                       }}
                     >
-                      <option value="builtin-ai">Built-in AI</option>
-                      <option value="claude">Claude</option>
-                      <option value="groq">Groq</option>
-                      <option value="ollama">Ollama</option>
-                      <option value="openrouter">OpenRouter</option>
-                      <option value="openai">OpenAI</option>
-                    </select>
+                      <SelectTrigger className="w-auto">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="builtin-ai">Built-in AI</SelectItem>
+                        <SelectItem value="claude">Claude</SelectItem>
+                        <SelectItem value="groq">Groq</SelectItem>
+                        <SelectItem value="ollama">Ollama</SelectItem>
+                        <SelectItem value="openrouter">OpenRouter</SelectItem>
+                        <SelectItem value="openai">OpenAI</SelectItem>
+                      </SelectContent>
+                    </Select>
 
-                    <select
-                      className="
-                        flex-1 rounded-md border border-border bg-background
-                        px-3 py-2 text-sm shadow-sm
-                        focus:border-info focus:ring-1 focus:ring-info
-                        focus:outline-none
-                      "
+                    <Select
                       value={modelConfig.model}
-                      onChange={(e) =>
+                      onValueChange={(value) =>
                         setModelConfig((prev: ModelConfig) => ({
                           ...prev,
-                          model: e.target.value,
+                          model: value,
                         }))
                       }
                     >
-                      {modelOptions[modelConfig.provider].map(
-                        (model: string) => (
-                          <option key={model} value={model}>
-                            {model}
-                          </option>
-                        ),
-                      )}
-                    </select>
+                      <SelectTrigger className="flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {modelOptions[modelConfig.provider].map(
+                          (model: string) => (
+                            <SelectItem key={model} value={model}>
+                              {model}
+                            </SelectItem>
+                          ),
+                        )}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
                 {modelConfig.provider === "ollama" && (
                   <div>
-                    <h4 className="mb-4 text-lg font-bold">
+                    <Heading level={2} as="h4" className="mb-4">
                       Available Ollama Models
-                    </h4>
+                    </Heading>
                     {error && (
                       <div
                         className="

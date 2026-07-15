@@ -10,6 +10,7 @@ import {
   SettingsCard,
   SettingsRow,
 } from "@/app/settings/parts/SettingsCard";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 export interface RecordingPreferences {
   save_folder: string;
@@ -185,10 +186,12 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
       )}
 
       {!preferences.auto_save && (
-        <div className="rounded-lg border border-warning/30 bg-warning-muted p-4 text-sm text-warning">
-          Audio recording is disabled. Enable &quot;Save audio recordings&quot;
-          to automatically save meeting audio.
-        </div>
+        <Alert variant="warning">
+          <AlertDescription>
+            Audio recording is disabled. Enable &quot;Save audio
+            recordings&quot; to automatically save meeting audio.
+          </AlertDescription>
+        </Alert>
       )}
 
       <SettingsCard>

@@ -3,6 +3,7 @@
 import { Switch } from "./ui/switch";
 import { FlaskConical, AlertCircle } from "lucide-react";
 import { Heading } from "@/components/ui/typography";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { useConfig } from "@/contexts/ConfigContext";
 import {
   BetaFeatureKey,
@@ -19,19 +20,14 @@ export function BetaSettings() {
   return (
     <div className="space-y-6">
       {/* Yellow Warning Banner */}
-      <div className="
-        flex items-start gap-3 rounded-lg border border-warning/30 bg-warning-muted
-        p-4
-      ">
-        <AlertCircle className="mt-0.5 size-5 shrink-0 text-warning" />
-        <div className="text-sm text-warning">
-          <p className="font-medium">Beta Features</p>
-          <p className="mt-1">
-            These features are still being tested. You may encounter issues, and
-            we appreciate your feedback.
-          </p>
-        </div>
-      </div>
+      <Alert variant="warning">
+        <AlertCircle className="size-5" />
+        <AlertTitle>Beta Features</AlertTitle>
+        <AlertDescription>
+          These features are still being tested. You may encounter issues, and
+          we appreciate your feedback.
+        </AlertDescription>
+      </Alert>
 
       {/* Dynamic Feature Toggles - Automatically renders all features */}
       {featureOrder.map((featureKey) => (
@@ -73,12 +69,12 @@ export function BetaSettings() {
       ))}
 
       {/* Info Box */}
-      <div className="rounded-lg border border-info/30 bg-info/10 p-4">
-        <p className="text-sm text-info">
+      <Alert variant="info">
+        <AlertDescription>
           <strong>Note:</strong> When disabled, beta features will be hidden.
           Your existing meetings remain unaffected.
-        </p>
-      </div>
+        </AlertDescription>
+      </Alert>
     </div>
   );
 }

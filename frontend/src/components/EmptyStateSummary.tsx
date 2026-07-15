@@ -3,6 +3,7 @@
 import { motion } from "framer-motion";
 import { FileQuestion, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Heading, Text } from "@/components/ui/typography";
 import {
   Tooltip,
   TooltipContent,
@@ -31,13 +32,13 @@ export function EmptyStateSummary({
       "
     >
       <FileQuestion className="mb-4 size-16 text-muted-foreground/70" />
-      <h3 className="mb-2 text-lg font-semibold text-foreground">
+      <Heading level={2} className="mb-2">
         No Summary Generated Yet
-      </h3>
-      <p className="mb-6 max-w-md text-sm text-muted-foreground">
+      </Heading>
+      <Text size="small" tone="muted" className="mb-6 max-w-md">
         Generate an AI-powered summary of your meeting transcript to get key
         points, action items, and decisions.
-      </p>
+      </Text>
 
       <TooltipProvider>
         <Tooltip>

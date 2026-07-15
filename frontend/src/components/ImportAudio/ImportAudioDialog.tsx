@@ -29,6 +29,7 @@ import {
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { Input } from "../ui/input";
+import { Alert, AlertDescription } from "../ui/alert";
 import {
   Select,
   SelectContent,
@@ -497,9 +498,9 @@ export function ImportAudioDialog({
 
           {/* Error display */}
           {error && (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3">
-              <p className="text-sm text-destructive">{error}</p>
-            </div>
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
           )}
         </div>
 

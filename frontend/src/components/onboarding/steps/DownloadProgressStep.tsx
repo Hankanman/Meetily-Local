@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { Mic, Sparkles, Check, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { Heading, Text } from "@/components/ui/typography";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { OnboardingContainer } from "../OnboardingContainer";
 import { useOnboarding } from "@/contexts/OnboardingContext";
 import { toast } from "sonner";
@@ -360,8 +362,8 @@ export function DownloadProgressStep() {
             {icon}
           </div>
           <div>
-            <h3 className="font-medium text-foreground">{title}</h3>
-            <p className="text-sm text-muted-foreground">{modelSize}</p>
+            <Heading level={3}>{title}</Heading>
+            <Text size="small" tone="muted">{modelSize}</Text>
           </div>
         </div>
         <div>
@@ -415,9 +417,9 @@ export function DownloadProgressStep() {
       )}
 
       {state.status === "error" && state.error && (
-        <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 p-3">
-          <p className="text-sm font-medium text-destructive">Download Error</p>
-          <p className="mt-1 text-sm text-destructive">{state.error}</p>
+        <Alert variant="destructive" className="mt-2">
+          <AlertTitle>Download Error</AlertTitle>
+          <AlertDescription>{state.error}</AlertDescription>
           {(title === "Transcription Engine" || title === "Summary Engine") && (
             <Button
               onClick={
@@ -443,7 +445,7 @@ export function DownloadProgressStep() {
               Try Again
             </Button>
           )}
-        </div>
+        </Alert>
       )}
     </div>
   );

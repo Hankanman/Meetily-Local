@@ -3,6 +3,15 @@ import { Globe } from "lucide-react";
 import { toast } from "sonner";
 import { useConfig } from "@/contexts/ConfigContext";
 import { getErrorMessage } from "@/lib/utils";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Heading } from "@/components/ui/typography";
 
 export interface Language {
   code: string;
@@ -173,34 +182,32 @@ export function LanguageSelection({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Globe className="size-4 text-muted-foreground" />
-          <h4 className="text-sm font-medium text-foreground">
+          <Heading level={3} as="h4">
             Transcription Language
-          </h4>
+          </Heading>
         </div>
       </div>
 
       <div className="space-y-2">
-        <select
+        <Select
           value={selectedLanguage}
-          onChange={(e) => handleLanguageChange(e.target.value)}
+          onValueChange={handleLanguageChange}
           disabled={disabled || saving}
-          className="
-            w-full rounded-md border border-border bg-background px-3 py-2
-            text-sm shadow-sm
-            focus:border-info focus:ring-1 focus:ring-info
-            focus:outline-none
-            disabled:bg-muted disabled:text-muted-foreground
-          "
         >
-          {availableLanguages.map((language) => (
-            <option key={language.code} value={language.code}>
-              {language.name}
-              {language.code !== "auto" &&
-                language.code !== "auto-translate" &&
-                ` (${language.code})`}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {availableLanguages.map((language) => (
+              <SelectItem key={language.code} value={language.code}>
+                {language.name}
+                {language.code !== "auto" &&
+                  language.code !== "auto-translate" &&
+                  ` (${language.code})`}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
         {/* Info text */}
         <div className="space-y-2 pt-2 text-sm">
@@ -208,30 +215,24 @@ export function LanguageSelection({
             <strong>Current:</strong> {selectedLanguageName}
           </p>
           {selectedLanguage === "auto" && (
-            <div className="
-              rounded-md border border-warning/30 bg-warning-muted p-2
-              text-warning
-            ">
-              <p className="font-medium">
+            <Alert variant="warning">
+              <AlertTitle>
                 ⚠️ Auto Detect may produce incorrect results
-              </p>
-              <p className="mt-1">
+              </AlertTitle>
+              <AlertDescription>
                 For best accuracy, select your specific language (e.g., English,
                 Spanish, etc.)
-              </p>
-            </div>
+              </AlertDescription>
+            </Alert>
           )}
           {selectedLanguage === "auto-translate" && (
-            <div className="
-              rounded-md border border-info/30 bg-info/10 p-2
-              text-info
-            ">
-              <p className="font-medium">🌐 Translation Mode Active</p>
-              <p className="mt-1">
+            <Alert variant="info">
+              <AlertTitle>🌐 Translation Mode Active</AlertTitle>
+              <AlertDescription>
                 All audio will be automatically translated to English. Best for
                 multilingual meetings where you need English output.
-              </p>
-            </div>
+              </AlertDescription>
+            </Alert>
           )}
           {selectedLanguage !== "auto" &&
             selectedLanguage !== "auto-translate" && (

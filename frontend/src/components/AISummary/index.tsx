@@ -5,6 +5,7 @@ import { Summary, Block } from "@/types";
 import { Section } from "./Section";
 import { EditableTitle } from "../EditableTitle";
 import { AlertTriangle as ExclamationTriangleIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 // Lives outside the component so the `Date.now()` / `Math.random()` calls
 // don't run during render — keeps react-hooks/purity happy and matches
@@ -808,11 +809,9 @@ export const AISummary = ({
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          <button
-            className="
-              flex w-full items-center space-x-2 px-4 py-2 text-left
-              hover:bg-muted
-            "
+          <Button
+            variant="ghost"
+            className="w-full justify-start"
             onClick={handleCopyBlocks}
           >
             <span className="text-muted-foreground">📋</span>
@@ -822,13 +821,10 @@ export const AISummary = ({
                 ? `${selectedBlocks.length} blocks`
                 : "block"}
             </span>
-          </button>
-          <button
-            className="
-              flex w-full items-center space-x-2 px-4 py-2 text-left
-              text-destructive
-              hover:bg-muted
-            "
+          </Button>
+          <Button
+            variant="ghost"
+            className="w-full justify-start text-destructive hover:text-destructive"
             onClick={handleDeleteBlocks}
           >
             <span>🗑️</span>
@@ -838,102 +834,9 @@ export const AISummary = ({
                 ? `${selectedBlocks.length} blocks`
                 : "block"}
             </span>
-          </button>
+          </Button>
         </div>
       )}
-
-      {/* <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center space-x-2">
-          <span className="text-2xl">✨</span>
-          <h2 className="text-2xl font-semibold bg-gradient-to-r from-purple-600 to-blue-500 bg-clip-text text-transparent">
-            AI Enhanced Summary
-          </h2>
-        </div>
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={handleUndo}
-            disabled={currentHistoryIndex === 0}
-            className="p-2 hover:bg-muted rounded disabled:opacity-50"
-            title="Undo"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M3 7v6h6" />
-              <path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13" />
-            </svg>
-          </button>
-          <button
-            onClick={handleRedo}
-            disabled={currentHistoryIndex === history.length - 1}
-            className="p-2 hover:bg-muted rounded disabled:opacity-50"
-            title="Redo"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M21 7v6h-6" />
-              <path d="M3 17a9 9 0 019-9 9 9 0 016 2.3l3 2.7" />
-            </svg>
-          </button>
-          <button
-            onClick={handleAddSection}
-            className="p-2 hover:bg-muted rounded"
-            title="Add new section"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M12 5v14" />
-              <path d="M5 12h14" />
-            </svg>
-          </button>
-          <button
-            onClick={() => {
-              const markdown = convertToMarkdown();
-              navigator.clipboard.writeText(markdown);
-            }}
-            className="px-2 py-1 text-sm bg-muted hover:bg-muted rounded-md flex items-center space-x-1"
-          >
-            <span>📋</span>
-            <span>Copy</span>
-          </button>
-          <button
-            onClick={onRegenerateSummary}
-            className="px-2 py-1 text-sm bg-muted hover:bg-muted rounded-md flex items-center space-x-1"
-            title="Regenerate Summary"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            <span className="ml-1">Regenerate</span>
-          </button>
-        </div>
-      </div> */}
 
       {Object.keys(currentSummary)
         .filter((key) => currentSummary[key]?.blocks?.length > 0)

@@ -20,6 +20,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { TranscriptSegmentData, PartialsBySource } from "@/types";
 import { formatRecordingTime } from "@/lib/utils";
 import { EditableSpeakerChip } from "./EditableSpeakerChip";
+import { Heading } from "./ui/typography";
 
 export interface VirtualizedTranscriptViewProps {
   /** Transcript segments to display */
@@ -367,7 +368,7 @@ export const VirtualizedTranscriptView: React.FC<
               </>
             ) : (
               <>
-                <p className="text-lg font-semibold">Welcome to meetily!</p>
+                <Heading level={2}>Welcome to meetily!</Heading>
                 <p className="mt-1 text-sm">
                   Start recording to see live transcription
                 </p>

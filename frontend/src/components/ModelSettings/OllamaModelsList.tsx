@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Heading } from "@/components/ui/typography";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { RefreshCw, Download, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -48,7 +49,7 @@ export function OllamaModelsList({
   return (
     <div>
       <div className="mb-4 flex items-center justify-between">
-        <h4 className="text-sm font-bold">Available Ollama Models</h4>
+        <Heading level={3}>Available Ollama Models</Heading>
         {lastFetchedEndpoint && models.length > 0 && (
           <div className="flex items-center gap-2 text-sm">
             <span className="text-muted-foreground">Using:</span>

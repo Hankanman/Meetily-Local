@@ -6,6 +6,7 @@ import { Check, ListChecks, Plus, Sparkles, Trash2, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { Heading } from "@/components/ui/typography";
 import { ActionItem } from "@/lib/actionItems";
 import { useActionItems } from "@/hooks/meeting-details/useActionItems";
 import { cn } from "@/lib/utils";
@@ -63,7 +64,7 @@ export function ActionItemsPanel({ meetingId, hasSummary }: ActionItemsPanelProp
       <header className="mb-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <ListChecks className="size-4 text-muted-foreground" />
-          <h3 className="text-sm font-semibold">Action Items</h3>
+          <Heading level={3}>Action Items</Heading>
           {openCount > 0 && (
             <span
               className="

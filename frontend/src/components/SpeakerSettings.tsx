@@ -28,6 +28,8 @@ import {
   VoiceProfile,
 } from "@/lib/voice-profiles";
 import { SelfVoiceEnrollment } from "./SelfVoiceEnrollment";
+import { Heading, Text } from "@/components/ui/typography";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { SelfVoiceStatus } from "@/lib/self-voice";
 
 type EditingState =
@@ -85,29 +87,26 @@ export function SpeakerSettings() {
   return (
     <div className="space-y-6 pt-6">
       <div>
-        <h2 className="text-lg font-semibold">Speakers</h2>
-        <p className="text-sm text-muted-foreground">
+        <Heading level={2}>Speakers</Heading>
+        <Text size="small" tone="muted">
           Who said what in your meetings — your own voice, plus anyone
           you&apos;ve named on a transcript.
-        </p>
+        </Text>
       </div>
 
       <SelfVoiceEnrollment onChange={handleSelfChange} />
 
       <div>
-        <h3 className="text-sm font-medium">Saved speakers</h3>
-        <p className="text-xs text-muted-foreground">
+        <Heading level={3}>Saved speakers</Heading>
+        <Text size="caption" tone="muted">
           Future meetings auto-tag these voices when they&apos;re recognised.
-        </p>
+        </Text>
       </div>
 
       {error && (
-        <div className="
-          rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm
-          text-destructive
-        ">
-          {error}
-        </div>
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
 
       {profiles === null && !error && (

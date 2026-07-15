@@ -10,6 +10,8 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Heading } from "@/components/ui/typography";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 /**
  * A capture device as reported by the PipeWire registry.
@@ -106,7 +108,7 @@ export function DeviceSelection({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h4 className="text-sm font-medium text-foreground">Audio Devices</h4>
+        <Heading level={3}>Audio Devices</Heading>
         <Button
           variant="ghost"
           size="icon"
@@ -124,13 +126,9 @@ export function DeviceSelection({
       </div>
 
       {error && (
-        <div
-          className="
-          rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive
-        "
-        >
-          {error}
-        </div>
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
 
       <div className="space-y-3">

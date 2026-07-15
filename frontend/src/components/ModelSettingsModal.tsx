@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useOllamaDownload } from "@/contexts/OllamaDownloadContext";
 import { BuiltInModelManager } from "@/components/BuiltInModelManager";
 import { Label } from "@/components/ui/label";
+import { Heading } from "@/components/ui/typography";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
 import { Switch } from "@/components/ui/switch";
@@ -927,7 +928,7 @@ export function ModelSettingsModal({
   return (
     <div>
       <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-lg font-semibold">Model Settings</h3>
+        <Heading level={2}>Model Settings</Heading>
       </div>
 
       <div className="space-y-4">

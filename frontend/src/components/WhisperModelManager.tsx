@@ -21,6 +21,8 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
+import { Heading } from "@/components/ui/typography";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 
 interface ModelManagerProps {
   selectedModel?: string;
@@ -473,15 +475,10 @@ export function ModelManager({
 
   if (error) {
     return (
-      <div
-        className={`
-          rounded-lg border border-destructive/30 bg-destructive/10 p-4
-          ${className}
-        `}
-      >
-        <p className="text-sm text-destructive">Failed to load models</p>
-        <p className="mt-1 text-sm text-destructive">{error}</p>
-      </div>
+      <Alert variant="destructive" className={className}>
+        <AlertTitle>Failed to load models</AlertTitle>
+        <AlertDescription>{error}</AlertDescription>
+      </Alert>
     );
   }
 
@@ -657,7 +654,7 @@ function ModelCard({
             {/* Model Name and Tagline */}
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <span className="text-2xl">{getModelIcon(model.accuracy)}</span>
-              <h3 className="font-semibold text-foreground">{displayName}</h3>
+              <Heading level={3}>{displayName}</Heading>
               <span className="text-sm text-muted-foreground">•</span>
               <span className="text-sm text-muted-foreground">
                 {getModelTagline(model.name, model.speed, model.accuracy)}

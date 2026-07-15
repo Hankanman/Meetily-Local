@@ -1,6 +1,7 @@
 "use client";
 
 import { Transcript, TranscriptSegmentData } from "@/types";
+import { Textarea } from "@/components/ui/textarea";
 import { VirtualizedTranscriptView } from "@/components/VirtualizedTranscriptView";
 import { TranscriptButtonGroup } from "./TranscriptButtonGroup";
 import { useMemo } from "react";
@@ -114,14 +115,9 @@ export function TranscriptPanel({
       {/* Custom prompt input at bottom of transcript section */}
       {!isRecording && convertedSegments.length > 0 && (
         <div className="border-t border-border p-1">
-          <textarea
+          <Textarea
             placeholder="Add context for AI summary. For example people involved, meeting overview, objective etc..."
-            className="
-              min-h-20 w-full resize-y rounded-md border border-border
-              bg-background px-3 py-2 text-sm shadow-sm
-              focus:border-info focus:ring-1 focus:ring-info
-              focus:outline-none
-            "
+            className="min-h-20 resize-y"
             value={customPrompt}
             onChange={(e) => onPromptChange(e.target.value)}
           />

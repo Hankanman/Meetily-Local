@@ -1,6 +1,7 @@
 import React from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Heading, Text } from "@/components/ui/typography";
 import { ProgressIndicator } from "./shared/ProgressIndicator";
 import { useOnboarding } from "@/contexts/OnboardingContext";
 import type { OnboardingContainerProps } from "@/types/onboarding";
@@ -115,18 +116,15 @@ export function OnboardingContainer({
 
         {/* Header - Fixed */}
         <div className="mb-4 shrink-0 space-y-3 text-center">
-          <h1 className="
-            animate-fade-in-up text-2xl font-semibold text-foreground
-          ">
+          <Heading level={1} className="animate-fade-in-up">
             {title}
-          </h1>
+          </Heading>
           {description && (
-            <p className="
-              animate-fade-in-up mx-auto max-w-md text-sm
-              text-muted-foreground delay-75
+            <Text size="small" tone="muted" className="
+              animate-fade-in-up mx-auto max-w-md delay-75
             ">
               {description}
-            </p>
+            </Text>
           )}
         </div>
 

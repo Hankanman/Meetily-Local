@@ -1,5 +1,6 @@
 import React from "react";
 import { Upload } from "lucide-react";
+import { Heading } from "@/components/ui/typography";
 import { getAudioFormatsDisplayList } from "@/constants/audioFormats";
 
 interface ImportDropOverlayProps {
@@ -23,9 +24,9 @@ export function ImportDropOverlay({ visible }: ImportDropOverlayProps) {
         "
       >
         <Upload className="mx-auto mb-4 size-16 text-info" />
-        <p className="text-lg font-medium text-white">
+        <Heading level={2} className="text-white">
           Drop audio file to import
-        </p>
+        </Heading>
         <p className="mt-2 text-sm text-info/80">
           {getAudioFormatsDisplayList()}
         </p>

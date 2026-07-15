@@ -14,6 +14,8 @@ import { CalendarEventPanel } from "./CalendarEventPanel";
 import { ActionItemsPanel } from "./ActionItemsPanel";
 import { MeetingNotesPanel } from "./MeetingNotesPanel";
 import { ExportMenu } from "./ExportMenu";
+import { Heading } from "@/components/ui/typography";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { RefObject } from "react";
 
 interface SummaryPanelProps {
@@ -263,10 +265,10 @@ export function SummaryPanel({
                 fixed inset-x-0 bottom-0 max-h-1/3 overflow-y-auto bg-background
                 p-4 shadow-lg
               ">
-                <h3 className="mb-2 text-lg font-semibold">Meeting Summary</h3>
+                <Heading level={2} className="mb-2">Meeting Summary</Heading>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="rounded-lg bg-background p-4 shadow-sm">
-                    <h4 className="mb-1 font-medium">Key Points</h4>
+                    <Heading level={3} className="mb-1">Key Points</Heading>
                     <ul className="list-disc pl-4">
                       {summaryResponse.summary.key_points.blocks.map(
                         (block, i) => (
@@ -278,7 +280,7 @@ export function SummaryPanel({
                     </ul>
                   </div>
                   <div className="mt-4 rounded-lg bg-background p-4 shadow-sm">
-                    <h4 className="mb-1 font-medium">Action Items</h4>
+                    <Heading level={3} className="mb-1">Action Items</Heading>
                     <ul className="list-disc pl-4">
                       {summaryResponse.summary.action_items.blocks.map(
                         (block, i) => (
@@ -290,7 +292,7 @@ export function SummaryPanel({
                     </ul>
                   </div>
                   <div className="mt-4 rounded-lg bg-background p-4 shadow-sm">
-                    <h4 className="mb-1 font-medium">Decisions</h4>
+                    <Heading level={3} className="mb-1">Decisions</Heading>
                     <ul className="list-disc pl-4">
                       {summaryResponse.summary.decisions.blocks.map(
                         (block, i) => (
@@ -302,7 +304,7 @@ export function SummaryPanel({
                     </ul>
                   </div>
                   <div className="mt-4 rounded-lg bg-background p-4 shadow-sm">
-                    <h4 className="mb-1 font-medium">Main Topics</h4>
+                    <Heading level={3} className="mb-1">Main Topics</Heading>
                     <ul className="list-disc pl-4">
                       {summaryResponse.summary.main_topics.blocks.map(
                         (block, i) => (
@@ -316,7 +318,7 @@ export function SummaryPanel({
                 </div>
                 {summaryResponse.raw_summary ? (
                   <div className="mt-4">
-                    <h4 className="mb-1 font-medium">Full Summary</h4>
+                    <Heading level={3} className="mb-1">Full Summary</Heading>
                     <p className="text-sm whitespace-pre-wrap">
                       {summaryResponse.raw_summary}
                     </p>
@@ -348,22 +350,20 @@ export function SummaryPanel({
               <MeetingNotesPanel meetingId={meeting.id} />
             </div>
             {summaryStatus !== "idle" && (
-              <div
-                className={`
-                  mt-4 rounded-lg p-4
-                  ${
+              <Alert
+                variant={
                   summaryStatus === "error"
-                    ? "bg-destructive/10 text-destructive"
+                    ? "destructive"
                     : summaryStatus === "completed"
-                      ? "bg-success-muted text-success"
-                      : "bg-info/15 text-info"
+                      ? "success"
+                      : "info"
                 }
-                `}
+                className="mt-4"
               >
-                <p className="text-sm font-medium">
+                <AlertDescription className="font-medium">
                   {getSummaryStatusMessage(summaryStatus)}
-                </p>
-              </div>
+                </AlertDescription>
+              </Alert>
             )}
           </div>
         )
