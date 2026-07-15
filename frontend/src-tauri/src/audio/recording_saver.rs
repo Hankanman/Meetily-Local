@@ -1,6 +1,5 @@
 use anyhow::Result;
 use log::{error, info, warn};
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Runtime};
@@ -8,50 +7,19 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex as AsyncMutex;
 
 use super::audio_processing::create_meeting_folder;
+use super::common::{
+    write_metadata as common_write_metadata, write_transcripts_json as common_write_transcripts_json,
+    DeviceInfo, MeetingMetadata,
+};
 use super::incremental_saver::IncrementalAudioSaver;
 use super::recording_state::AudioChunk;
 
-/// Structured transcript segment for JSON export
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TranscriptSegment {
-    pub id: String,
-    pub text: String,
-    pub audio_start_time: f64, // Seconds from recording start
-    pub audio_end_time: f64,   // Seconds from recording start
-    pub duration: f64,         // Segment duration in seconds
-    pub display_time: String,  // Formatted time for display like "[02:15]"
-    pub confidence: f32,
-    pub sequence_id: u64,
-    /// Speaker label assigned at transcription time ("Me", "Speaker N", or a
-    /// stored profile name). None when source identity wasn't determined.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub speaker: Option<String>,
-    /// Foreign key to a stored voice profile when matched, else None.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub voice_profile_id: Option<String>,
-}
-
-/// Meeting metadata structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MeetingMetadata {
-    pub version: String,
-    pub meeting_id: Option<String>,
-    pub meeting_name: Option<String>,
-    pub created_at: String,
-    pub completed_at: Option<String>,
-    pub duration_seconds: Option<f64>,
-    pub devices: DeviceInfo,
-    pub audio_file: String,
-    pub transcript_file: String,
-    pub sample_rate: u32,
-    pub status: String, // "recording", "completed", "error"
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeviceInfo {
-    pub microphone: Option<String>,
-    pub system_audio: Option<String>,
-}
+/// Canonical transcript segment type — re-exported here for compatibility
+/// with the many call sites that already `use
+/// crate::audio::recording_saver::TranscriptSegment` (the live-recording
+/// path's historical name for it). See `audio::common::TranscriptSegment`
+/// for the type itself.
+pub use super::common::TranscriptSegment;
 
 /// New recording saver using incremental saving strategy
 pub struct RecordingSaver {
@@ -90,8 +58,10 @@ impl RecordingSaver {
     /// Set device information in metadata
     pub fn set_device_info(&mut self, mic_name: Option<String>, sys_name: Option<String>) {
         if let Some(ref mut metadata) = self.metadata {
-            metadata.devices.microphone = mic_name;
-            metadata.devices.system_audio = sys_name;
+            metadata.devices = Some(DeviceInfo {
+                microphone: mic_name,
+                system_audio: sys_name,
+            });
 
             // Write updated metadata to disk if folder exists
             if let Some(folder) = &self.meeting_folder {
@@ -114,7 +84,7 @@ impl RecordingSaver {
             {
                 *existing = segment.clone();
                 info!(
-                    "Updated transcript segment {} (seq: {}) - total segments: {}",
+                    "Updated transcript segment {} (seq: {:?}) - total segments: {}",
                     segment.id,
                     segment.sequence_id,
                     segments.len()
@@ -123,7 +93,7 @@ impl RecordingSaver {
                 // New segment, add it
                 segments.push(segment.clone());
                 info!(
-                    "Added new transcript segment {} (seq: {}) - total segments: {}",
+                    "Added new transcript segment {} (seq: {:?}) - total segments: {}",
                     segment.id,
                     segment.sequence_id,
                     segments.len()
@@ -149,12 +119,13 @@ impl RecordingSaver {
         let segment = TranscriptSegment {
             id: format!("seg_{}", chrono::Utc::now().timestamp_millis()),
             text,
-            audio_start_time: 0.0,
-            audio_end_time: 0.0,
-            duration: 0.0,
-            display_time: "[00:00]".to_string(),
-            confidence: 1.0,
-            sequence_id: 0,
+            timestamp: None,
+            audio_start_time: Some(0.0),
+            audio_end_time: Some(0.0),
+            duration: Some(0.0),
+            display_time: Some("[00:00]".to_string()),
+            confidence: Some(1.0),
+            sequence_id: Some(0),
             speaker: None,
             voice_profile_id: None,
         };
@@ -280,24 +251,28 @@ impl RecordingSaver {
 
         // Create initial metadata
         let metadata = MeetingMetadata {
-            version: "1.0".to_string(),
+            version: Some("1.0".to_string()),
             meeting_id: None, // Will be set by backend
             meeting_name: Some(meeting_name.to_string()),
-            created_at: chrono::Utc::now().to_rfc3339(),
+            created_at: Some(chrono::Utc::now().to_rfc3339()),
             completed_at: None,
+            retranscribed_at: None,
             duration_seconds: None,
-            devices: DeviceInfo {
+            devices: Some(DeviceInfo {
                 microphone: None, // Could be enhanced to store actual device names
                 system_audio: None,
-            },
-            audio_file: if create_checkpoints {
-                "audio.mp4".to_string()
-            } else {
-                "".to_string()
-            },
-            transcript_file: "transcripts.json".to_string(),
-            sample_rate: 48000,
-            status: "recording".to_string(),
+            }),
+            audio_file: Some(
+                if create_checkpoints {
+                    "audio.mp4".to_string()
+                } else {
+                    "".to_string()
+                },
+            ),
+            transcript_file: Some("transcripts.json".to_string()),
+            sample_rate: Some(48000),
+            status: Some("recording".to_string()),
+            origin: Some("recording".to_string()),
         };
 
         // Write initial metadata.json
@@ -309,19 +284,13 @@ impl RecordingSaver {
         Ok(())
     }
 
-    /// Write metadata.json to disk (atomic write with temp file)
+    /// Write metadata.json to disk (atomic write with temp file, merging
+    /// with whatever's already there — see `common::write_metadata`).
     fn write_metadata(&self, folder: &PathBuf, metadata: &MeetingMetadata) -> Result<()> {
-        let metadata_path = folder.join("metadata.json");
-        let temp_path = folder.join(".metadata.json.tmp");
-
-        let json_string = serde_json::to_string_pretty(metadata)?;
-        std::fs::write(&temp_path, json_string)?;
-        std::fs::rename(&temp_path, &metadata_path)?; // Atomic
-
-        Ok(())
+        common_write_metadata(folder, metadata, || metadata.clone())
     }
 
-    /// Write transcripts.json to disk (atomic write with temp file and validation)
+    /// Write transcripts.json to disk (atomic write with temp file).
     fn write_transcripts_json(&self, folder: &PathBuf) -> Result<()> {
         // Clone segments to avoid holding lock during I/O
         let segments_clone = if let Ok(segments) = self.transcript_segments.lock() {
@@ -336,52 +305,7 @@ impl RecordingSaver {
             segments_clone.len()
         );
 
-        let transcript_path = folder.join("transcripts.json");
-        let temp_path = folder.join(".transcripts.json.tmp");
-
-        // Create JSON structure
-        let json = serde_json::json!({
-            "version": "1.0",
-            "segments": segments_clone,
-            "last_updated": chrono::Utc::now().to_rfc3339(),
-            "total_segments": segments_clone.len()
-        });
-
-        // Serialize to pretty JSON string
-        let json_string = serde_json::to_string_pretty(&json).map_err(|e| {
-            error!("Failed to serialize transcripts to JSON: {}", e);
-            anyhow::anyhow!("JSON serialization failed: {}", e)
-        })?;
-
-        // Write to temp file with error handling
-        std::fs::write(&temp_path, &json_string).map_err(|e| {
-            error!(
-                "Failed to write transcript temp file to {}: {}",
-                temp_path.display(),
-                e
-            );
-            anyhow::anyhow!("Failed to write temp file: {}", e)
-        })?;
-
-        // Verify temp file was written correctly
-        if !temp_path.exists() {
-            error!(
-                "Temp transcript file does not exist after write: {}",
-                temp_path.display()
-            );
-            return Err(anyhow::anyhow!("Temp file verification failed"));
-        }
-
-        // Atomic rename
-        std::fs::rename(&temp_path, &transcript_path).map_err(|e| {
-            error!(
-                "Failed to rename transcript file from {} to {}: {}",
-                temp_path.display(),
-                transcript_path.display(),
-                e
-            );
-            anyhow::anyhow!("Failed to rename transcript file: {}", e)
-        })?;
+        common_write_transcripts_json(folder, &segments_clone)?;
 
         info!(
             "✅ Successfully wrote transcripts.json with {} segments",
@@ -488,14 +412,14 @@ impl RecordingSaver {
 
         // Update metadata to completed status with actual recording duration
         if let (Some(folder), Some(mut metadata)) = (&self.meeting_folder, self.metadata.clone()) {
-            metadata.status = "completed".to_string();
+            metadata.status = Some("completed".to_string());
             metadata.completed_at = Some(chrono::Utc::now().to_rfc3339());
 
             // Use actual recording duration from RecordingState (more accurate than transcript segments)
             // Falls back to last transcript segment if duration not provided
             metadata.duration_seconds = recording_duration.or_else(|| {
                 if let Ok(segments) = self.transcript_segments.lock() {
-                    segments.last().map(|seg| seg.audio_end_time)
+                    segments.last().and_then(|seg| seg.audio_end_time)
                 } else {
                     None
                 }

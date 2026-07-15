@@ -1,6 +1,8 @@
+use crate::llm_providers::{ListerConfig, ModelLister};
+use once_cell::sync::Lazy;
+use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
-use std::sync::RwLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::command;
 
 /// Groq model information returned to frontend
@@ -25,23 +27,10 @@ struct GroqApiResponse {
     data: Vec<GroqApiModel>,
 }
 
-/// Cache entry for models
-struct CacheEntry {
-    models: Vec<GroqModel>,
-    fetched_at: Instant,
-}
-
-/// Global cache for Groq models (5 minute TTL)
-static MODELS_CACHE: RwLock<Option<CacheEntry>> = RwLock::new(None);
-
-/// Cache TTL in seconds
-const CACHE_TTL_SECS: u64 = 300;
-
 /// Fallback models when API fetch fails (matches frontend hardcoded values)
 const FALLBACK_MODELS: &[&str] = &["llama-3.3-70b-versatile"];
 
-/// Get fallback models as GroqModel vec
-fn get_fallback_models() -> Vec<GroqModel> {
+fn fallback_models() -> Vec<GroqModel> {
     FALLBACK_MODELS
         .iter()
         .map(|id| GroqModel {
@@ -61,6 +50,38 @@ fn is_chat_model(model_id: &str) -> bool {
         && !id.contains("tool-use")
 }
 
+fn apply_auth(rb: RequestBuilder, api_key: &str) -> RequestBuilder {
+    rb.header("Authorization", format!("Bearer {}", api_key))
+}
+
+fn parse_response(bytes: &[u8]) -> Result<Vec<GroqModel>, String> {
+    let api_response: GroqApiResponse =
+        serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+
+    Ok(api_response
+        .data
+        .into_iter()
+        .filter(|m| is_chat_model(&m.id))
+        .map(|m| GroqModel {
+            id: m.id,
+            owned_by: m.owned_by,
+        })
+        .collect())
+}
+
+static LISTER: Lazy<ModelLister<GroqModel>> = Lazy::new(|| {
+    ModelLister::new(ListerConfig {
+        provider: "Groq",
+        endpoint: "https://api.groq.com/openai/v1/models",
+        ttl: Duration::from_secs(300),
+        timeout: Duration::from_secs(5),
+        requires_api_key: true,
+        apply_auth,
+        parse: parse_response,
+        fallback: fallback_models,
+    })
+});
+
 /// Fetch Groq models from API
 ///
 /// # Arguments
@@ -70,91 +91,10 @@ fn is_chat_model(model_id: &str) -> bool {
 /// Vector of available models, or fallback models on error
 #[command]
 pub async fn get_groq_models(api_key: Option<String>) -> Result<Vec<GroqModel>, String> {
-    // Return fallback if no API key provided
-    let api_key = match api_key {
-        Some(key) if !key.trim().is_empty() => key.trim().to_string(),
-        _ => {
-            log::info!("No Groq API key provided, returning fallback models");
-            return Ok(get_fallback_models());
-        }
-    };
+    LISTER.list(api_key).await
+}
 
-    // Check cache first
-    {
-        let cache = MODELS_CACHE.read().map_err(|e| e.to_string())?;
-        if let Some(entry) = cache.as_ref() {
-            if entry.fetched_at.elapsed() < Duration::from_secs(CACHE_TTL_SECS) {
-                log::info!(
-                    "Returning cached Groq models ({} models)",
-                    entry.models.len()
-                );
-                return Ok(entry.models.clone());
-            }
-        }
-    }
-
-    // Fetch from API
-    log::info!("Fetching Groq models from API...");
-    let client = reqwest::Client::new();
-
-    let response = match client
-        .get("https://api.groq.com/openai/v1/models")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await
-    {
-        Ok(resp) => resp,
-        Err(e) => {
-            log::warn!("Failed to fetch Groq models: {}. Using fallback.", e);
-            return Ok(get_fallback_models());
-        }
-    };
-
-    if !response.status().is_success() {
-        let status = response.status();
-        log::warn!(
-            "Groq API returned status {}. Using fallback models.",
-            status
-        );
-        return Ok(get_fallback_models());
-    }
-
-    let api_response: GroqApiResponse = match response.json().await {
-        Ok(data) => data,
-        Err(e) => {
-            log::warn!("Failed to parse Groq response: {}. Using fallback.", e);
-            return Ok(get_fallback_models());
-        }
-    };
-
-    // Filter to only chat models and map to our struct
-    let models: Vec<GroqModel> = api_response
-        .data
-        .into_iter()
-        .filter(|m| is_chat_model(&m.id))
-        .map(|m| GroqModel {
-            id: m.id,
-            owned_by: m.owned_by,
-        })
-        .collect();
-
-    // If no models returned, use fallback
-    if models.is_empty() {
-        log::warn!("No chat models returned from Groq API. Using fallback.");
-        return Ok(get_fallback_models());
-    }
-
-    log::info!("Fetched {} Groq models from API", models.len());
-
-    // Update cache
-    {
-        let mut cache = MODELS_CACHE.write().map_err(|e| e.to_string())?;
-        *cache = Some(CacheEntry {
-            models: models.clone(),
-            fetched_at: Instant::now(),
-        });
-    }
-
-    Ok(models)
+/// Clear the cached Groq model list.
+pub fn clear_cache() {
+    LISTER.clear();
 }

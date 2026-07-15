@@ -9,24 +9,6 @@ and `build-windows.yml` were removed along with macOS/Windows CI support.
 
 ## Workflow Files
 
-### 1. **build-devtest.yml** - DevTest Builds
-**Purpose:** Fast builds for development and testing
-
-**Key Features:**
-- Signing OFF by default (faster builds)
-- Optional signing via workflow dispatch input
-- 14-day artifact retention
-
-**Triggers:**
-- Manual dispatch only
-
-**Use When:**
-- Regular development work
-- Testing features
-- Need fast feedback
-
----
-
 ### 2. **build-linux.yml** - Linux Standalone Builds
 **Purpose:** Build and test for Linux distributions
 
@@ -148,7 +130,7 @@ Linux-only. Use `build-linux.yml` for Linux test builds in the meantime.
 ## Quick Decision Guide
 
 ### "I'm developing a new feature..."
-- **Use `build-devtest.yml`** (manual dispatch)
+- **Use `build-linux.yml`** (manual dispatch)
 - Fast builds, no signing by default
 - Enable signing checkbox if needed
 
@@ -177,7 +159,6 @@ build.yml (reusable, Linux-only)
 
 Standalone (don't use build.yml):
     |-- build-linux.yml
-    |-- build-devtest.yml (still has mac/win matrix legs — see file)
     |-- pr-main-check.yml (validation only)
 ```
 
@@ -187,9 +168,8 @@ Standalone (don't use build.yml):
 
 | Workflow | Platforms | Default Signing | Speed | Retention | Use Case |
 |----------|-----------|----------------|-------|-----------|----------|
-| `build-devtest.yml` | Linux (+ stale mac/win legs) | OFF | Fast | 14 days | Development |
 | `build-linux.yml` | Linux | Optional | Medium | 30 days | Linux dev |
-| `build-test.yml` | Linux (+ stale mac/win legs) | ON | Slow | 30 days | Pre-release |
+| `build-test.yml` | Linux | ON | Slow | 30 days | Pre-release |
 | `release.yml` | Linux | Tauri updater only | Slow | Permanent | Release |
 
 ---
@@ -213,7 +193,7 @@ macOS/Windows build steps.
 
 ## Performance Tips
 
-1. **Use devtest workflow** for routine development (fastest)
+1. **Use build-linux.yml** for routine development
 2. **Enable signing** only when necessary (adds a few minutes for updater signing)
 3. **Run full builds** (`build-test.yml` or `build-linux.yml`) before releases
 4. **Cache is enabled** - subsequent builds are faster
@@ -244,5 +224,4 @@ macOS/Windows build steps.
 For issues with workflows:
 1. Check workflow logs in Actions tab
 2. Review this documentation
-3. Check `README_DEVTEST.md` for devtest-specific help
 4. Check `ACCELERATION_GUIDE.md` for GPU/performance info

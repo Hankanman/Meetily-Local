@@ -1,8 +1,6 @@
 // Retranscription module - allows re-processing stored audio with different settings
 
-use super::common::{
-    create_transcript_segments, split_segment_at_silence, write_transcripts_json, BatchTranscript,
-};
+use super::common::{create_transcript_segments, write_transcripts_json};
 use super::constants::AUDIO_EXTENSIONS;
 use crate::audio::decoder::{decode_audio_file_with_progress, ProgressCallback};
 use crate::audio::vad::get_speech_chunks_with_progress;
@@ -308,41 +306,7 @@ async fn run_retranscription<R: Runtime>(
         total_segments, VAD_REDEMPTION_TIME_MS
     );
 
-    // Diagnostic: log segment duration distribution
-    if !speech_segments.is_empty() {
-        let durations_ms: Vec<f64> = speech_segments
-            .iter()
-            .map(|s| s.end_timestamp_ms - s.start_timestamp_ms)
-            .collect();
-        let total_speech_ms: f64 = durations_ms.iter().sum();
-        let avg_duration = total_speech_ms / durations_ms.len() as f64;
-        let min_duration = durations_ms.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max_duration = durations_ms
-            .iter()
-            .cloned()
-            .fold(f64::NEG_INFINITY, f64::max);
-        info!(
-            "VAD segment stats: avg={:.0}ms, min={:.0}ms, max={:.0}ms, total_speech={:.1}s/{:.1}s ({:.0}%)",
-            avg_duration, min_duration, max_duration,
-            total_speech_ms / 1000.0, duration_seconds,
-            (total_speech_ms / 1000.0 / duration_seconds) * 100.0
-        );
-        // Log first 10 segments for detailed inspection
-        for (i, seg) in speech_segments.iter().take(10).enumerate() {
-            let dur = seg.end_timestamp_ms - seg.start_timestamp_ms;
-            debug!(
-                "  Segment {}: {:.0}ms-{:.0}ms ({:.0}ms, {} samples)",
-                i,
-                seg.start_timestamp_ms,
-                seg.end_timestamp_ms,
-                dur,
-                seg.samples.len()
-            );
-        }
-        if total_segments > 10 {
-            debug!("  ... and {} more segments", total_segments - 10);
-        }
-    }
+    super::common::log_vad_diagnostics(&speech_segments);
 
     if total_segments == 0 {
         warn!("No speech detected in audio");
@@ -380,148 +344,49 @@ async fn run_retranscription<R: Runtime>(
         info!("Speaker diarization unavailable — transcripts will have no speaker labels");
     }
 
-    // Split very long segments at silence boundaries for better transcription quality.
-    // Hard cuts at arbitrary sample positions lose words at boundaries. Instead, scan
-    // for the lowest-energy window near the target split point and cut there.
-    const MAX_SEGMENT_SAMPLES: usize = 25 * 16000; // 25 seconds at 16kHz
-
-    let mut processable_segments: Vec<crate::audio::vad::SpeechSegment> = Vec::new();
-    for segment in &speech_segments {
-        if segment.samples.len() > MAX_SEGMENT_SAMPLES {
-            debug!(
-                "Splitting large segment ({:.0}ms, {} samples) at silence boundaries",
-                segment.end_timestamp_ms - segment.start_timestamp_ms,
-                segment.samples.len()
+    // Split-at-silence -> per-segment transcribe -> diarize is shared with
+    // audio import (see `common::run_batch_transcription`); only the
+    // progress-event shape/percentage range differs here.
+    let engine = whisper_engine
+        .clone()
+        .expect("whisper_engine is always Some at this point");
+    let app_for_progress = app.clone();
+    let meeting_id_for_progress = meeting_id.clone();
+    let batch_result = super::common::run_batch_transcription(
+        &speech_segments,
+        language.clone(),
+        engine,
+        diarizer.clone(),
+        &RETRANSCRIPTION_CANCELLED,
+        move |i, total, segment_duration_sec| {
+            // Calculate progress (25% to 80% range for transcription)
+            let progress = 25 + ((i as f32 / total as f32) * 55.0) as u32;
+            emit_progress(
+                &app_for_progress,
+                &meeting_id_for_progress,
+                "transcribing",
+                progress,
+                &format!(
+                    "Transcribing segment {} of {} ({:.1}s)...",
+                    i + 1,
+                    total,
+                    segment_duration_sec
+                ),
             );
+        },
+    )
+    .await;
 
-            let sub_segments = split_segment_at_silence(segment, MAX_SEGMENT_SAMPLES);
-            debug!("Split into {} sub-segments", sub_segments.len());
-            processable_segments.extend(sub_segments);
-        } else {
-            processable_segments.push(segment.clone());
-        }
-    }
-
-    let processable_count = processable_segments.len();
-    info!(
-        "Processing {} segments (after splitting)",
-        processable_count
-    );
-
-    // Process each speech segment with progress updates.
-    let mut all_transcripts: Vec<BatchTranscript> = Vec::new();
-    let mut total_confidence = 0.0f32;
-
-    for (i, segment) in processable_segments.iter().enumerate() {
-        // Check for cancellation before each segment
-        if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {
-            return Err(anyhow!("Retranscription cancelled"));
-        }
-
-        // Calculate progress (25% to 80% range for transcription)
-        let progress = 25 + ((i as f32 / processable_count as f32) * 55.0) as u32;
-        let segment_duration_sec = (segment.end_timestamp_ms - segment.start_timestamp_ms) / 1000.0;
-        emit_progress(
-            &app,
-            &meeting_id,
-            "transcribing",
-            progress,
-            &format!(
-                "Transcribing segment {} of {} ({:.1}s)...",
-                i + 1,
-                processable_count,
-                segment_duration_sec
-            ),
-        );
-
-        // Skip very short segments (< 100ms of audio = 1600 samples at 16kHz)
-        if segment.samples.len() < 1600 {
-            debug!(
-                "Skipping short segment {} with {} samples",
-                i,
-                segment.samples.len()
-            );
-            continue;
-        }
-
-        // Transcribe this segment with Whisper.
-        let engine = whisper_engine.as_ref().unwrap();
-        let (text, conf, _) = engine
-            .transcribe_audio_with_confidence(segment.samples.clone(), language.clone())
-            .await
-            .map_err(|e| anyhow!("Whisper transcription failed on segment {}: {}", i, e))?;
-
-        // Skip empty transcripts
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            debug!(
-                "Segment {}/{}: {:.1}s, conf={:.2}, text='{}'",
-                i + 1,
-                processable_count,
-                segment_duration_sec,
-                conf,
-                if trimmed.len() > 80 {
-                    let mut end = 80;
-                    while !trimmed.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    &trimmed[..end]
-                } else {
-                    trimmed
-                }
-            );
-            // Run the diarizer (if available) on the segment audio. The
-            // sequence_id used here is just the index — it's only meaningful
-            // within this batch's history (used for promote-to-profile and
-            // 2-pass refinement).
-            let (speaker, voice_profile_id) = match diarizer.as_ref() {
-                Some(d) => match d.process(i as u64, &segment.samples) {
-                    Ok(result) => (Some(result.label), result.voice_profile_id),
-                    Err(e) => {
-                        debug!(
-                            "Diarization fallback for retranscription segment {}: {}",
-                            i, e
-                        );
-                        (None, None)
-                    }
-                },
-                None => (None, None),
-            };
-
-            all_transcripts.push(BatchTranscript {
-                text,
-                start_ms: segment.start_timestamp_ms,
-                end_ms: segment.end_timestamp_ms,
-                speaker,
-                voice_profile_id,
+    let all_transcripts = match batch_result {
+        Ok(transcripts) => transcripts,
+        Err(e) => {
+            return Err(if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {
+                anyhow!("Retranscription cancelled")
+            } else {
+                e
             });
-            total_confidence += conf;
-        } else {
-            debug!(
-                "Segment {}/{}: {:.1}s — empty transcription",
-                i + 1,
-                processable_count,
-                segment_duration_sec
-            );
         }
-    }
-
-    let transcribed_count = all_transcripts.len();
-    let avg_confidence = if transcribed_count > 0 {
-        total_confidence / transcribed_count as f32
-    } else {
-        0.0
     };
-
-    info!(
-        "Transcription complete: {} segments transcribed out of {}, avg confidence: {:.2}",
-        transcribed_count, processable_count, avg_confidence
-    );
-
-    // Check for cancellation
-    if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {
-        return Err(anyhow!("Retranscription cancelled"));
-    }
 
     emit_progress(&app, &meeting_id, "saving", 80, "Saving transcripts...");
 
@@ -557,7 +422,12 @@ async fn run_retranscription<R: Runtime>(
         .bind(&segment.id)
         .bind(&meeting_id)
         .bind(&segment.text)
-        .bind(&segment.timestamp)
+        .bind(
+            segment
+                .timestamp
+                .clone()
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+        )
         .bind(segment.audio_start_time)
         .bind(segment.audio_end_time)
         .bind(segment.duration)
@@ -598,9 +468,37 @@ async fn run_retranscription<R: Runtime>(
         .unwrap_or("audio.mp4")
         .to_string();
 
-    if let Err(e) =
-        write_retranscription_metadata(&folder_path, &meeting_id, duration_seconds, &audio_filename)
-    {
+    // Sparse update: only touch the fields retranscription actually knows
+    // changed. `common::write_metadata`'s merge behavior leaves everything
+    // else (meeting_name, devices, sample_rate, ...) exactly as a prior
+    // recording or import wrote it. If no metadata.json exists yet (meeting
+    // folder somehow missing one), `fallback` reconstructs a full document.
+    let now = chrono::Utc::now().to_rfc3339();
+    let updates = super::common::MeetingMetadata {
+        status: Some("completed".to_string()),
+        transcript_file: Some("transcripts.json".to_string()),
+        retranscribed_at: Some(now.clone()),
+        origin: Some("retranscription".to_string()),
+        ..Default::default()
+    };
+    let fallback_meeting_id = meeting_id.clone();
+    let fallback_audio_filename = audio_filename.clone();
+    let fallback_now = now.clone();
+    if let Err(e) = super::common::write_metadata(&folder_path, &updates, move || {
+        super::common::MeetingMetadata {
+            version: Some("1.0".to_string()),
+            meeting_id: Some(fallback_meeting_id),
+            created_at: Some(fallback_now.clone()),
+            completed_at: Some(fallback_now.clone()),
+            retranscribed_at: Some(fallback_now),
+            duration_seconds: Some(duration_seconds),
+            audio_file: Some(fallback_audio_filename),
+            transcript_file: Some("transcripts.json".to_string()),
+            status: Some("completed".to_string()),
+            origin: Some("retranscription".to_string()),
+            ..Default::default()
+        }
+    }) {
         warn!("Failed to update metadata.json: {}", e);
     }
 
@@ -771,53 +669,6 @@ async fn get_configured_whisper_model<R: Runtime>(app: &AppHandle<R>) -> Result<
     }
 }
 
-/// Write or update metadata.json for retranscription (preserves existing fields, adds retranscribed_at)
-fn write_retranscription_metadata(
-    folder: &Path,
-    meeting_id: &str,
-    duration_seconds: f64,
-    audio_filename: &str,
-) -> Result<()> {
-    let metadata_path = folder.join("metadata.json");
-    let temp_path = folder.join(".metadata.json.tmp");
-    let now = chrono::Utc::now().to_rfc3339();
-
-    // Try to read existing metadata and update it
-    let json = if metadata_path.exists() {
-        let existing = std::fs::read_to_string(&metadata_path)?;
-        let mut value: serde_json::Value = serde_json::from_str(&existing)?;
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert("retranscribed_at".to_string(), serde_json::json!(now));
-            obj.insert("status".to_string(), serde_json::json!("completed"));
-            obj.insert(
-                "transcript_file".to_string(),
-                serde_json::json!("transcripts.json"),
-            );
-        }
-        value
-    } else {
-        serde_json::json!({
-            "version": "1.0",
-            "meeting_id": meeting_id,
-            "created_at": now,
-            "completed_at": now,
-            "retranscribed_at": now,
-            "duration_seconds": duration_seconds,
-            "audio_file": audio_filename,
-            "transcript_file": "transcripts.json",
-            "status": "completed",
-            "source": "retranscription"
-        })
-    };
-
-    let json_string = serde_json::to_string_pretty(&json)?;
-    std::fs::write(&temp_path, &json_string)?;
-    std::fs::rename(&temp_path, &metadata_path)?;
-
-    info!("Wrote metadata.json to {}", metadata_path.display());
-    Ok(())
-}
-
 // Tauri commands
 
 /// Response when retranscription is started
@@ -887,6 +738,7 @@ pub async fn is_retranscription_in_progress_command() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::common::BatchTranscript;
 
     fn bt(text: &str, start_ms: f64, end_ms: f64) -> BatchTranscript {
         BatchTranscript {

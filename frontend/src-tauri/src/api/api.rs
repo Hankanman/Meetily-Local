@@ -156,26 +156,10 @@ pub struct SaveTranscriptRequest {
     pub transcripts: Vec<TranscriptSegment>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TranscriptSegment {
-    pub id: String,
-    pub text: String,
-    pub timestamp: String,
-    // Recording-relative timestamps for playback synchronization
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audio_start_time: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audio_end_time: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration: Option<f64>,
-    /// Speaker label assigned at transcription time. Optional so older
-    /// callers and pre-Phase-1 saves remain wire-compatible.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub speaker: Option<String>,
-    /// Foreign key into `voice_profiles` when matched.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub voice_profile_id: Option<String>,
-}
+/// Canonical transcript segment type — defined in `audio::common`, re-exported
+/// here for compatibility with the many call sites that already
+/// `use crate::api::TranscriptSegment`.
+pub use crate::audio::common::TranscriptSegment;
 
 // API Commands for Tauri
 

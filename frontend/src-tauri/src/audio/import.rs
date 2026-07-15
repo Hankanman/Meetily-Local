@@ -17,9 +17,7 @@ use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 use super::audio_processing::create_meeting_folder;
-use super::common::{
-    create_transcript_segments, split_segment_at_silence, write_transcripts_json, BatchTranscript,
-};
+use super::common::{create_transcript_segments, write_transcripts_json};
 use super::constants::AUDIO_EXTENSIONS;
 use super::recording_preferences::get_default_recordings_folder;
 
@@ -446,42 +444,7 @@ async fn run_import<R: Runtime>(
         "VAD detected {} speech segments (redemption_time={}ms)",
         total_segments, VAD_REDEMPTION_TIME_MS
     );
-
-    // Diagnostic: log segment duration distribution
-    if !speech_segments.is_empty() {
-        let durations_ms: Vec<f64> = speech_segments
-            .iter()
-            .map(|s| s.end_timestamp_ms - s.start_timestamp_ms)
-            .collect();
-        let total_speech_ms: f64 = durations_ms.iter().sum();
-        let avg_duration = total_speech_ms / durations_ms.len() as f64;
-        let min_duration = durations_ms.iter().cloned().fold(f64::INFINITY, f64::min);
-        let max_duration = durations_ms
-            .iter()
-            .cloned()
-            .fold(f64::NEG_INFINITY, f64::max);
-        info!(
-            "VAD segment stats: avg={:.0}ms, min={:.0}ms, max={:.0}ms, total_speech={:.1}s/{:.1}s ({:.0}%)",
-            avg_duration, min_duration, max_duration,
-            total_speech_ms / 1000.0, duration_seconds,
-            (total_speech_ms / 1000.0 / duration_seconds) * 100.0
-        );
-        // Log first 10 segments for detailed inspection
-        for (i, seg) in speech_segments.iter().take(10).enumerate() {
-            let dur = seg.end_timestamp_ms - seg.start_timestamp_ms;
-            debug!(
-                "  Segment {}: {:.0}ms-{:.0}ms ({:.0}ms, {} samples)",
-                i,
-                seg.start_timestamp_ms,
-                seg.end_timestamp_ms,
-                dur,
-                seg.samples.len()
-            );
-        }
-        if total_segments > 10 {
-            debug!("  ... and {} more segments", total_segments - 10);
-        }
-    }
+    super::common::log_vad_diagnostics(&speech_segments);
 
     if total_segments == 0 {
         warn!("No speech detected in audio");
@@ -537,143 +500,51 @@ async fn run_import<R: Runtime>(
         info!("Speaker diarization enabled for import");
     }
 
-    // Split very long segments at silence boundaries for better transcription quality.
-    // Hard cuts at arbitrary sample positions lose words at boundaries. Instead, scan
-    // for the lowest-energy window near the target split point and cut there.
-    const MAX_SEGMENT_SAMPLES: usize = 25 * 16000; // 25 seconds at 16kHz
-
-    let mut processable_segments: Vec<crate::audio::vad::SpeechSegment> = Vec::new();
-    for segment in &speech_segments {
-        if segment.samples.len() > MAX_SEGMENT_SAMPLES {
-            debug!(
-                "Splitting large segment ({:.0}ms, {} samples) at silence boundaries",
-                segment.end_timestamp_ms - segment.start_timestamp_ms,
-                segment.samples.len()
-            );
-
-            let sub_segments = split_segment_at_silence(segment, MAX_SEGMENT_SAMPLES);
-            debug!("Split into {} sub-segments", sub_segments.len());
-            processable_segments.extend(sub_segments);
-        } else {
-            processable_segments.push(segment.clone());
-        }
-    }
-
-    let processable_count = processable_segments.len();
-    info!(
-        "Processing {} segments (after splitting)",
-        processable_count
-    );
-
-    // Process each speech segment
-    let mut all_transcripts: Vec<BatchTranscript> = Vec::new();
-    let mut total_confidence = 0.0f32;
-
-    for (i, segment) in processable_segments.iter().enumerate() {
-        if IMPORT_CANCELLED.load(Ordering::SeqCst) {
-            let _ = std::fs::remove_dir_all(&meeting_folder);
-            return Err(anyhow!("Import cancelled"));
-        }
-
-        let progress = 30 + ((i as f32 / processable_count.max(1) as f32) * 50.0) as u32;
-        let segment_duration_sec = (segment.end_timestamp_ms - segment.start_timestamp_ms) / 1000.0;
-        emit_progress(
-            &app,
-            "transcribing",
-            progress,
-            &format!(
-                "Transcribing segment {} of {} ({:.1}s)...",
-                i + 1,
-                processable_count,
-                segment_duration_sec
-            ),
-        );
-
-        // Skip very short segments
-        if segment.samples.len() < 1600 {
-            debug!(
-                "Skipping short segment {} with {} samples",
-                i,
-                segment.samples.len()
-            );
-            continue;
-        }
-
-        // Transcribe with Whisper.
-        let engine = whisper_engine.as_ref().unwrap();
-        let (text, conf, _) = engine
-            .transcribe_audio_with_confidence(segment.samples.clone(), language.clone())
-            .await
-            .map_err(|e| anyhow!("Whisper transcription failed on segment {}: {}", i, e))?;
-
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            debug!(
-                "Segment {}/{}: {:.1}s, conf={:.2}, text='{}'",
-                i + 1,
-                processable_count,
-                segment_duration_sec,
-                conf,
-                if trimmed.len() > 80 {
-                    let mut end = 80;
-                    while !trimmed.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    &trimmed[..end]
-                } else {
-                    trimmed
-                }
-            );
-            // Run the diarizer (if available) on the segment audio.
-            let (speaker, voice_profile_id) = match diarizer.as_ref() {
-                Some(d) => match d.process(i as u64, &segment.samples) {
-                    Ok(result) => (Some(result.label), result.voice_profile_id),
-                    Err(e) => {
-                        debug!(
-                            "Diarization fallback for import segment {}: {}",
-                            i, e
-                        );
-                        (None, None)
-                    }
-                },
-                None => (None, None),
-            };
-
-            all_transcripts.push(BatchTranscript {
-                text,
-                start_ms: segment.start_timestamp_ms,
-                end_ms: segment.end_timestamp_ms,
-                speaker,
-                voice_profile_id,
-            });
-            total_confidence += conf;
-        } else {
-            debug!(
-                "Segment {}/{}: {:.1}s — empty transcription",
-                i + 1,
-                processable_count,
-                segment_duration_sec
-            );
-        }
-    }
-
-    let transcribed_count = all_transcripts.len();
-    let avg_confidence = if transcribed_count > 0 {
-        total_confidence / transcribed_count as f32
+    // Split-at-silence -> per-segment transcribe -> diarize is shared with
+    // retranscription (see `common::run_batch_transcription`); only the
+    // progress-event shape/percentage range differs here.
+    let batch_result = if total_segments > 0 {
+        let engine = whisper_engine
+            .clone()
+            .expect("whisper_engine is Some when total_segments > 0");
+        let app_for_progress = app.clone();
+        super::common::run_batch_transcription(
+            &speech_segments,
+            language.clone(),
+            engine,
+            diarizer.clone(),
+            &IMPORT_CANCELLED,
+            move |i, total, segment_duration_sec| {
+                let progress = 30 + ((i as f32 / total.max(1) as f32) * 50.0) as u32;
+                emit_progress(
+                    &app_for_progress,
+                    "transcribing",
+                    progress,
+                    &format!(
+                        "Transcribing segment {} of {} ({:.1}s)...",
+                        i + 1,
+                        total,
+                        segment_duration_sec
+                    ),
+                );
+            },
+        )
+        .await
     } else {
-        0.0
+        Ok(Vec::new())
     };
 
-    info!(
-        "Transcription complete: {} segments transcribed out of {}, avg confidence: {:.2}",
-        transcribed_count, processable_count, avg_confidence
-    );
-
-    // Check for cancellation
-    if IMPORT_CANCELLED.load(Ordering::SeqCst) {
-        let _ = std::fs::remove_dir_all(&meeting_folder);
-        return Err(anyhow!("Import cancelled"));
-    }
+    let all_transcripts = match batch_result {
+        Ok(transcripts) => transcripts,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&meeting_folder);
+            return Err(if IMPORT_CANCELLED.load(Ordering::SeqCst) {
+                anyhow!("Import cancelled")
+            } else {
+                e
+            });
+        }
+    };
 
     emit_progress(&app, "saving", 85, "Creating meeting...");
 
@@ -700,14 +571,21 @@ async fn run_import<R: Runtime>(
         warn!("Failed to write transcripts.json: {}", e);
     }
 
-    if let Err(e) = write_import_metadata(
-        &meeting_folder,
-        &meeting_id,
-        &title,
-        duration_seconds,
-        &dest_filename,
-        "import",
-    ) {
+    let now = chrono::Utc::now().to_rfc3339();
+    let metadata = super::common::MeetingMetadata {
+        version: Some("1.0".to_string()),
+        meeting_id: Some(meeting_id.clone()),
+        meeting_name: Some(title.clone()),
+        created_at: Some(now.clone()),
+        completed_at: Some(now),
+        duration_seconds: Some(duration_seconds),
+        audio_file: Some(dest_filename.clone()),
+        transcript_file: Some("transcripts.json".to_string()),
+        status: Some("completed".to_string()),
+        origin: Some("import".to_string()),
+        ..Default::default()
+    };
+    if let Err(e) = super::common::write_metadata(&meeting_folder, &metadata, || metadata.clone()) {
         warn!("Failed to write metadata.json: {}", e);
     }
 
@@ -786,7 +664,12 @@ async fn create_meeting_with_transcripts(
         .bind(&segment.id)
         .bind(&meeting_id)
         .bind(&segment.text)
-        .bind(&segment.timestamp)
+        .bind(
+            segment
+                .timestamp
+                .clone()
+                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+        )
         .bind(segment.audio_start_time)
         .bind(segment.audio_end_time)
         .bind(segment.duration)
@@ -874,40 +757,6 @@ async fn get_configured_model<R: Runtime>(app: &AppHandle<R>) -> Result<String> 
         Some((provider, model)) if provider == "localWhisper" || provider == "whisper" => Ok(model),
         _ => Ok(DEFAULT_WHISPER_MODEL.to_string()),
     }
-}
-
-/// Write metadata.json to a meeting folder (atomic write with temp file)
-fn write_import_metadata(
-    folder: &Path,
-    meeting_id: &str,
-    title: &str,
-    duration_seconds: f64,
-    audio_filename: &str,
-    source: &str,
-) -> Result<()> {
-    let metadata_path = folder.join("metadata.json");
-    let temp_path = folder.join(".metadata.json.tmp");
-    let now = chrono::Utc::now().to_rfc3339();
-
-    let json = serde_json::json!({
-        "version": "1.0",
-        "meeting_id": meeting_id,
-        "meeting_name": title,
-        "created_at": now,
-        "completed_at": now,
-        "duration_seconds": duration_seconds,
-        "audio_file": audio_filename,
-        "transcript_file": "transcripts.json",
-        "status": "completed",
-        "source": source
-    });
-
-    let json_string = serde_json::to_string_pretty(&json)?;
-    std::fs::write(&temp_path, &json_string)?;
-    std::fs::rename(&temp_path, &metadata_path)?;
-
-    info!("Wrote metadata.json to {}", metadata_path.display());
-    Ok(())
 }
 
 // ============================================================================
@@ -1011,6 +860,7 @@ pub async fn is_import_in_progress_command() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::common::{split_segment_at_silence, BatchTranscript};
 
     #[test]
     fn test_audio_extensions() {
@@ -1210,20 +1060,26 @@ mod tests {
             TranscriptSegment {
                 id: "t-1".to_string(),
                 text: "Hello world".to_string(),
-                timestamp: "2024-01-01T00:00:00Z".to_string(),
+                timestamp: Some("2024-01-01T00:00:00Z".to_string()),
                 audio_start_time: Some(0.0),
                 audio_end_time: Some(1.5),
                 duration: Some(1.5),
+                display_time: None,
+                confidence: None,
+                sequence_id: None,
                 speaker: None,
                 voice_profile_id: None,
             },
             TranscriptSegment {
                 id: "t-2".to_string(),
                 text: "Second segment".to_string(),
-                timestamp: "2024-01-01T00:00:01Z".to_string(),
+                timestamp: Some("2024-01-01T00:00:01Z".to_string()),
                 audio_start_time: Some(2.0),
                 audio_end_time: Some(3.5),
                 duration: Some(1.5),
+                display_time: None,
+                confidence: None,
+                sequence_id: None,
                 speaker: None,
                 voice_profile_id: None,
             },
@@ -1257,15 +1113,22 @@ mod tests {
     fn test_write_import_metadata() {
         let dir = tempfile::tempdir().unwrap();
 
-        let result = write_import_metadata(
-            dir.path(),
-            "meeting-123",
-            "Test Meeting",
-            1800.0,
-            "audio.mp4",
-            "import",
-        );
-        assert!(result.is_ok(), "write_import_metadata failed: {:?}", result);
+        let metadata = super::super::common::MeetingMetadata {
+            version: Some("1.0".to_string()),
+            meeting_id: Some("meeting-123".to_string()),
+            meeting_name: Some("Test Meeting".to_string()),
+            created_at: Some("2024-01-01T00:00:00Z".to_string()),
+            completed_at: Some("2024-01-01T00:00:00Z".to_string()),
+            duration_seconds: Some(1800.0),
+            audio_file: Some("audio.mp4".to_string()),
+            transcript_file: Some("transcripts.json".to_string()),
+            status: Some("completed".to_string()),
+            origin: Some("import".to_string()),
+            ..Default::default()
+        };
+        let result =
+            super::super::common::write_metadata(dir.path(), &metadata, || metadata.clone());
+        assert!(result.is_ok(), "write_metadata failed: {:?}", result);
 
         let path = dir.path().join("metadata.json");
         assert!(path.exists());
@@ -1278,7 +1141,7 @@ mod tests {
         assert_eq!(parsed["duration_seconds"], 1800.0);
         assert_eq!(parsed["audio_file"], "audio.mp4");
         assert_eq!(parsed["status"], "completed");
-        assert_eq!(parsed["source"], "import");
+        assert_eq!(parsed["origin"], "import");
     }
 
     /// Integration test that decodes a real audio file and runs VAD.

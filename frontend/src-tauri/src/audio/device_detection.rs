@@ -520,8 +520,13 @@ mod tests {
         // AirPods: 3840 frames at 48kHz = 80ms base
         // With 2x headroom = 160ms
         // Should clamp to 80-200ms range
+        // The timeout is derived from float math, so compare with a
+        // sub-millisecond tolerance instead of exact equality.
         let timeout = calculate_buffer_timeout(InputDeviceKind::Bluetooth, 3840, 48000);
-        assert_eq!(timeout, Duration::from_millis(160));
+        let diff = timeout
+            .checked_sub(Duration::from_millis(160))
+            .unwrap_or_else(|| Duration::from_millis(160) - timeout);
+        assert!(diff < Duration::from_millis(1), "timeout {:?} not ~160ms", timeout);
     }
 
     #[test]

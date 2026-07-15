@@ -75,8 +75,17 @@ pub async fn whisper_get_available_models() -> Result<Vec<ModelInfo>, String> {
 /// Discover Whisper models by scanning the models directory directly.
 /// Used when the Whisper engine isn't initialized yet (e.g., during onboarding
 /// status checks before any model has been loaded).
+///
+/// Delegates the actual per-file corruption/size check to
+/// `whisper_engine::scan_catalog_entry` - the same logic
+/// `WhisperEngine::discover_models` uses - so this fallback path reports
+/// `Corrupted` models identically instead of only ever seeing
+/// `Available`/`Missing`. There's no engine here to consult for
+/// currently-downloading state, so `downloading_progress` is always `None`
+/// (an undersized file just reads as `Corrupted`, same as it would for the
+/// real engine when it has no in-memory record of that model either).
 fn discover_models_standalone() -> Result<Vec<ModelInfo>, String> {
-    use crate::whisper_engine::ModelStatus;
+    use crate::whisper_engine::scan_catalog_entry;
 
     let models_dir =
         get_models_directory().ok_or_else(|| "Models directory not initialized".to_string())?;
@@ -92,26 +101,11 @@ fn discover_models_standalone() -> Result<Vec<ModelInfo>, String> {
     let mut models = Vec::new();
 
     for &(name, filename, size_mb, accuracy, speed, description) in model_configs {
-        let model_path = whisper_dir.join(filename);
-        let status = if model_path.exists() {
-            match std::fs::metadata(&model_path) {
-                Ok(metadata) => {
-                    let file_size_mb = metadata.len() / (1024 * 1024);
-                    if file_size_mb >= 1 {
-                        ModelStatus::Available
-                    } else {
-                        ModelStatus::Missing
-                    }
-                }
-                Err(_) => ModelStatus::Missing,
-            }
-        } else {
-            ModelStatus::Missing
-        };
+        let status = scan_catalog_entry(&whisper_dir, filename, size_mb, None);
 
         models.push(ModelInfo {
             name: name.to_string(),
-            path: model_path,
+            path: whisper_dir.join(filename),
             size_mb,
             status,
             accuracy: accuracy.to_string(),
@@ -122,7 +116,7 @@ fn discover_models_standalone() -> Result<Vec<ModelInfo>, String> {
 
     let downloaded_count = models
         .iter()
-        .filter(|m| matches!(m.status, ModelStatus::Available))
+        .filter(|m| matches!(m.status, crate::whisper_engine::ModelStatus::Available))
         .count();
     log::info!("Found {} downloaded Whisper models", downloaded_count);
 

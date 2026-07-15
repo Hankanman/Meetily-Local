@@ -144,13 +144,6 @@ WHISPER_NO_AVX: ${{ contains(inputs.platform, 'ubuntu') && 'ON' || '' }}
 WHISPER_NO_AVX2: ${{ contains(inputs.platform, 'ubuntu') && 'ON' || '' }}
 ```
 
-### 2. `build-devtest.yml` (DevTest Workflow)
-
-Same changes as `build.yml`:
-- ✅ Added feature detection step
-- ✅ Removed `WHISPER_NO_AVX` and `WHISPER_NO_AVX2`
-- ✅ Appends features to build args
-
 ### 3. `build-windows.yml` (Windows Standalone)
 
 **Build command updated:**
@@ -374,7 +367,6 @@ error: could not find OpenBLAS library
 
 - [CLAUDE.md](../../CLAUDE.md) - Project overview with build commands
 - [WORKFLOWS_OVERVIEW.md](WORKFLOWS_OVERVIEW.md) - All workflows comparison
-- [README_DEVTEST.md](README_DEVTEST.md) - DevTest workflow guide
 - [Whisper.cpp GitHub](https://github.com/ggerganov/whisper.cpp) - Upstream project
 
 ## Summary

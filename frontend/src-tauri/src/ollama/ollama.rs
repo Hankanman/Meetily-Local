@@ -1,4 +1,4 @@
-use crate::ollama::metadata::ModelMetadataCache;
+use crate::ollama::metadata::METADATA_CACHE;
 use futures_util::StreamExt;
 use once_cell::sync::Lazy;
 use reqwest::Client;
@@ -13,10 +13,6 @@ use tokio::time::{sleep, timeout, Duration};
 // Global set to track models currently being downloaded
 static DOWNLOADING_MODELS: Lazy<Arc<RwLock<HashSet<String>>>> =
     Lazy::new(|| Arc::new(RwLock::new(HashSet::new())));
-
-// Global cache for model metadata (5 minute TTL)
-static METADATA_CACHE: Lazy<ModelMetadataCache> =
-    Lazy::new(|| ModelMetadataCache::new(Duration::from_secs(300)));
 
 // Error categorization for better error handling and user feedback
 #[derive(Debug)]

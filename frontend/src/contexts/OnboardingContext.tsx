@@ -9,7 +9,7 @@ import React, {
   useCallback,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useModelDownloadEvents } from "@/hooks/useModelDownloads";
 
 // Default local Whisper model downloaded during onboarding. Quantized turbo
 // variant — comparable accuracy to large-v3 but ~3x faster on GPU.
@@ -425,100 +425,65 @@ export function OnboardingProvider({
     saveOnboardingStatus,
   ]);
 
-  // Listen to Whisper download progress (the Rust side emits payloads with
-  // a `modelName` field per the whisper_download_model command in lib.rs).
-  useEffect(() => {
-    const unlisten = listen<{
-      modelName: string;
-      progress: number;
-      downloaded_mb?: number;
-      total_mb?: number;
-      speed_mbps?: number;
-      status?: string;
-    }>("model-download-progress", (event) => {
-      const {
-        modelName,
-        progress,
-        downloaded_mb,
-        total_mb,
-        speed_mbps,
-        status,
-      } = event.payload;
-      if (modelName === ONBOARDING_WHISPER_MODEL) {
-        setParakeetProgress(progress);
-        setParakeetProgressInfo({
-          percent: progress,
-          downloadedMb: downloaded_mb ?? 0,
-          totalMb: total_mb ?? 0,
-          speedMbps: speed_mbps ?? 0,
-        });
-        if (status === "completed" || progress >= 100) {
-          setParakeetDownloaded(true);
-        }
+  // Listen to Whisper + Built-in AI (Gemma) download events via the shared
+  // store (frontend/src/lib/modelDownloadStore.ts), which owns the single
+  // Tauri listen() registration per backend event. `event.raw` is the
+  // untouched payload (same shape the old direct listen() callbacks read),
+  // so the filtering/state logic below is unchanged — only the event
+  // source moved. `selectedSummaryModel` is read fresh on every call (the
+  // hook always dispatches to the latest handler), so no dependency array
+  // is needed here.
+  useModelDownloadEvents((event) => {
+    if (event.kind === "whisper") {
+      if (event.raw.modelName !== ONBOARDING_WHISPER_MODEL) return;
+
+      if (event.type === "error") {
+        console.error("Whisper download error:", event.raw.error);
+        return;
       }
-    });
 
-    const unlistenComplete = listen<{ modelName: string }>(
-      "model-download-complete",
-      (event) => {
-        if (event.payload.modelName === ONBOARDING_WHISPER_MODEL) {
-          setParakeetDownloaded(true);
-          setParakeetProgress(100);
-        }
-      },
-    );
-
-    const unlistenError = listen<{ modelName: string; error: string }>(
-      "model-download-error",
-      (event) => {
-        if (event.payload.modelName === ONBOARDING_WHISPER_MODEL) {
-          console.error("Whisper download error:", event.payload.error);
-        }
-      },
-    );
-
-    return () => {
-      unlisten.then((fn) => fn());
-      unlistenComplete.then((fn) => fn());
-      unlistenError.then((fn) => fn());
-    };
-  }, [selectedSummaryModel]);
-
-  // Listen to summary model (Built-in AI) download progress
-  useEffect(() => {
-    const unlisten = listen<{
-      model: string;
-      progress: number;
-      downloaded_mb?: number;
-      total_mb?: number;
-      speed_mbps?: number;
-      status: string;
-    }>("builtin-ai-download-progress", (event) => {
-      const { model, progress, downloaded_mb, total_mb, speed_mbps, status } =
-        event.payload;
-      // Check if this is the selected summary model (gemma3:1b or gemma3:4b)
-      if (
-        model === selectedSummaryModel ||
-        model === "gemma3:1b" ||
-        model === "gemma3:4b"
-      ) {
-        setSummaryModelProgress(progress);
-        setSummaryModelProgressInfo({
-          percent: progress,
-          downloadedMb: downloaded_mb ?? 0,
-          totalMb: total_mb ?? 0,
-          speedMbps: speed_mbps ?? 0,
-        });
-        if (status === "completed" || progress >= 100) {
-          setSummaryModelDownloaded(true);
-        }
+      if (event.type === "complete") {
+        setParakeetDownloaded(true);
+        setParakeetProgress(100);
+        return;
       }
-    });
 
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [selectedSummaryModel]);
+      // progress / cancelled
+      const { progress, downloaded_mb, total_mb, speed_mbps, status } = event.raw;
+      setParakeetProgress(progress);
+      setParakeetProgressInfo({
+        percent: progress,
+        downloadedMb: downloaded_mb ?? 0,
+        totalMb: total_mb ?? 0,
+        speedMbps: speed_mbps ?? 0,
+      });
+      if (status === "completed" || progress >= 100) {
+        setParakeetDownloaded(true);
+      }
+      return;
+    }
+
+    // event.kind === "builtin" — check if this is the selected summary
+    // model (gemma3:1b or gemma3:4b)
+    const { model, progress, downloaded_mb, total_mb, speed_mbps, status } =
+      event.raw;
+    if (
+      model === selectedSummaryModel ||
+      model === "gemma3:1b" ||
+      model === "gemma3:4b"
+    ) {
+      setSummaryModelProgress(progress);
+      setSummaryModelProgressInfo({
+        percent: progress,
+        downloadedMb: downloaded_mb ?? 0,
+        totalMb: total_mb ?? 0,
+        speedMbps: speed_mbps ?? 0,
+      });
+      if (status === "completed" || progress >= 100) {
+        setSummaryModelDownloaded(true);
+      }
+    }
+  });
 
   const completeOnboarding = async () => {
     try {

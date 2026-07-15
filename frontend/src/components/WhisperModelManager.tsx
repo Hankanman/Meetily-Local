@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
-import { listen } from "@tauri-apps/api/event";
+import { useModelDownloadEvents } from "@/hooks/useModelDownloads";
 import { invoke } from "@tauri-apps/api/core";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
@@ -252,147 +252,120 @@ export function ModelManager({
     downloadModelRef.current = downloadModel;
   }, [downloadModel]);
 
-  // Set up event listeners for download progress
-  useEffect(() => {
-    let unlistenProgress: (() => void) | null = null;
-    let unlistenComplete: (() => void) | null = null;
-    let unlistenError: (() => void) | null = null;
+  // Listen to Whisper download events via the shared store
+  // (frontend/src/lib/modelDownloadStore.ts), which owns the single Tauri
+  // listen() registration per backend event. `event.raw` is the untouched
+  // payload, so the throttling/state logic below is unchanged from the
+  // original direct-listen() bodies — only the event source moved. The
+  // handler reads fresh values via `modelsRef`, `downloadModelRef`,
+  // `onModelSelectRef`, `autoSaveRef`, same as before.
+  useModelDownloadEvents((event) => {
+    if (event.kind !== "whisper") return;
 
-    const setupListeners = async () => {
-      console.log("[ModelManager] Setting up event listeners...");
+    if (event.type === "complete") {
+      const { modelName } = event.raw;
+      const model = modelsRef.current.find((m) => m.name === modelName);
+      const displayName = getDisplayName(modelName);
 
-      // Download progress with throttling
-      unlistenProgress = await listen<{ modelName: string; progress: number }>(
-        "model-download-progress",
-        (event) => {
-          const { modelName, progress } = event.payload;
-          const now = Date.now();
-          const throttleData = progressThrottleRef.current.get(modelName);
+      setModels((prevModels) =>
+        prevModels.map((model) =>
+          model.name === modelName
+            ? { ...model, status: "Available" as ModelStatus }
+            : model,
+        ),
+      );
 
-          // Throttle: only update if 300ms passed OR progress jumped by 5%+
-          const shouldUpdate =
-            !throttleData ||
-            now - throttleData.timestamp > 300 ||
-            Math.abs(progress - throttleData.progress) >= 5;
+      setDownloadingModels((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(modelName);
+        return newSet;
+      });
 
-          if (shouldUpdate) {
-            console.log(
-              `[ModelManager] Progress update for ${modelName}: ${progress}%`,
-            );
-            progressThrottleRef.current.set(modelName, {
-              progress,
-              timestamp: now,
-            });
+      // Clean up throttle data
+      progressThrottleRef.current.delete(modelName);
 
-            setModels((prevModels) =>
-              prevModels.map((model) =>
-                model.name === modelName
-                  ? {
-                      ...model,
-                      status: { Downloading: progress } as ModelStatus,
-                    }
-                  : model,
-              ),
-            );
-          }
+      toast.success(
+        `${getModelIcon(model?.accuracy || "Good")} ${displayName} ready!`,
+        {
+          description: "Model downloaded and ready to use",
+          duration: 4000,
         },
       );
 
-      // Download complete
-      unlistenComplete = await listen<{ modelName: string }>(
-        "model-download-complete",
-        (event) => {
-          const { modelName } = event.payload;
-          const model = modelsRef.current.find((m) => m.name === modelName);
-          const displayName = getDisplayName(modelName);
+      // Auto-select after download using stable refs
+      if (onModelSelectRef.current) {
+        onModelSelectRef.current(modelName);
+        if (autoSaveRef.current) {
+          saveModelSelection(modelName);
+        }
+      }
+      return;
+    }
 
-          setModels((prevModels) =>
-            prevModels.map((model) =>
-              model.name === modelName
-                ? { ...model, status: "Available" as ModelStatus }
-                : model,
-            ),
-          );
+    if (event.type === "error") {
+      const { modelName, error } = event.raw;
+      const displayName = getDisplayName(modelName);
 
-          setDownloadingModels((prev) => {
-            const newSet = new Set(prev);
-            newSet.delete(modelName);
-            return newSet;
-          });
-
-          // Clean up throttle data
-          progressThrottleRef.current.delete(modelName);
-
-          toast.success(
-            `${getModelIcon(model?.accuracy || "Good")} ${displayName} ready!`,
-            {
-              description: "Model downloaded and ready to use",
-              duration: 4000,
-            },
-          );
-
-          // Auto-select after download using stable refs
-          if (onModelSelectRef.current) {
-            onModelSelectRef.current(modelName);
-            if (autoSaveRef.current) {
-              saveModelSelection(modelName);
-            }
-          }
-        },
+      setModels((prevModels) =>
+        prevModels.map((model) =>
+          model.name === modelName
+            ? { ...model, status: { Error: error } as ModelStatus }
+            : model,
+        ),
       );
 
-      // Download error
-      unlistenError = await listen<{ modelName: string; error: string }>(
-        "model-download-error",
-        (event) => {
-          const { modelName, error } = event.payload;
-          const displayName = getDisplayName(modelName);
+      setDownloadingModels((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(modelName);
+        return newSet;
+      });
 
-          setModels((prevModels) =>
-            prevModels.map((model) =>
-              model.name === modelName
-                ? { ...model, status: { Error: error } as ModelStatus }
-                : model,
-            ),
-          );
+      // Clean up throttle data
+      progressThrottleRef.current.delete(modelName);
 
-          setDownloadingModels((prev) => {
-            const newSet = new Set(prev);
-            newSet.delete(modelName);
-            return newSet;
-          });
-
-          // Clean up throttle data
-          progressThrottleRef.current.delete(modelName);
-
-          toast.error(`Failed to download ${displayName}`, {
-            description: error,
-            duration: 6000,
-            action: {
-              label: "Retry",
-              onClick: () => downloadModelRef.current(modelName),
-            },
-          });
+      toast.error(`Failed to download ${displayName}`, {
+        description: error,
+        duration: 6000,
+        action: {
+          label: "Retry",
+          onClick: () => downloadModelRef.current(modelName),
         },
+      });
+      return;
+    }
+
+    // Download progress with throttling
+    const { modelName, progress } = event.raw;
+    const now = Date.now();
+    const throttleData = progressThrottleRef.current.get(modelName);
+
+    // Throttle: only update if 300ms passed OR progress jumped by 5%+
+    const shouldUpdate =
+      !throttleData ||
+      now - throttleData.timestamp > 300 ||
+      Math.abs(progress - throttleData.progress) >= 5;
+
+    if (shouldUpdate) {
+      console.log(
+        `[ModelManager] Progress update for ${modelName}: ${progress}%`,
       );
-    };
+      progressThrottleRef.current.set(modelName, {
+        progress,
+        timestamp: now,
+      });
 
-    setupListeners();
-
-    return () => {
-      console.log("[ModelManager] Cleaning up event listeners...");
-      if (unlistenProgress) unlistenProgress();
-      if (unlistenComplete) unlistenComplete();
-      if (unlistenError) unlistenError();
-    };
-    // Run once on mount. The closures inside read fresh values via
-    // `modelsRef`, `downloadModelRef`, `onModelSelectRef`,
-    // `autoSaveRef`. Both `getDisplayName` and `saveModelSelection`
-    // are stable `useCallback(..., [])` so they don't need to be
-    // listed; including them is fine but they're omitted to make
-    // intent clear ("this should never re-register").
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      setModels((prevModels) =>
+        prevModels.map((model) =>
+          model.name === modelName
+            ? {
+                ...model,
+                status: { Downloading: progress } as ModelStatus,
+              }
+            : model,
+        ),
+      );
+    }
+  });
 
   const cancelDownload = async (modelName: string) => {
     const displayName = getDisplayName(modelName);

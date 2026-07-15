@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { TranscriptModelProps } from "@/components/TranscriptSettings";
+import { useModelDownloadEvents } from "@/hooks/useModelDownloads";
 
 export type ModalType =
   | "modelSettings"
@@ -200,38 +201,23 @@ export function useModalState(
   //     piled up after a few clicks, causing dramatic UI lag on the
   //     transcript settings page.
   //
-  // Now: register the listener once on mount, read the latest config
-  // via a ref, return the unlisten function from the effect properly.
-  useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
+  // Now: subscribe once via the shared model-download store
+  // (frontend/src/lib/modelDownloadStore.ts), which owns the single Tauri
+  // listen() registration for "model-download-complete" (shared with every
+  // other download-progress consumer). Reads the latest config via a ref,
+  // same as before.
+  useModelDownloadEvents((event) => {
+    if (event.kind !== "whisper" || event.type !== "complete") return;
 
-    (async () => {
-      try {
-        unlistenFn = await listen<{ modelName: string }>(
-          "model-download-complete",
-          (event) => {
-            const { modelName } = event.payload;
-            const cfg = transcriptConfigRef.current;
-            if (
-              cfg?.provider === "localWhisper" &&
-              cfg?.model === modelName
-            ) {
-              toast.success("Model ready! Closing window...", {
-                duration: 1500,
-              });
-              setTimeout(() => hideModal("modelSelector"), 1500);
-            }
-          },
-        );
-      } catch (err) {
-        console.error("Failed to setup model-download-complete listener:", err);
-      }
-    })();
-
-    return () => {
-      if (unlistenFn) unlistenFn();
-    };
-  }, [hideModal]);
+    const { modelName } = event.raw;
+    const cfg = transcriptConfigRef.current;
+    if (cfg?.provider === "localWhisper" && cfg?.model === modelName) {
+      toast.success("Model ready! Closing window...", {
+        duration: 1500,
+      });
+      setTimeout(() => hideModal("modelSelector"), 1500);
+    }
+  });
 
   return {
     modals,

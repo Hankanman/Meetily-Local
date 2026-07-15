@@ -1,6 +1,8 @@
+use crate::llm_providers::{ListerConfig, ModelLister};
+use once_cell::sync::Lazy;
+use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
-use std::sync::RwLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tauri::command;
 
 /// Anthropic (Claude) model information returned to frontend
@@ -25,18 +27,6 @@ struct AnthropicApiResponse {
     data: Vec<AnthropicApiModel>,
 }
 
-/// Cache entry for models
-struct CacheEntry {
-    models: Vec<AnthropicModel>,
-    fetched_at: Instant,
-}
-
-/// Global cache for Anthropic models (5 minute TTL)
-static MODELS_CACHE: RwLock<Option<CacheEntry>> = RwLock::new(None);
-
-/// Cache TTL in seconds
-const CACHE_TTL_SECS: u64 = 300;
-
 /// Fallback models when API fetch fails (matches frontend hardcoded values)
 const FALLBACK_MODELS: &[(&str, &str)] = &[
     ("claude-sonnet-4-5-20250929", "Claude 4.5 Sonnet"),
@@ -45,8 +35,7 @@ const FALLBACK_MODELS: &[(&str, &str)] = &[
     ("claude-sonnet-4-20250514", "Claude 4 Sonnet"),
 ];
 
-/// Get fallback models as AnthropicModel vec
-fn get_fallback_models() -> Vec<AnthropicModel> {
+fn fallback_models() -> Vec<AnthropicModel> {
     FALLBACK_MODELS
         .iter()
         .map(|(id, name)| AnthropicModel {
@@ -63,6 +52,39 @@ fn is_chat_model(model_id: &str) -> bool {
     id.starts_with("claude-")
 }
 
+fn apply_auth(rb: RequestBuilder, api_key: &str) -> RequestBuilder {
+    rb.header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+}
+
+fn parse_response(bytes: &[u8]) -> Result<Vec<AnthropicModel>, String> {
+    let api_response: AnthropicApiResponse =
+        serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+
+    Ok(api_response
+        .data
+        .into_iter()
+        .filter(|m| is_chat_model(&m.id))
+        .map(|m| AnthropicModel {
+            id: m.id,
+            display_name: m.display_name,
+        })
+        .collect())
+}
+
+static LISTER: Lazy<ModelLister<AnthropicModel>> = Lazy::new(|| {
+    ModelLister::new(ListerConfig {
+        provider: "Anthropic",
+        endpoint: "https://api.anthropic.com/v1/models",
+        ttl: Duration::from_secs(300),
+        timeout: Duration::from_secs(5),
+        requires_api_key: true,
+        apply_auth,
+        parse: parse_response,
+        fallback: fallback_models,
+    })
+});
+
 /// Fetch Anthropic models from API
 ///
 /// # Arguments
@@ -72,92 +94,10 @@ fn is_chat_model(model_id: &str) -> bool {
 /// Vector of available models, or fallback models on error
 #[command]
 pub async fn get_anthropic_models(api_key: Option<String>) -> Result<Vec<AnthropicModel>, String> {
-    // Return fallback if no API key provided
-    let api_key = match api_key {
-        Some(key) if !key.trim().is_empty() => key.trim().to_string(),
-        _ => {
-            log::info!("No Anthropic API key provided, returning fallback models");
-            return Ok(get_fallback_models());
-        }
-    };
+    LISTER.list(api_key).await
+}
 
-    // Check cache first
-    {
-        let cache = MODELS_CACHE.read().map_err(|e| e.to_string())?;
-        if let Some(entry) = cache.as_ref() {
-            if entry.fetched_at.elapsed() < Duration::from_secs(CACHE_TTL_SECS) {
-                log::info!(
-                    "Returning cached Anthropic models ({} models)",
-                    entry.models.len()
-                );
-                return Ok(entry.models.clone());
-            }
-        }
-    }
-
-    // Fetch from API
-    log::info!("Fetching Anthropic models from API...");
-    let client = reqwest::Client::new();
-
-    let response = match client
-        .get("https://api.anthropic.com/v1/models")
-        .header("x-api-key", &api_key)
-        .header("anthropic-version", "2023-06-01")
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await
-    {
-        Ok(resp) => resp,
-        Err(e) => {
-            log::warn!("Failed to fetch Anthropic models: {}. Using fallback.", e);
-            return Ok(get_fallback_models());
-        }
-    };
-
-    if !response.status().is_success() {
-        let status = response.status();
-        log::warn!(
-            "Anthropic API returned status {}. Using fallback models.",
-            status
-        );
-        return Ok(get_fallback_models());
-    }
-
-    let api_response: AnthropicApiResponse = match response.json().await {
-        Ok(data) => data,
-        Err(e) => {
-            log::warn!("Failed to parse Anthropic response: {}. Using fallback.", e);
-            return Ok(get_fallback_models());
-        }
-    };
-
-    // Filter to only chat models and map to our struct
-    let models: Vec<AnthropicModel> = api_response
-        .data
-        .into_iter()
-        .filter(|m| is_chat_model(&m.id))
-        .map(|m| AnthropicModel {
-            id: m.id,
-            display_name: m.display_name,
-        })
-        .collect();
-
-    // If no models returned, use fallback
-    if models.is_empty() {
-        log::warn!("No chat models returned from Anthropic API. Using fallback.");
-        return Ok(get_fallback_models());
-    }
-
-    log::info!("Fetched {} Anthropic models from API", models.len());
-
-    // Update cache
-    {
-        let mut cache = MODELS_CACHE.write().map_err(|e| e.to_string())?;
-        *cache = Some(CacheEntry {
-            models: models.clone(),
-            fetched_at: Instant::now(),
-        });
-    }
-
-    Ok(models)
+/// Clear the cached Anthropic model list.
+pub fn clear_cache() {
+    LISTER.clear();
 }

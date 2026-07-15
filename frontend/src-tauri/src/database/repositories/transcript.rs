@@ -53,7 +53,12 @@ impl TranscriptsRepository {
             .bind(&transcript_id)
             .bind(&meeting_id)
             .bind(&segment.text)
-            .bind(&segment.timestamp)
+            .bind(
+                segment
+                    .timestamp
+                    .clone()
+                    .unwrap_or_else(|| Utc::now().to_rfc3339()),
+            )
             .bind(segment.audio_start_time)
             .bind(segment.audio_end_time)
             .bind(segment.duration)

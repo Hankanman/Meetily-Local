@@ -6,10 +6,7 @@
 use anyhow::Result;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::task::JoinHandle;
 
@@ -25,9 +22,6 @@ pub use super::transcription::TranscriptUpdate;
 // ============================================================================
 // GLOBAL STATE
 // ============================================================================
-
-// Simple recording state tracking
-static IS_RECORDING: AtomicBool = AtomicBool::new(false);
 
 // Global recording manager and transcription task to keep them alive during recording
 static RECORDING_MANAGER: Mutex<Option<RecordingManager>> = Mutex::new(None);
@@ -72,8 +66,8 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     );
 
     // Check if already recording
-    let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
-    info!("🔍 IS_RECORDING state check: {}", current_recording_state);
+    let current_recording_state = is_recording().await;
+    info!("🔍 recording state check: {}", current_recording_state);
     if current_recording_state {
         return Err("Recording already in progress".to_string());
     }
@@ -191,9 +185,10 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         *global_manager = Some(manager);
     }
 
-    // Set recording flag and reset speech detection flag
-    info!("🔍 Setting IS_RECORDING to true and resetting SPEECH_DETECTED_EMITTED");
-    IS_RECORDING.store(true, Ordering::SeqCst);
+    // Reset speech detection flag for the new recording session. Recording
+    // state itself is already tracked by `RecordingState` (set inside
+    // `manager.start_recording()` above) — no separate flag to flip here.
+    info!("🔍 Resetting SPEECH_DETECTED_EMITTED for new recording session");
     reset_speech_detected_flag(); // Reset for new recording session
 
     // Initialize the speaker diarizer for this session if the model is on disk.
@@ -223,12 +218,13 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                 let segment = crate::audio::recording_saver::TranscriptSegment {
                     id: format!("seg_{}", update.sequence_id),
                     text: update.text.clone(),
-                    audio_start_time: update.audio_start_time,
-                    audio_end_time: update.audio_end_time,
-                    duration: update.duration,
-                    display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
-                    confidence: update.confidence,
-                    sequence_id: update.sequence_id,
+                    timestamp: None,
+                    audio_start_time: Some(update.audio_start_time),
+                    audio_end_time: Some(update.audio_end_time),
+                    duration: Some(update.duration),
+                    display_time: Some(update.timestamp.clone()), // Use wall-clock timestamp for display
+                    confidence: Some(update.confidence),
+                    sequence_id: Some(update.sequence_id),
                     speaker: update.speaker.clone(),
                     voice_profile_id: update.voice_profile_id.clone(),
                 };
@@ -287,8 +283,8 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     );
 
     // Check if already recording
-    let current_recording_state = IS_RECORDING.load(Ordering::SeqCst);
-    info!("🔍 IS_RECORDING state check: {}", current_recording_state);
+    let current_recording_state = is_recording().await;
+    info!("🔍 recording state check: {}", current_recording_state);
     if current_recording_state {
         return Err("Recording already in progress".to_string());
     }
@@ -371,9 +367,10 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         *global_manager = Some(manager);
     }
 
-    // Set recording flag and reset speech detection flag
-    info!("🔍 Setting IS_RECORDING to true and resetting SPEECH_DETECTED_EMITTED");
-    IS_RECORDING.store(true, Ordering::SeqCst);
+    // Reset speech detection flag for the new recording session. Recording
+    // state itself is already tracked by `RecordingState` (set inside
+    // `manager.start_recording()` above) — no separate flag to flip here.
+    info!("🔍 Resetting SPEECH_DETECTED_EMITTED for new recording session");
     reset_speech_detected_flag(); // Reset for new recording session
 
     // Initialize the speaker diarizer for this session if the model is on disk.
@@ -403,12 +400,13 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                 let segment = crate::audio::recording_saver::TranscriptSegment {
                     id: format!("seg_{}", update.sequence_id),
                     text: update.text.clone(),
-                    audio_start_time: update.audio_start_time,
-                    audio_end_time: update.audio_end_time,
-                    duration: update.duration,
-                    display_time: update.timestamp.clone(), // Use wall-clock timestamp for display
-                    confidence: update.confidence,
-                    sequence_id: update.sequence_id,
+                    timestamp: None,
+                    audio_start_time: Some(update.audio_start_time),
+                    audio_end_time: Some(update.audio_end_time),
+                    duration: Some(update.duration),
+                    display_time: Some(update.timestamp.clone()), // Use wall-clock timestamp for display
+                    confidence: Some(update.confidence),
+                    sequence_id: Some(update.sequence_id),
                     speaker: update.speaker.clone(),
                     voice_profile_id: update.voice_profile_id.clone(),
                 };
@@ -458,7 +456,7 @@ pub async fn stop_recording<R: Runtime>(
     );
 
     // Check if recording is active
-    if !IS_RECORDING.load(Ordering::SeqCst) {
+    if !is_recording().await {
         info!("Recording was not active");
         return Ok(());
     }
@@ -687,9 +685,9 @@ pub async fn stop_recording<R: Runtime>(
         (None, None)
     };
 
-    // Set recording flag to false
-    info!("🔍 Setting IS_RECORDING to false");
-    IS_RECORDING.store(false, Ordering::SeqCst);
+    // Recording state was already cleared when the manager was taken out of
+    // `RECORDING_MANAGER` (and via `RecordingState::cleanup()`/`stop_recording()`
+    // internally) earlier in this shutdown sequence — nothing left to flip here.
 
     // Step 4.5: Prepare metadata for frontend (NO database save)
     // NOTE: We do NOT save to database here. The frontend will save after all transcripts are displayed.
@@ -734,16 +732,23 @@ pub async fn stop_recording<R: Runtime>(
     Ok(())
 }
 
-/// Check if recording is active
+/// Check if recording is active. Single source of truth: reads through the
+/// live `RecordingManager` (in turn backed by `RecordingState`'s own atomic)
+/// rather than a separately-flipped flag, so it can never drift out of sync.
 pub async fn is_recording() -> bool {
-    IS_RECORDING.load(Ordering::SeqCst)
+    RECORDING_MANAGER
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|m| m.is_recording())
+        .unwrap_or(false)
 }
 
 /// Get recording statistics
 pub async fn get_transcription_status() -> TranscriptionStatus {
     TranscriptionStatus {
         chunks_in_queue: 0,
-        is_processing: IS_RECORDING.load(Ordering::SeqCst),
+        is_processing: is_recording().await,
         last_activity_ms: 0,
     }
 }
@@ -754,7 +759,7 @@ pub async fn pause_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), String
     info!("Pausing recording");
 
     // Check if currently recording
-    if !IS_RECORDING.load(Ordering::SeqCst) {
+    if !is_recording().await {
         return Err("No recording is currently active".to_string());
     }
 
@@ -788,7 +793,7 @@ pub async fn resume_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), Strin
     info!("Resuming recording");
 
     // Check if currently recording
-    if !IS_RECORDING.load(Ordering::SeqCst) {
+    if !is_recording().await {
         return Err("No recording is currently active".to_string());
     }
 
@@ -830,12 +835,11 @@ pub async fn is_recording_paused() -> bool {
 /// Get detailed recording state
 #[tauri::command]
 pub async fn get_recording_state() -> serde_json::Value {
-    let is_recording = IS_RECORDING.load(Ordering::SeqCst);
     let manager_guard = RECORDING_MANAGER.lock().unwrap();
 
     if let Some(manager) = manager_guard.as_ref() {
         serde_json::json!({
-            "is_recording": is_recording,
+            "is_recording": manager.is_recording(),
             "is_paused": manager.is_paused(),
             "is_active": manager.is_active(),
             "recording_duration": manager.get_recording_duration(),
@@ -845,7 +849,7 @@ pub async fn get_recording_state() -> serde_json::Value {
         })
     } else {
         serde_json::json!({
-            "is_recording": is_recording,
+            "is_recording": false,
             "is_paused": false,
             "is_active": false,
             "recording_duration": null,

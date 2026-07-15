@@ -114,6 +114,17 @@ impl ModelMetadataCache {
     }
 }
 
+/// Shared model-metadata cache (5 minute TTL).
+///
+/// Both the Ollama model-management commands (`ollama::get_ollama_model_context`)
+/// and the summary service's context-window lookups fetch identical
+/// model+endpoint metadata from the same Ollama `/api/show` endpoint. They
+/// used to each keep their own private cache, doubling the fetches and
+/// letting the two caches disagree; this single static is the one home for
+/// that data now.
+pub static METADATA_CACHE: Lazy<ModelMetadataCache> =
+    Lazy::new(|| ModelMetadataCache::new(Duration::from_secs(300)));
+
 /// Default context sizes for common model families (fallback when API fails)
 const DEFAULT_CONTEXT_SIZES: &[(&str, usize)] = &[
     ("llama", 4096),

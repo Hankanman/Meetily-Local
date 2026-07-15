@@ -39,6 +39,7 @@ pub mod calendar;
 pub mod config;
 pub mod database;
 pub mod groq;
+pub mod llm_providers;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;

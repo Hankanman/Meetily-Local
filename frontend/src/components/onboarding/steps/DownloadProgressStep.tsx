@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { Mic, Sparkles, Check, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -9,6 +8,7 @@ import { useOnboarding } from "@/contexts/OnboardingContext";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { getErrorMessage } from "@/lib/utils";
+import { useModelDownloadEvents } from "@/hooks/useModelDownloads";
 
 // Default local Whisper model downloaded during onboarding. Quantized turbo
 // variant — comparable accuracy to large-v3 but faster on CPU/GPU.
@@ -184,125 +184,79 @@ export function DownloadProgressStep() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Listen to Whisper download progress (the Rust whisper_download_model
-  // command emits payloads with a `modelName` field).
-  useEffect(() => {
-    const unlistenProgress = listen<{
-      modelName: string;
-      progress: number;
-      downloaded_mb?: number;
-      total_mb?: number;
-      speed_mbps?: number;
-      status?: string;
-    }>("model-download-progress", (event) => {
-      const {
-        modelName,
-        progress,
-        downloaded_mb,
-        total_mb,
-        speed_mbps,
-        status,
-      } = event.payload;
-      if (modelName === ONBOARDING_WHISPER_MODEL) {
+  // Listen to Whisper + Gemma (built-in AI) download events via the shared
+  // store (frontend/src/lib/modelDownloadStore.ts), which owns the single
+  // Tauri listen() registration per backend event. `event.raw` is the
+  // untouched payload, so the per-event state updates below are unchanged
+  // from the original direct-listen() bodies — only the event source moved.
+  useModelDownloadEvents((event) => {
+    if (event.kind === "whisper") {
+      if (event.raw.modelName !== ONBOARDING_WHISPER_MODEL) return;
+
+      if (event.type === "complete") {
         setParakeetState((prev) => ({
           ...prev,
-          status: status === "completed" ? "completed" : "downloading",
-          progress,
-          downloadedMb: downloaded_mb ?? prev.downloadedMb,
-          totalMb: total_mb ?? prev.totalMb,
-          speedMbps: speed_mbps ?? prev.speedMbps,
+          status: "completed",
+          progress: 100,
         }));
-
-        if (status === "completed" || progress >= 100) {
-          setParakeetDownloaded(true);
-        }
+        setParakeetDownloaded(true);
+        return;
       }
-    });
 
-    const unlistenComplete = listen<{ modelName: string }>(
-      "model-download-complete",
-      (event) => {
-        if (event.payload.modelName === ONBOARDING_WHISPER_MODEL) {
-          setParakeetState((prev) => ({
-            ...prev,
-            status: "completed",
-            progress: 100,
-          }));
-          setParakeetDownloaded(true);
-        }
-      },
-    );
-
-    const unlistenError = listen<{ modelName: string; error: string }>(
-      "model-download-error",
-      (event) => {
-        if (event.payload.modelName === ONBOARDING_WHISPER_MODEL) {
-          setParakeetState((prev) => ({
-            ...prev,
-            status: "error",
-            error: event.payload.error,
-          }));
-        }
-      },
-    );
-
-    return () => {
-      unlistenProgress.then((fn) => fn());
-      unlistenComplete.then((fn) => fn());
-      unlistenError.then((fn) => fn());
-    };
-  }, [setParakeetDownloaded]);
-
-  // Listen to Gemma download progress (always downloading for builtin-ai)
-  useEffect(() => {
-    const unlisten = listen<{
-      model: string;
-      progress: number;
-      downloaded_mb?: number;
-      total_mb?: number;
-      speed_mbps?: number;
-      status: string;
-      error?: string;
-    }>("builtin-ai-download-progress", (event) => {
-      const {
-        model,
-        progress,
-        downloaded_mb,
-        total_mb,
-        speed_mbps,
-        status,
-        error,
-      } = event.payload;
-      if (
-        model === selectedSummaryModel ||
-        model === "gemma3:1b" ||
-        model === "gemma3:4b"
-      ) {
-        setGemmaState((prev) => ({
+      if (event.type === "error") {
+        setParakeetState((prev) => ({
           ...prev,
-          status:
-            status === "completed"
-              ? "completed"
-              : status === "error"
-                ? "error"
-                : "downloading",
-          progress,
-          downloadedMb: downloaded_mb ?? prev.downloadedMb,
-          totalMb: total_mb ?? prev.totalMb,
-          speedMbps: speed_mbps ?? prev.speedMbps,
-          error: status === "error" ? error : undefined,
+          status: "error",
+          error: event.raw.error,
         }));
-
-        if (status === "completed" || progress >= 100) {
-          setSummaryModelDownloaded(true);
-        }
+        return;
       }
-    });
 
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, [selectedSummaryModel, setSummaryModelDownloaded]);
+      // progress / cancelled
+      const { progress, downloaded_mb, total_mb, speed_mbps, status } = event.raw;
+      setParakeetState((prev) => ({
+        ...prev,
+        status: status === "completed" ? "completed" : "downloading",
+        progress,
+        downloadedMb: downloaded_mb ?? prev.downloadedMb,
+        totalMb: total_mb ?? prev.totalMb,
+        speedMbps: speed_mbps ?? prev.speedMbps,
+      }));
+
+      if (status === "completed" || progress >= 100) {
+        setParakeetDownloaded(true);
+      }
+      return;
+    }
+
+    // event.kind === "builtin" (always downloading for builtin-ai)
+    const { model, progress, downloaded_mb, total_mb, speed_mbps, status, error } =
+      event.raw;
+    if (
+      model === selectedSummaryModel ||
+      model === "gemma3:1b" ||
+      model === "gemma3:4b"
+    ) {
+      setGemmaState((prev) => ({
+        ...prev,
+        status:
+          status === "completed"
+            ? "completed"
+            : status === "error"
+              ? "error"
+              : "downloading",
+        progress,
+        downloadedMb: downloaded_mb ?? prev.downloadedMb,
+        totalMb: total_mb ?? prev.totalMb,
+        speedMbps: speed_mbps ?? prev.speedMbps,
+        error: status === "error" ? error : undefined,
+      }));
+
+      if (status === "completed" || progress >= 100) {
+        setSummaryModelDownloaded(true);
+      }
+    }
+  });
 
   const startDownloads = async () => {
     // Always download both Parakeet and Gemma (system-recommended)

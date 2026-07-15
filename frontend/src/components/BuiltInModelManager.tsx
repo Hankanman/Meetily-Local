@@ -2,13 +2,13 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import { Download, RefreshCw, BadgeAlert, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useDelayedFlag } from "@/hooks/useDelayedFlag";
+import { useModelDownloadEvents } from "@/hooks/useModelDownloads";
 
 interface ModelInfo {
   name: string;
@@ -86,131 +86,127 @@ export function BuiltInModelManager({
     fetchModels();
   }, [fetchModels]);
 
-  // Listen for download progress events
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
+  // Listen for built-in AI download events via the shared store
+  // (frontend/src/lib/modelDownloadStore.ts), which owns the single Tauri
+  // listen() registration for "builtin-ai-download-progress". `event.raw` is
+  // the untouched payload (same shape as the old direct listen() callback),
+  // so the status handling below is unchanged — only the event source
+  // moved. Using the shared hook also means this no longer needs
+  // `fetchModels` in a dependency array to avoid registering a stale
+  // closure — it always dispatches to the latest handler.
+  useModelDownloadEvents((event) => {
+    if (event.kind !== "builtin") return;
 
-    const setupListener = async () => {
-      unlisten = await listen("builtin-ai-download-progress", (event: any) => {
-        const { model, progress, downloaded_mb, total_mb, speed_mbps, status } =
-          event.payload;
+    const { model, progress, downloaded_mb, total_mb, speed_mbps, status } =
+      event.raw;
 
-        // Update percentage progress
-        setDownloadProgress((prev) => ({
-          ...prev,
-          [model]: progress,
-        }));
+    // Update percentage progress
+    setDownloadProgress((prev) => ({
+      ...prev,
+      [model]: progress,
+    }));
 
-        // Update detailed progress info (MB, speed)
-        setDownloadProgressInfo((prev) => ({
-          ...prev,
-          [model]: {
-            downloadedMb: downloaded_mb ?? 0,
-            totalMb: total_mb ?? 0,
-            speedMbps: speed_mbps ?? 0,
-          },
-        }));
+    // Update detailed progress info (MB, speed)
+    setDownloadProgressInfo((prev) => ({
+      ...prev,
+      [model]: {
+        downloadedMb: downloaded_mb ?? 0,
+        totalMb: total_mb ?? 0,
+        speedMbps: speed_mbps ?? 0,
+      },
+    }));
 
-        // Handle downloading status - restore downloadingModels state on modal reopen
-        if (status === "downloading") {
-          setDownloadingModels((prev) => {
-            if (!prev.has(model)) {
-              const newSet = new Set(prev);
-              newSet.add(model);
-              return newSet;
-            }
-            return prev;
-          });
+    // Handle downloading status - restore downloadingModels state on modal reopen
+    if (status === "downloading") {
+      setDownloadingModels((prev) => {
+        if (!prev.has(model)) {
+          const newSet = new Set(prev);
+          newSet.add(model);
+          return newSet;
         }
-
-        // Handle completed status
-        if (status === "completed") {
-          setDownloadingModels((prev) => {
-            const newSet = new Set(prev);
-            newSet.delete(model);
-            return newSet;
-          });
-          // Clean up progress state
-          setDownloadProgress((prev) => {
-            const { [model]: _, ...rest } = prev;
-            return rest;
-          });
-          setDownloadProgressInfo((prev) => {
-            const { [model]: _, ...rest } = prev;
-            return rest;
-          });
-          // Refresh models list
-          fetchModels();
-          toast.success(`Model ${model} downloaded successfully`);
-        }
-
-        // Handle cancelled status
-        if (status === "cancelled") {
-          setDownloadingModels((prev) => {
-            const newSet = new Set(prev);
-            newSet.delete(model);
-            return newSet;
-          });
-          // Clean up progress state
-          setDownloadProgress((prev) => {
-            const { [model]: _, ...rest } = prev;
-            return rest;
-          });
-          setDownloadProgressInfo((prev) => {
-            const { [model]: _, ...rest } = prev;
-            return rest;
-          });
-          // Refresh models list
-          fetchModels();
-        }
-
-        // Handle error status
-        if (status === "error") {
-          setDownloadingModels((prev) => {
-            const newSet = new Set(prev);
-            newSet.delete(model);
-            return newSet;
-          });
-          // Clean up progress state
-          setDownloadProgress((prev) => {
-            const { [model]: _, ...rest } = prev;
-            return rest;
-          });
-          setDownloadProgressInfo((prev) => {
-            const { [model]: _, ...rest } = prev;
-            return rest;
-          });
-
-          // Update model status to error locally instead of fetching from backend
-          // Backend doesn't persist error status, so fetchModels() would return not_downloaded
-          setModels((prevModels) =>
-            prevModels.map((m) =>
-              m.name === model
-                ? {
-                    ...m,
-                    status: {
-                      type: "error",
-                      progress: 0,
-                    } as any,
-                  }
-                : m,
-            ),
-          );
-
-          // Don't show error toast here - DownloadProgressToast already handles it
-          // Don't call fetchModels() - it would overwrite error status with not_downloaded
-        }
+        return prev;
       });
-    };
+    }
 
-    setupListener();
+    // Handle completed status
+    if (status === "completed") {
+      setDownloadingModels((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(model);
+        return newSet;
+      });
+      // Clean up progress state
+      setDownloadProgress((prev) => {
+        const { [model]: _, ...rest } = prev;
+        return rest;
+      });
+      setDownloadProgressInfo((prev) => {
+        const { [model]: _, ...rest } = prev;
+        return rest;
+      });
+      // Refresh models list
+      fetchModels();
+      toast.success(`Model ${model} downloaded successfully`);
+    }
 
-    return () => {
-      if (unlisten) {
-        unlisten();
-      }
-    };
-  }, [fetchModels]);
+    // Handle cancelled status
+    if (status === "cancelled") {
+      setDownloadingModels((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(model);
+        return newSet;
+      });
+      // Clean up progress state
+      setDownloadProgress((prev) => {
+        const { [model]: _, ...rest } = prev;
+        return rest;
+      });
+      setDownloadProgressInfo((prev) => {
+        const { [model]: _, ...rest } = prev;
+        return rest;
+      });
+      // Refresh models list
+      fetchModels();
+    }
+
+    // Handle error status
+    if (status === "error") {
+      setDownloadingModels((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(model);
+        return newSet;
+      });
+      // Clean up progress state
+      setDownloadProgress((prev) => {
+        const { [model]: _, ...rest } = prev;
+        return rest;
+      });
+      setDownloadProgressInfo((prev) => {
+        const { [model]: _, ...rest } = prev;
+        return rest;
+      });
+
+      // Update model status to error locally instead of fetching from backend
+      // Backend doesn't persist error status, so fetchModels() would return not_downloaded
+      setModels((prevModels) =>
+        prevModels.map((m) =>
+          m.name === model
+            ? {
+                ...m,
+                status: {
+                  type: "error",
+                  progress: 0,
+                } as any,
+              }
+            : m,
+        ),
+      );
+
+      // Don't show error toast here - DownloadProgressToast already handles it
+      // (it subscribes to the same shared store). Don't call fetchModels()
+      // here — it would overwrite the error status with not_downloaded.
+    }
+  });
 
   const downloadModel = async (modelName: string) => {
     try {

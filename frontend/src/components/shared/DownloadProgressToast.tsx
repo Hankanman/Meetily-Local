@@ -1,9 +1,9 @@
 "use client";
 
 import React, { useEffect, useState, useCallback } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { X, Download, Check, ArrowBigDownDash } from "lucide-react";
+import { useModelDownloadEvents } from "@/hooks/useModelDownloads";
 
 interface DownloadProgress {
   modelName: string;
@@ -257,54 +257,43 @@ export function useDownloadProgressToast() {
     });
   }, [downloads, dismissedModels, showDownloadToast]);
 
-  // Listen to Whisper download events. The Rust whisper_download_model
-  // command emits payloads with `modelName` so the same hook covers any
-  // Whisper model the user downloads from settings or onboarding.
-  useEffect(() => {
-    const unlistenProgress = listen<{
-      modelName: string;
-      progress: number;
-      downloaded_mb?: number;
-      total_mb?: number;
-      speed_mbps?: number;
-      status?: string;
-    }>("model-download-progress", (event) => {
-      const {
-        modelName,
-        progress,
-        downloaded_mb,
-        total_mb,
-        speed_mbps,
-        status,
-      } = event.payload;
+  // Listen to Whisper + Built-in AI (Gemma) download events via the shared
+  // store (frontend/src/lib/modelDownloadStore.ts), which owns the single
+  // Tauri listen() registration for each backend event. `event.raw` is the
+  // untouched payload, so the per-kind handling below is unchanged from the
+  // original direct-listen() bodies — only the event source moved.
+  useModelDownloadEvents((event) => {
+    if (event.kind === "whisper") {
+      if (event.type === "progress" || event.type === "cancelled") {
+        const { modelName, progress, downloaded_mb, total_mb, speed_mbps, status } =
+          event.raw;
 
-      const downloadData: DownloadProgress = {
-        modelName,
-        displayName: `Transcription Model (Whisper: ${modelName})`,
-        progress,
-        downloadedMb: downloaded_mb ?? 0,
-        totalMb: total_mb ?? 0,
-        speedMbps: speed_mbps ?? 0,
-        status:
-          status === "cancelled"
-            ? "cancelled"
-            : status === "completed" || progress >= 100
-              ? "completed"
-              : "downloading",
-      };
+        const downloadData: DownloadProgress = {
+          modelName,
+          displayName: `Transcription Model (Whisper: ${modelName})`,
+          progress,
+          downloadedMb: downloaded_mb ?? 0,
+          totalMb: total_mb ?? 0,
+          speedMbps: speed_mbps ?? 0,
+          status:
+            status === "cancelled"
+              ? "cancelled"
+              : status === "completed" || progress >= 100
+                ? "completed"
+                : "downloading",
+        };
 
-      updateDownload(modelName, downloadData);
+        updateDownload(modelName, downloadData);
 
-      // Clean up cancelled downloads after delay to auto-dismiss toast
-      if (downloadData.status === "cancelled") {
-        cleanupDownload(modelName, 6000); // 5s toast + 1s buffer
+        // Clean up cancelled downloads after delay to auto-dismiss toast
+        if (downloadData.status === "cancelled") {
+          cleanupDownload(modelName, 6000); // 5s toast + 1s buffer
+        }
+        return;
       }
-    });
 
-    const unlistenComplete = listen<{ modelName: string }>(
-      "model-download-complete",
-      (event) => {
-        const { modelName } = event.payload;
+      if (event.type === "complete") {
+        const { modelName } = event.raw;
         const downloadData: DownloadProgress = {
           modelName,
           displayName: `Transcription Model (Whisper: ${modelName})`,
@@ -317,94 +306,63 @@ export function useDownloadProgressToast() {
         updateDownload(modelName, downloadData);
         // Clean up after 4 seconds (completion toast duration is 3s + 1s buffer)
         cleanupDownload(modelName, 4000);
-      },
-    );
-
-    const unlistenError = listen<{ modelName: string; error: string }>(
-      "model-download-error",
-      (event) => {
-        const { modelName, error } = event.payload;
-        const downloadData: DownloadProgress = {
-          modelName,
-          displayName: `Transcription Model (Whisper: ${modelName})`,
-          progress: 0,
-          downloadedMb: 0,
-          totalMb: 0,
-          speedMbps: 0,
-          status: "error",
-          error: categorizeError(error),
-        };
-        updateDownload(modelName, downloadData);
-        // Clean up after 11 seconds (error toast duration is 10s + 1s buffer)
-        cleanupDownload(modelName, 11000);
-      },
-    );
-
-    return () => {
-      unlistenProgress.then((fn) => fn());
-      unlistenComplete.then((fn) => fn());
-      unlistenError.then((fn) => fn());
-    };
-  }, [updateDownload, cleanupDownload]);
-
-  // Listen to Built-in AI (Gemma) download events
-  useEffect(() => {
-    const unlisten = listen<{
-      model: string;
-      progress: number;
-      downloaded_mb?: number;
-      total_mb?: number;
-      speed_mbps?: number;
-      status: string;
-      error?: string;
-    }>("builtin-ai-download-progress", (event) => {
-      const {
-        model,
-        progress,
-        downloaded_mb,
-        total_mb,
-        speed_mbps,
-        status,
-        error,
-      } = event.payload;
-
-      const downloadData: DownloadProgress = {
-        modelName: model,
-        displayName: `Summary Model (${model})`,
-        progress: progress ?? 0,
-        downloadedMb: downloaded_mb ?? 0,
-        totalMb: total_mb ?? (model.includes("4b") ? 2500 : 806),
-        speedMbps: speed_mbps ?? 0,
-        status:
-          status === "completed" || progress >= 100
-            ? "completed"
-            : status === "cancelled"
-              ? "cancelled"
-              : status === "error"
-                ? "error"
-                : "downloading",
-        error:
-          status === "error"
-            ? categorizeError(error || "Download failed")
-            : undefined,
-      };
-
-      updateDownload(model, downloadData);
-
-      // Clean up finished downloads after delay to prevent endless toasts
-      if (downloadData.status === "completed") {
-        cleanupDownload(model, 4000); // 3s toast + 1s buffer
-      } else if (downloadData.status === "error") {
-        cleanupDownload(model, 11000); // 10s toast + 1s buffer
-      } else if (downloadData.status === "cancelled") {
-        cleanupDownload(model, 6000); // 5s toast + 1s buffer
+        return;
       }
-    });
 
-    return () => {
-      unlisten.then((fn) => fn());
+      // event.type === "error"
+      const { modelName, error } = event.raw;
+      const downloadData: DownloadProgress = {
+        modelName,
+        displayName: `Transcription Model (Whisper: ${modelName})`,
+        progress: 0,
+        downloadedMb: 0,
+        totalMb: 0,
+        speedMbps: 0,
+        status: "error",
+        error: categorizeError(error),
+      };
+      updateDownload(modelName, downloadData);
+      // Clean up after 11 seconds (error toast duration is 10s + 1s buffer)
+      cleanupDownload(modelName, 11000);
+      return;
+    }
+
+    // event.kind === "builtin"
+    const { model, progress, downloaded_mb, total_mb, speed_mbps, status, error } =
+      event.raw;
+
+    const downloadData: DownloadProgress = {
+      modelName: model,
+      displayName: `Summary Model (${model})`,
+      progress: progress ?? 0,
+      downloadedMb: downloaded_mb ?? 0,
+      totalMb: total_mb ?? (model.includes("4b") ? 2500 : 806),
+      speedMbps: speed_mbps ?? 0,
+      status:
+        status === "completed" || progress >= 100
+          ? "completed"
+          : status === "cancelled"
+            ? "cancelled"
+            : status === "error"
+              ? "error"
+              : "downloading",
+      error:
+        status === "error"
+          ? categorizeError(error || "Download failed")
+          : undefined,
     };
-  }, [updateDownload, cleanupDownload]);
+
+    updateDownload(model, downloadData);
+
+    // Clean up finished downloads after delay to prevent endless toasts
+    if (downloadData.status === "completed") {
+      cleanupDownload(model, 4000); // 3s toast + 1s buffer
+    } else if (downloadData.status === "error") {
+      cleanupDownload(model, 11000); // 10s toast + 1s buffer
+    } else if (downloadData.status === "cancelled") {
+      cleanupDownload(model, 6000); // 5s toast + 1s buffer
+    }
+  });
 
   return { downloads };
 }
