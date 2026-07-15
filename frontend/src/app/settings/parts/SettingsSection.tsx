@@ -2,6 +2,8 @@
 
 import type { ReactNode } from "react";
 
+import { Heading, Text } from "@/components/ui/typography";
+
 interface SettingsSectionProps {
   title: string;
   description: string;
@@ -22,8 +24,10 @@ export function SettingsSection({
   return (
     <section className="flex h-full flex-col overflow-y-auto">
       <header className="border-b border-border px-8 pt-8 pb-4">
-        <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+        <Heading level={1} as="h2">{title}</Heading>
+        <Text size="small" tone="muted" className="mt-1">
+          {description}
+        </Text>
       </header>
       <div className="flex-1 px-8 py-6">{children}</div>
     </section>

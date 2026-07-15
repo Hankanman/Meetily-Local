@@ -69,6 +69,10 @@ export default {
         display: ["32px", { lineHeight: "1.2", fontWeight: "700" }],
         h1: ["24px", { lineHeight: "1.3", fontWeight: "600" }],
         h2: ["18px", { lineHeight: "1.4", fontWeight: "500" }],
+        // Smallest heading — card / sub-section titles. Sits below body in
+        // size but carries weight, so it reads as a heading over 14px body
+        // copy in dense surfaces like settings.
+        h3: ["14px", { lineHeight: "1.5", fontWeight: "600" }],
         body: ["16px", { lineHeight: "1.6", fontWeight: "400" }],
         small: ["14px", { lineHeight: "1.5", fontWeight: "400" }],
         caption: ["12px", { lineHeight: "1.4", fontWeight: "400" }],

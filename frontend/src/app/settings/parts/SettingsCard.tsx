@@ -2,6 +2,10 @@
 
 import type { ReactNode } from "react";
 
+import { cn } from "@/lib/utils";
+import { Card } from "@/components/ui/card";
+import { Heading, Text } from "@/components/ui/typography";
+
 interface SettingsCardProps {
   /** Optional small section heading inside the card. Use for sub-groups
    *  within a single settings panel — not for the panel's own page-level
@@ -13,11 +17,12 @@ interface SettingsCardProps {
 }
 
 /**
- * Single source of truth for "a group of related settings on a card".
- * Replaces the previously-inconsistent inline patterns
- * (`rounded-lg border p-4` / `rounded-lg border bg-muted p-4` /
- * `rounded-lg border bg-background p-6 shadow-sm`) so every section
- * inside a settings panel reads the same.
+ * Single source of truth for "a group of related settings on a card" — a thin,
+ * settings-flavoured wrapper over the `Card` primitive with a title/description
+ * header built from the typography primitives. Replaces the previously
+ * inconsistent inline patterns (`rounded-lg border p-4` /
+ * `rounded-lg border bg-background p-6 shadow-sm`) so every settings section
+ * reads the same.
  */
 export function SettingsCard({
   title,
@@ -26,24 +31,19 @@ export function SettingsCard({
   className = "",
 }: SettingsCardProps) {
   return (
-    <div
-      className={`
-        rounded-lg border border-border bg-card p-5 shadow-sm
-        ${className}
-      `}
-    >
+    <Card className={cn("p-5", className)}>
       {(title || description) && (
         <div className="mb-4">
-          {title && (
-            <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-          )}
+          {title && <Heading level={3}>{title}</Heading>}
           {description && (
-            <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+            <Text size="small" tone="muted" className="mt-1">
+              {description}
+            </Text>
           )}
         </div>
       )}
       {children}
-    </div>
+    </Card>
   );
 }
 

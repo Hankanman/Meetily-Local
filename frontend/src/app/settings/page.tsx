@@ -24,6 +24,7 @@ import { CalendarSettings } from "@/components/CalendarSettings";
 import { McpSettings } from "@/components/McpSettings";
 import { useConfig } from "@/contexts/ConfigContext";
 import { Button } from "@/components/ui/button";
+import { Heading } from "@/components/ui/typography";
 import { Page, PageBody } from "@/components/layout/Page";
 
 import { SettingsSidebar, type SettingsCategory } from "./parts/SettingsSidebar";
@@ -131,7 +132,7 @@ export default function SettingsPage() {
           <ArrowLeft className="size-4" />
           <span>Back</span>
         </Button>
-        <h1 className="text-lg font-semibold">Settings</h1>
+        <Heading level={2}>Settings</Heading>
       </div>
 
       <PageBody>

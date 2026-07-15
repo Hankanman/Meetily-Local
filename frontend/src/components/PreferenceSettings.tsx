@@ -5,6 +5,7 @@ import { Switch } from "./ui/switch";
 import { Button } from "./ui/button";
 import { FolderOpen } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { Heading } from "@/components/ui/typography";
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext";
 
 export function PreferenceSettings() {
@@ -144,9 +145,9 @@ export function PreferenceSettings() {
       >
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="mb-2 text-lg font-semibold text-foreground">
+            <Heading level={3} className="mb-2">
               Notifications
-            </h3>
+            </Heading>
             <p className="text-sm text-muted-foreground">
               Enable or disable notifications of start and end of meeting
             </p>
@@ -164,9 +165,9 @@ export function PreferenceSettings() {
         rounded-lg border border-border bg-card p-5 shadow-sm
       "
       >
-        <h3 className="mb-4 text-lg font-semibold text-foreground">
+        <Heading level={3} className="mb-4">
           Data Storage Locations
-        </h3>
+        </Heading>
         <p className="mb-6 text-sm text-muted-foreground">
           View and access where Meetily stores your data
         </p>

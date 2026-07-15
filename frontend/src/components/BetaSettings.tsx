@@ -2,6 +2,7 @@
 
 import { Switch } from "./ui/switch";
 import { FlaskConical, AlertCircle } from "lucide-react";
+import { Heading } from "@/components/ui/typography";
 import { useConfig } from "@/contexts/ConfigContext";
 import {
   BetaFeatureKey,
@@ -44,9 +45,9 @@ export function BetaSettings() {
             <div className="flex-1">
               <div className="mb-2 flex items-center gap-2">
                 <FlaskConical className="size-5 text-muted-foreground" />
-                <h3 className="text-lg font-semibold text-foreground">
+                <Heading level={3}>
                   {BETA_FEATURE_NAMES[featureKey]}
-                </h3>
+                </Heading>
                 <span className="
                   rounded-full bg-warning-muted px-2 py-0.5 text-sm font-medium
                   text-warning

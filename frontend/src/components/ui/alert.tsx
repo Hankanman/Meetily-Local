@@ -14,11 +14,29 @@ const alertVariants = cva(
     variants: {
       variant: {
         default: "bg-background text-foreground",
+        // Semantic status callouts. Tinted background + matching border/text
+        // so an inline error/warning/success/info box is one component instead
+        // of a hand-rolled `border-destructive/30 bg-destructive/10` div.
         destructive:
           `
-            border-destructive/50 text-destructive
+            border-destructive/50 bg-destructive/10 text-destructive
             dark:border-destructive
             [&>svg]:text-destructive
+          `,
+        warning:
+          `
+            border-warning/50 bg-warning-muted text-warning
+            [&>svg]:text-warning
+          `,
+        success:
+          `
+            border-success/50 bg-success-muted text-success
+            [&>svg]:text-success
+          `,
+        info:
+          `
+            border-info/50 bg-info-muted text-info
+            [&>svg]:text-info
           `,
       },
     },
