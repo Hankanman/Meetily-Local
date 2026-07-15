@@ -13,14 +13,8 @@ use std::sync::{
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::task::JoinHandle;
 
-use super::{
-    default_input_device,  // Get default microphone
-    default_output_device, // Get default system audio
-    parse_audio_device,
-    DeviceEvent,
-    DeviceMonitorType,
-    RecordingManager,
-};
+use super::devices::{AudioDevice, DeviceType};
+use super::RecordingManager;
 
 // Import transcription modules
 use super::transcription::{self, reset_speech_detected_flag};
@@ -132,104 +126,44 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         };
 
     // ============================================================================
-    // MICROPHONE DEVICE RESOLUTION: Preference → Default → Error
+    // DEVICE RESOLUTION: saved preference (PipeWire node id) → default.
+    // A stale saved id (device unplugged/renamed) falls back to default.
     // ============================================================================
-    let microphone_device = match preferred_mic_name {
-        Some(pref_name) => {
-            info!("🎤 Attempting to use preferred microphone: '{}'", pref_name);
-            match parse_audio_device(&pref_name) {
-                Ok(device) => {
-                    info!("✅ Using preferred microphone: '{}'", device.name);
-                    Some(Arc::new(device))
-                }
-                Err(e) => {
-                    warn!(
-                        "⚠️ Preferred microphone '{}' not available: {}",
-                        pref_name, e
-                    );
-                    warn!("   Falling back to system default microphone...");
-                    match default_input_device() {
-                        Ok(device) => {
-                            info!("✅ Using default microphone: '{}'", device.name);
-                            Some(Arc::new(device))
-                        }
-                        Err(default_err) => {
-                            error!(
-                                "❌ No microphone available (preferred and default both failed)"
-                            );
-                            return Err(format!(
-                                "No microphone device available. Preferred device '{}' not found, and default microphone unavailable: {}",
-                                pref_name, default_err
-                            ));
-                        }
-                    }
-                }
-            }
+    let known_ids: Vec<String> = match super::devices::list_audio_devices().await {
+        Ok(devices) => devices.into_iter().map(|d| d.id).collect(),
+        Err(e) => {
+            warn!("Could not enumerate devices ({}); trusting saved ids", e);
+            Vec::new()
         }
-        None => {
-            info!("🎤 No microphone preference set, using system default");
-            match default_input_device() {
-                Ok(device) => {
-                    info!("✅ Using default microphone: '{}'", device.name);
-                    Some(Arc::new(device))
-                }
-                Err(e) => {
-                    error!("❌ No default microphone available");
-                    return Err(format!("No microphone device available: {}", e));
-                }
+    };
+    let resolve = |pref: Option<String>, role: &str| -> String {
+        match pref {
+            Some(id) if known_ids.is_empty() || known_ids.iter().any(|k| *k == id) => {
+                info!("✅ Using preferred {}: '{}'", role, id);
+                id
+            }
+            Some(id) => {
+                warn!(
+                    "⚠️ Preferred {} '{}' not present; falling back to default",
+                    role, id
+                );
+                "default".to_string()
+            }
+            None => {
+                info!("🎧 No {} preference set, using system default", role);
+                "default".to_string()
             }
         }
     };
 
-    // ============================================================================
-    // SYSTEM AUDIO DEVICE RESOLUTION: Preference → Default → None (optional)
-    // ============================================================================
-    let system_device = match preferred_system_name {
-        Some(pref_name) => {
-            info!(
-                "🔊 Attempting to use preferred system audio: '{}'",
-                pref_name
-            );
-            match parse_audio_device(&pref_name) {
-                Ok(device) => {
-                    info!("✅ Using preferred system audio: '{}'", device.name);
-                    Some(Arc::new(device))
-                }
-                Err(e) => {
-                    warn!(
-                        "⚠️ Preferred system audio '{}' not available: {}",
-                        pref_name, e
-                    );
-                    warn!("   Falling back to system default...");
-                    match default_output_device() {
-                        Ok(device) => {
-                            info!("✅ Using default system audio: '{}'", device.name);
-                            Some(Arc::new(device))
-                        }
-                        Err(default_err) => {
-                            warn!("⚠️ No system audio available (preferred and default both failed): {}", default_err);
-                            warn!("   Recording will continue with microphone only");
-                            None // System audio is optional
-                        }
-                    }
-                }
-            }
-        }
-        None => {
-            info!("🔊 No system audio preference set, using system default");
-            match default_output_device() {
-                Ok(device) => {
-                    info!("✅ Using default system audio: '{}'", device.name);
-                    Some(Arc::new(device))
-                }
-                Err(e) => {
-                    warn!("⚠️ No default system audio available: {}", e);
-                    warn!("   Recording will continue with microphone only");
-                    None // System audio is optional
-                }
-            }
-        }
-    };
+    let microphone_device = Some(Arc::new(AudioDevice::new(
+        resolve(preferred_mic_name, "microphone"),
+        DeviceType::Input,
+    )));
+    let system_device = Some(Arc::new(AudioDevice::new(
+        resolve(preferred_system_name, "system audio"),
+        DeviceType::Output,
+    )));
 
     // Always ensure a meeting name is set so incremental saver initializes
     let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| {
@@ -379,22 +313,14 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     }
     info!("✅ Transcription model validation passed");
 
-    // Parse devices
-    let mic_device = if let Some(ref name) = mic_device_name {
-        Some(Arc::new(parse_audio_device(name).map_err(|e| {
-            format!("Invalid microphone device '{}': {}", name, e)
-        })?))
-    } else {
-        None
-    };
-
-    let system_device = if let Some(ref name) = system_device_name {
-        Some(Arc::new(parse_audio_device(name).map_err(|e| {
-            format!("Invalid system device '{}': {}", name, e)
-        })?))
-    } else {
-        None
-    };
+    // Which stream a device drives is determined by the parameter it
+    // arrives in — ids are opaque PipeWire node names (or "default").
+    let mic_device = mic_device_name
+        .as_ref()
+        .map(|id| Arc::new(AudioDevice::new(id.clone(), DeviceType::Input)));
+    let system_device = system_device_name
+        .as_ref()
+        .map(|id| Arc::new(AudioDevice::new(id.clone(), DeviceType::Output)));
 
     // Async-first approach for custom devices - no more blocking operations!
     info!("🚀 Starting async recording initialization with custom devices");
@@ -971,167 +897,6 @@ pub async fn get_recording_meeting_name() -> Result<Option<String>, String> {
     }
 }
 
-// ============================================================================
-// DEVICE MONITORING COMMANDS (AirPods/Bluetooth disconnect/reconnect support)
-// ============================================================================
-
-/// Response structure for device events
-#[derive(Debug, Serialize, Clone)]
-#[serde(tag = "type")]
-pub enum DeviceEventResponse {
-    DeviceDisconnected {
-        device_name: String,
-        device_type: String,
-    },
-    DeviceReconnected {
-        device_name: String,
-        device_type: String,
-    },
-    DeviceListChanged,
-}
-
-impl From<DeviceEvent> for DeviceEventResponse {
-    fn from(event: DeviceEvent) -> Self {
-        match event {
-            DeviceEvent::DeviceDisconnected {
-                device_name,
-                device_type,
-            } => DeviceEventResponse::DeviceDisconnected {
-                device_name,
-                device_type: format!("{:?}", device_type),
-            },
-            DeviceEvent::DeviceReconnected {
-                device_name,
-                device_type,
-            } => DeviceEventResponse::DeviceReconnected {
-                device_name,
-                device_type: format!("{:?}", device_type),
-            },
-            DeviceEvent::DeviceListChanged => DeviceEventResponse::DeviceListChanged,
-        }
-    }
-}
-
-/// Reconnection status information
-#[derive(Debug, Serialize, Clone)]
-pub struct ReconnectionStatus {
-    pub is_reconnecting: bool,
-    pub disconnected_device: Option<DisconnectedDeviceInfo>,
-}
-
-/// Information about a disconnected device
-#[derive(Debug, Serialize, Clone)]
-pub struct DisconnectedDeviceInfo {
-    pub name: String,
-    pub device_type: String,
-}
-
-/// Poll for audio device events (disconnect/reconnect)
-/// Should be called periodically (every 1-2 seconds) by frontend during recording
-#[tauri::command]
-pub async fn poll_audio_device_events() -> Result<Option<DeviceEventResponse>, String> {
-    let mut manager_guard = RECORDING_MANAGER.lock().unwrap();
-
-    if let Some(manager) = manager_guard.as_mut() {
-        if let Some(event) = manager.poll_device_events() {
-            info!("📱 Device event polled: {:?}", event);
-            Ok(Some(event.into()))
-        } else {
-            Ok(None)
-        }
-    } else {
-        // Not recording, no events
-        Ok(None)
-    }
-}
-
-/// Get current reconnection status
-/// Returns whether the system is attempting to reconnect and which device
-#[tauri::command]
-pub async fn get_reconnection_status() -> Result<ReconnectionStatus, String> {
-    let manager_guard = RECORDING_MANAGER.lock().unwrap();
-
-    if let Some(manager) = manager_guard.as_ref() {
-        let state = manager.get_state();
-        let disconnected_device = state
-            .get_disconnected_device()
-            .map(|(device, device_type)| DisconnectedDeviceInfo {
-                name: device.name.clone(),
-                device_type: format!("{:?}", device_type),
-            });
-
-        Ok(ReconnectionStatus {
-            is_reconnecting: manager.is_reconnecting(),
-            disconnected_device,
-        })
-    } else {
-        // Not recording, no reconnection in progress
-        Ok(ReconnectionStatus {
-            is_reconnecting: false,
-            disconnected_device: None,
-        })
-    }
-}
-
-/// Get information about the active audio output device
-/// Used to warn users about Bluetooth playback issues
-#[tauri::command]
-pub async fn get_active_audio_output() -> Result<super::playback_monitor::AudioOutputInfo, String> {
-    super::playback_monitor::get_active_audio_output()
-        .await
-        .map_err(|e| format!("Failed to get audio output info: {}", e))
-}
-
-/// Manually trigger device reconnection attempt
-/// Useful for UI "Retry" button
-#[tauri::command]
-pub async fn attempt_device_reconnect(
-    device_name: String,
-    device_type: String,
-) -> Result<bool, String> {
-    // Parse device type first
-    let monitor_type = match device_type.as_str() {
-        "Microphone" => DeviceMonitorType::Microphone,
-        "SystemAudio" => DeviceMonitorType::SystemAudio,
-        _ => return Err(format!("Invalid device type: {}", device_type)),
-    };
-
-    // Check if recording is active
-    {
-        let manager_guard = RECORDING_MANAGER.lock().unwrap();
-        if manager_guard.is_none() {
-            return Err("Recording not active".to_string());
-        }
-    } // Release lock
-
-    // Spawn blocking task to handle the async reconnection
-    let result = tokio::task::spawn_blocking(move || {
-        tokio::runtime::Handle::current().block_on(async {
-            let mut manager_guard = RECORDING_MANAGER.lock().unwrap();
-            if let Some(manager) = manager_guard.as_mut() {
-                manager
-                    .attempt_device_reconnect(&device_name, monitor_type)
-                    .await
-            } else {
-                Err(anyhow::anyhow!("Recording not active"))
-            }
-        })
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?;
-
-    match result {
-        Ok(success) => {
-            if success {
-                info!("✅ Manual reconnection successful");
-            } else {
-                warn!("❌ Manual reconnection failed - device not available");
-            }
-            Ok(success)
-        }
-        Err(e) => {
-            error!("Manual reconnection error: {}", e);
-            Err(e.to_string())
-        }
-    }
-}
+// Device disconnect/reconnect polling was removed with the move to
+// native PipeWire capture: streams target nodes by name and the graph
+// reroutes/renegotiates on device changes without app involvement.

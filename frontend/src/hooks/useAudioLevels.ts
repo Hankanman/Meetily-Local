@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 export interface AudioLevel {
-  device_name: string;
+  device_name: string; // role key: "mic" | "system"
   device_type: string;
   rms_level: number;
   peak_level: number;
@@ -17,25 +17,27 @@ interface AudioLevelUpdate {
   levels: AudioLevel[];
 }
 
+export interface RoleLevels {
+  mic: AudioLevel | null;
+  system: AudioLevel | null;
+}
+
+const EMPTY_LEVELS: RoleLevels = { mic: null, system: null };
+
 /**
- * Subscribe to the backend `audio-levels` event and start/stop the
- * monitor for the requested device names. Returns the latest level keyed
- * by device_name.
+ * Subscribe to the backend `audio-levels` event and start/stop the level
+ * monitor for the given devices.
  *
- * Pass `null` to disable monitoring (e.g. when leaving the pre-recording
- * hero — the backend stops emitting and the map clears).
+ * `micDevice` / `systemDevice` are PipeWire node ids or `"default"`;
+ * pass `null` to skip that role. Pass both as `null` to disable
+ * monitoring entirely. Levels come back keyed by role ("mic"/"system"),
+ * so callers don't track device ids.
  */
 export function useAudioLevels(
-  deviceNames: string[] | null,
-): Map<string, AudioLevel> {
-  const [levels, setLevels] = useState<Map<string, AudioLevel>>(new Map());
-  // Derive a stable, content-based key instead of depending on the
-  // `deviceNames` array reference directly — callers commonly rebuild the
-  // array on every render, and keying the effect on the reference would
-  // tear down the listener (React always runs the previous effect's
-  // cleanup when a dep changes) without ever re-subscribing, since the
-  // effect itself has no way to "undo" a cleanup that already ran.
-  const key = deviceNames === null ? null : [...deviceNames].sort().join("|");
+  micDevice: string | null,
+  systemDevice: string | null,
+): RoleLevels {
+  const [levels, setLevels] = useState<RoleLevels>(EMPTY_LEVELS);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,29 +52,30 @@ export function useAudioLevels(
       }
       if (cancelled) return;
 
-      if (!deviceNames || deviceNames.length === 0) {
-        setLevels(new Map());
+      if (micDevice === null && systemDevice === null) {
+        setLevels(EMPTY_LEVELS);
         return;
       }
 
       try {
-        await invoke("start_audio_level_monitoring", { deviceNames });
+        await invoke("start_audio_level_monitoring", {
+          mic_device: micDevice,
+          system_device: systemDevice,
+        });
       } catch (err) {
         console.error("Failed to start audio level monitoring:", err);
         return;
       }
 
       try {
-        unlisten = await listen<AudioLevelUpdate>(
-          "audio-levels",
-          (event) => {
-            const next = new Map<string, AudioLevel>();
-            for (const lvl of event.payload.levels) {
-              next.set(lvl.device_name, lvl);
-            }
-            setLevels(next);
-          },
-        );
+        unlisten = await listen<AudioLevelUpdate>("audio-levels", (event) => {
+          const next: RoleLevels = { mic: null, system: null };
+          for (const lvl of event.payload.levels) {
+            if (lvl.device_name === "mic") next.mic = lvl;
+            if (lvl.device_name === "system") next.system = lvl;
+          }
+          setLevels(next);
+        });
       } catch (err) {
         console.error("Failed to subscribe to audio-levels:", err);
       }
@@ -81,16 +84,9 @@ export function useAudioLevels(
     return () => {
       cancelled = true;
       unlisten?.();
-      // Don't stop monitoring here — the next effect run will replace it.
-      // The cleanup-on-unmount case is handled by the parent component
-      // dropping `deviceNames` to null before unmount.
+      // The next effect run replaces the monitor; unmount cleanup below.
     };
-    // `deviceNames` is intentionally omitted — the effect keys on the
-    // content-derived `key` above so a fresh array with the same names
-    // doesn't restart monitoring, but `deviceNames` itself always reflects
-    // the same content as `key` whenever this effect actually runs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [micDevice, systemDevice]);
 
   // Stop monitoring on full unmount.
   useEffect(() => {

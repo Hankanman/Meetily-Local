@@ -20,7 +20,6 @@ tokio = { version = "1.32.0", features = ["full"] }
 # Local patches must live at the workspace root — cargo ignores
 # [patch.crates-io] sections in non-root package manifests.
 [patch.crates-io]
-cpal = { git = "https://github.com/RustAudio/cpal", rev = "51c3b43" }
 esaxx-rs = { git = "https://github.com/thewh1teagle/esaxx-rs.git", branch = "feat/dynamic-msvc-link" }
 
 # Profiles must live at the workspace root (cargo ignores them in member

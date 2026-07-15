@@ -22,18 +22,14 @@ export function usePermissionCheck() {
 
     try {
       // Get audio devices to check for microphone and system audio availability
-      const devices =
-        await invoke<Array<{ name: string; device_type: "Input" | "Output" }>>(
-          "get_audio_devices",
-        );
+      const devices = await invoke<
+        Array<{ id: string; label: string; kind: "microphone" | "system" }>
+      >("get_audio_devices");
 
-      // Check for microphone devices (Input)
-      const inputDevices = devices.filter((d) => d.device_type === "Input");
+      const inputDevices = devices.filter((d) => d.kind === "microphone");
       const hasMicrophone = inputDevices.length > 0;
 
-      // Check for system audio devices (Output)
-      // On macOS, we need ScreenCaptureKit devices for system audio
-      const outputDevices = devices.filter((d) => d.device_type === "Output");
+      const outputDevices = devices.filter((d) => d.kind === "system");
       const hasSystemAudio = outputDevices.length > 0;
 
       console.log("Permission check:", {

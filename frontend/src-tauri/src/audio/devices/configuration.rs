@@ -1,57 +1,19 @@
-use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::sync::atomic::AtomicU64;
-use std::sync::LazyLock;
 
-pub static LAST_AUDIO_CAPTURE: LazyLock<AtomicU64> = LazyLock::new(|| {
-    AtomicU64::new(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
-    )
-});
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum AudioTranscriptionEngine {
-    Deepgram,
-    WhisperTiny,
-    WhisperDistilLargeV3,
-    WhisperLargeV3Turbo,
-    WhisperLargeV3,
-}
-
-impl fmt::Display for AudioTranscriptionEngine {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AudioTranscriptionEngine::Deepgram => write!(f, "Deepgram"),
-            AudioTranscriptionEngine::WhisperTiny => write!(f, "WhisperTiny"),
-            AudioTranscriptionEngine::WhisperDistilLargeV3 => write!(f, "WhisperLarge"),
-            AudioTranscriptionEngine::WhisperLargeV3Turbo => write!(f, "WhisperLargeV3Turbo"),
-            AudioTranscriptionEngine::WhisperLargeV3 => write!(f, "WhisperLargeV3"),
-        }
-    }
-}
-
-impl Default for AudioTranscriptionEngine {
-    fn default() -> Self {
-        AudioTranscriptionEngine::WhisperLargeV3Turbo
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct DeviceControl {
-    pub is_running: bool,
-    pub is_paused: bool,
-}
-
-#[derive(Clone, Eq, PartialEq, Hash, Serialize, Debug, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Debug)]
 pub enum DeviceType {
     Input,
     Output,
 }
 
+/// A selected audio device.
+///
+/// `name` is the stable PipeWire `node.name` (e.g.
+/// `alsa_input.usb-RODE_Microphones_RODE_NT-USB-00.pro-input-0`) or the
+/// literal `"default"` for the system default source/sink. Which stream
+/// a device drives (microphone vs system) is decided by the *parameter*
+/// it is passed as — never parsed out of the string.
 #[derive(Clone, Eq, PartialEq, Hash, Serialize, Debug)]
 pub struct AudioDevice {
     pub name: String,
@@ -61,39 +23,6 @@ pub struct AudioDevice {
 impl AudioDevice {
     pub fn new(name: String, device_type: DeviceType) -> Self {
         AudioDevice { name, device_type }
-    }
-
-    pub fn from_name(name: &str) -> Result<Self> {
-        if name.trim().is_empty() {
-            return Err(anyhow!("Device name cannot be empty"));
-        }
-
-        let lower = name.to_lowercase();
-        // Output devices on Linux are surfaced as
-        // `<description> (System Audio)` from `configure_linux_audio`,
-        // so accept that as an Output marker too. Keep the device name
-        // intact (suffix included) — capture-side resolution
-        // (`open_linux_system_audio_input`) trims it back to the
-        // description before doing the pactl lookup.
-        let (clean_name, device_type) = if lower.ends_with("(input)") {
-            (
-                name.trim_end_matches("(input)").trim().to_string(),
-                DeviceType::Input,
-            )
-        } else if lower.ends_with("(output)") {
-            (
-                name.trim_end_matches("(output)").trim().to_string(),
-                DeviceType::Output,
-            )
-        } else if lower.ends_with("(system audio)") {
-            (name.to_string(), DeviceType::Output)
-        } else {
-            return Err(anyhow!(
-                "Device type (input/output) not specified in the name"
-            ));
-        };
-
-        Ok(AudioDevice::new(clean_name, device_type))
     }
 }
 
@@ -108,206 +37,5 @@ impl fmt::Display for AudioDevice {
                 DeviceType::Output => "output",
             }
         )
-    }
-}
-
-/// Parse audio device from string name
-pub fn parse_audio_device(name: &str) -> Result<AudioDevice> {
-    AudioDevice::from_name(name)
-}
-
-/// Pick a preferred `SupportedStreamConfig` for an input device.
-///
-/// On Linux, strongly prefer 48 kHz. PipeWire's graph runs at 48 kHz by
-/// default; opening a client at any other rate (cpal's ALSA default is
-/// often 44.1 kHz on pipewire-alsa) forces pipewire-alsa to insert a
-/// resampler. The resampled client then runs at a small internal quantum
-/// (observed 256 frames) and drags every other audio client — Teams,
-/// Zoom, browser WebRTC — into the same small quantum, producing audible
-/// fuzz/glitches. See pw-top: `QUANT=256 RATE=44100` on the `alsa_capture.*`
-/// node vs. `QUANT=512-1024 RATE=48000` on the rest of the graph.
-///
-/// On macOS/Windows, fall back to cpal's `default_input_config()`.
-#[cfg(not(target_os = "windows"))]
-fn preferred_input_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig> {
-    use cpal::traits::DeviceTrait;
-
-    let default_cfg = device
-        .default_input_config()
-        .map_err(|e| anyhow!("Failed to get default input config: {}", e))?;
-
-    #[cfg(target_os = "linux")]
-    {
-        use log::info;
-        const TARGET_RATE: u32 = 48_000;
-        let device_name = device.name().unwrap_or_else(|_| "<unknown>".into());
-
-        if default_cfg.sample_rate().0 == TARGET_RATE {
-            return Ok(default_cfg);
-        }
-
-        // Look through supported input configs for a range matching the
-        // default's channel count / sample format that also covers 48 kHz.
-        // Matching channels+format keeps us close to what cpal's default
-        // picker chose — we only adjust the sample rate.
-        if let Ok(supported) = device.supported_input_configs() {
-            for cfg in supported {
-                if cfg.channels() == default_cfg.channels()
-                    && cfg.sample_format() == default_cfg.sample_format()
-                    && cfg.min_sample_rate().0 <= TARGET_RATE
-                    && cfg.max_sample_rate().0 >= TARGET_RATE
-                {
-                    info!(
-                        "🎚️ audio: preferring 48 kHz over default {} Hz on '{}' to match PipeWire graph rate",
-                        default_cfg.sample_rate().0,
-                        device_name,
-                    );
-                    return Ok(cfg.with_sample_rate(cpal::SampleRate(TARGET_RATE)));
-                }
-            }
-        }
-
-        info!(
-            "🎚️ audio: device '{}' doesn't expose a 48 kHz input config matching the default ({} Hz, {} ch, {:?}) — keeping default",
-            device_name,
-            default_cfg.sample_rate().0,
-            default_cfg.channels(),
-            default_cfg.sample_format(),
-        );
-    }
-
-    Ok(default_cfg)
-}
-
-// Only the macOS branch of get_device_and_config calls this; on Linux/Windows
-// the output path uses different mechanisms (PulseAudio monitor source / WASAPI).
-#[cfg(target_os = "macos")]
-fn preferred_output_config(device: &cpal::Device) -> Result<cpal::SupportedStreamConfig> {
-    use cpal::traits::DeviceTrait;
-    device
-        .default_output_config()
-        .map_err(|e| anyhow!("Failed to get default output config: {}", e))
-}
-
-/// Open the cpal default input *redirected* to a specific PulseAudio /
-/// PipeWire monitor source. The picker exposes monitor sources by their
-/// `pactl` description (e.g. "Monitor of Arctis Pro Wireless Game (System Audio)");
-/// here we translate that back to the source name (e.g.
-/// `alsa_output.usb-SteelSeries...stereo-game.monitor`) and set
-/// `PIPEWIRE_NODE` so `pipewire-alsa` binds the next opened PCM to that
-/// source. The env var is only read at `snd_pcm_open` time, so streams
-/// already running are unaffected and we restore the previous value
-/// once the open completes.
-#[cfg(target_os = "linux")]
-fn open_linux_system_audio_input(
-    device_name: &str,
-) -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
-    use cpal::traits::HostTrait;
-    use log::info;
-
-    // The picker labels are `<description> (System Audio)`; trim the
-    // suffix to get the raw description we matched on in pactl.
-    let description = device_name
-        .trim()
-        .trim_end_matches("(System Audio)")
-        .trim()
-        .to_string();
-
-    let source_name = match super::platform::resolve_source_name_by_description(&description) {
-        Ok(Some(n)) => n,
-        Ok(None) => {
-            return Err(anyhow!(
-                "No PulseAudio monitor source matches description '{}'. Refresh device list.",
-                description
-            ));
-        }
-        Err(e) => {
-            return Err(anyhow!(
-                "Failed to enumerate PulseAudio sources for '{}': {}",
-                description,
-                e
-            ));
-        }
-    };
-
-    info!(
-        "🔊 Linux system audio: redirecting cpal default input to PIPEWIRE_NODE={}",
-        source_name
-    );
-
-    let host = cpal::default_host();
-    let prev = std::env::var("PIPEWIRE_NODE").ok();
-    // SAFETY: this process is single-threaded with respect to env at
-    // this exact moment — `start_streams` opens streams sequentially.
-    // The env value is only consumed by snd_pcm_open under us, and we
-    // restore it before returning so subsequent opens (e.g. the level
-    // monitor) see the original setting.
-    std::env::set_var("PIPEWIRE_NODE", &source_name);
-
-    let opened = (|| -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
-        let device = host
-            .default_input_device()
-            .ok_or_else(|| anyhow!("no default input device available for system-audio redirect"))?;
-        let config = preferred_input_config(&device)?;
-        Ok((device, config))
-    })();
-
-    match prev {
-        Some(v) => std::env::set_var("PIPEWIRE_NODE", v),
-        None => std::env::remove_var("PIPEWIRE_NODE"),
-    }
-
-    opened
-}
-
-/// Get device and config for audio operations
-pub async fn get_device_and_config(
-    audio_device: &AudioDevice,
-) -> Result<(cpal::Device, cpal::SupportedStreamConfig)> {
-    #[cfg(target_os = "windows")]
-    {
-        return super::platform::get_windows_device(audio_device);
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        use cpal::traits::{DeviceTrait, HostTrait};
-
-        let host = cpal::default_host();
-
-        match audio_device.device_type {
-            DeviceType::Input => {
-                for device in host.input_devices()? {
-                    if let Ok(name) = device.name() {
-                        if name == audio_device.name {
-                            let config = preferred_input_config(&device)?;
-                            return Ok((device, config));
-                        }
-                    }
-                }
-            }
-            DeviceType::Output => {
-                #[cfg(target_os = "macos")]
-                {
-                    // Use default host for all macOS output devices
-                    // Core Audio backend uses direct cidre API for system capture, not cpal
-                    for device in host.output_devices()? {
-                        if let Ok(name) = device.name() {
-                            if name == audio_device.name {
-                                let config = preferred_output_config(&device)?;
-                                return Ok((device, config));
-                            }
-                        }
-                    }
-                }
-
-                #[cfg(target_os = "linux")]
-                {
-                    return open_linux_system_audio_input(&audio_device.name);
-                }
-            }
-        }
-
-        Err(anyhow!("Device not found: {}", audio_device.name))
     }
 }

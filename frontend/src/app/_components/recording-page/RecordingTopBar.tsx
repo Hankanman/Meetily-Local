@@ -64,14 +64,13 @@ export function RecordingTopBar({
 
   // Fall back to "default" when the user hasn't picked specific devices —
   // matches the hero's behaviour and ensures meters render even with the
-  // default-device flow. Same dedupe to avoid two identical "Mic" /
-  // "System" rows when both fall back to the same default.
+  // default-device flow.
   const micName = selectedDevices?.micDevice ?? "default";
   const systemName = selectedDevices?.systemDevice ?? "default";
-  const monitorNames = Array.from(new Set([micName, systemName]));
-  const levels = useAudioLevels(monitorNames);
-  const micLevel = levels.get(micName);
-  const systemLevel = micName !== systemName ? levels.get(systemName) : null;
+  const { mic: micLevel, system: systemLevel } = useAudioLevels(
+    micName,
+    systemName,
+  );
 
   const handlePauseToggle = async () => {
     if (isPaused) {

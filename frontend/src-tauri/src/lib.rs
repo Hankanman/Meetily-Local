@@ -52,7 +52,7 @@ pub mod tray;
 pub mod utils;
 pub mod whisper_engine;
 
-use audio::{list_audio_devices, trigger_audio_permission, AudioDevice};
+use audio::{list_audio_devices, trigger_audio_permission};
 use log::{error as log_error, info as log_info};
 use notifications::commands::NotificationManagerState;
 use std::sync::Arc;
@@ -242,14 +242,16 @@ async fn save_transcript(file_path: String, content: String) -> Result<(), Strin
 #[tauri::command]
 async fn start_audio_level_monitoring<R: Runtime>(
     app: AppHandle<R>,
-    device_names: Vec<String>,
+    mic_device: Option<String>,
+    system_device: Option<String>,
 ) -> Result<(), String> {
     log_info!(
-        "Starting audio level monitoring for devices: {:?}",
-        device_names
+        "Starting audio level monitoring (mic={:?}, system={:?})",
+        mic_device,
+        system_device
     );
 
-    audio::simple_level_monitor::start_monitoring(app, device_names)
+    audio::simple_level_monitor::start_monitoring(app, mic_device, system_device)
         .await
         .map_err(|e| format!("Failed to start audio level monitoring: {}", e))
 }
@@ -271,7 +273,7 @@ async fn is_audio_level_monitoring() -> bool {
 // Whisper commands are now handled by whisper_engine::commands module
 
 #[tauri::command]
-async fn get_audio_devices() -> Result<Vec<AudioDevice>, String> {
+async fn get_audio_devices() -> Result<Vec<audio::pw::PwDevice>, String> {
     list_audio_devices()
         .await
         .map_err(|e| format!("Failed to list audio devices: {}", e))
@@ -609,7 +611,6 @@ pub fn run() {
         .manage(Arc::new(RwLock::new(
             None::<notifications::manager::NotificationManager<tauri::Wry>>,
         )) as NotificationManagerState<tauri::Wry>)
-        .manage(audio::init_system_audio_state())
         .manage(summary::summary_engine::ModelManagerState(Arc::new(
             tokio::sync::Mutex::new(None),
         )))
@@ -816,12 +817,6 @@ pub fn run() {
             // Reload sync commands (retrieve transcript history and meeting name)
             audio::recording_commands::get_transcript_history,
             audio::recording_commands::get_recording_meeting_name,
-            // Device monitoring commands (AirPods/Bluetooth disconnect/reconnect)
-            audio::recording_commands::poll_audio_device_events,
-            audio::recording_commands::get_reconnection_status,
-            audio::recording_commands::attempt_device_reconnect,
-            // Playback device detection (Bluetooth warning)
-            audio::recording_commands::get_active_audio_output,
             // Audio recovery commands (for transcript recovery feature)
             audio::incremental_saver::recover_audio_from_checkpoints,
             audio::incremental_saver::cleanup_checkpoints,
@@ -882,10 +877,6 @@ pub fn run() {
             audio::recording_preferences::get_default_recordings_folder_path,
             audio::recording_preferences::open_recordings_folder,
             audio::recording_preferences::select_recording_folder,
-            audio::recording_preferences::get_available_audio_backends,
-            audio::recording_preferences::get_current_audio_backend,
-            audio::recording_preferences::set_audio_backend,
-            audio::recording_preferences::get_audio_backend_info,
             // Language preference commands
             set_language_preference,
             // Notification system commands
@@ -903,13 +894,6 @@ pub fn run() {
             notifications::commands::initialize_notification_manager_manual,
             notifications::commands::test_notification_with_auto_consent,
             notifications::commands::get_notification_stats,
-            // System audio capture commands
-            audio::system_audio_commands::start_system_audio_capture_command,
-            audio::system_audio_commands::list_system_audio_devices_command,
-            audio::system_audio_commands::check_system_audio_permissions_command,
-            audio::system_audio_commands::start_system_audio_monitoring,
-            audio::system_audio_commands::stop_system_audio_monitoring,
-            audio::system_audio_commands::get_system_audio_monitoring_status,
             // Screen Recording permission commands
             audio::permissions::check_screen_recording_permission_command,
             audio::permissions::request_screen_recording_permission_command,

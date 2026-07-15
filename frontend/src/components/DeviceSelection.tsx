@@ -1,9 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { RefreshCw, Mic, Speaker } from "lucide-react";
-import { AudioLevelMeter, CompactAudioLevelMeter } from "./AudioLevelMeter";
-import { AudioBackendSelector } from "./AudioBackendSelector";
 import {
   Select,
   SelectContent,
@@ -14,27 +11,21 @@ import {
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 
+/**
+ * A capture device as reported by the PipeWire registry.
+ * `id` is the stable node name (used for selection/preferences),
+ * `label` the human-readable description shown in pickers.
+ */
 export interface AudioDevice {
-  name: string;
-  device_type: "Input" | "Output";
+  id: string;
+  label: string;
+  kind: "microphone" | "system";
 }
 
 export interface SelectedDevices {
+  /** PipeWire node id, or null = system default. */
   micDevice: string | null;
   systemDevice: string | null;
-}
-
-export interface AudioLevelData {
-  device_name: string;
-  device_type: string;
-  rms_level: number;
-  peak_level: number;
-  is_active: boolean;
-}
-
-export interface AudioLevelUpdate {
-  timestamp: number;
-  levels: AudioLevelData[];
 }
 
 interface DeviceSelectionProps {
@@ -52,23 +43,9 @@ export function DeviceSelection({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [audioLevels, setAudioLevels] = useState<Map<string, AudioLevelData>>(
-    new Map(),
-  );
-  const [isMonitoring, setIsMonitoring] = useState(false);
-  const [showLevels, setShowLevels] = useState(false);
 
-  // Filter devices by type. Also drop any device literally named
-  // "default" — that's the CPAL alias for the system default device,
-  // and we already render an explicit "Default …" SelectItem above the
-  // mapped list. Without this filter the Select would have two options
-  // with `value="default"` and React warns about duplicate keys.
-  const inputDevices = devices.filter(
-    (device) => device.device_type === "Input" && device.name !== "default",
-  );
-  const outputDevices = devices.filter(
-    (device) => device.device_type === "Output" && device.name !== "default",
-  );
+  const microphones = devices.filter((d) => d.kind === "microphone");
+  const systemDevices = devices.filter((d) => d.kind === "system");
 
   // Fetch available audio devices
   const fetchDevices = useCallback(async () => {
@@ -88,18 +65,6 @@ export function DeviceSelection({
     }
   }, []);
 
-  // Stop audio level monitoring (declared early so cleanup effects can reference it)
-  const stopAudioLevelMonitoring = useCallback(async () => {
-    try {
-      await invoke("stop_audio_level_monitoring");
-      setIsMonitoring(false);
-      setAudioLevels(new Map());
-      console.log("Stopped audio level monitoring");
-    } catch (err) {
-      console.error("Failed to stop audio level monitoring:", err);
-    }
-  }, []);
-
   // Load devices on component mount
   useEffect(() => {
     // setState happens after await; the rule cannot see through async boundaries.
@@ -107,95 +72,23 @@ export function DeviceSelection({
     fetchDevices();
   }, [fetchDevices]);
 
-  // Set up audio level event listener
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-
-    const setupAudioLevelListener = async () => {
-      try {
-        unlisten = await listen<AudioLevelUpdate>("audio-levels", (event) => {
-          const levelUpdate = event.payload;
-          const newLevels = new Map<string, AudioLevelData>();
-
-          levelUpdate.levels.forEach((level) => {
-            newLevels.set(level.device_name, level);
-          });
-
-          setAudioLevels(newLevels);
-        });
-      } catch (err) {
-        console.error("Failed to setup audio level listener:", err);
-      }
-    };
-
-    setupAudioLevelListener();
-
-    // Cleanup function
-    return () => {
-      if (unlisten) {
-        unlisten();
-      }
-      // Stop monitoring when component unmounts
-      if (isMonitoring) {
-        stopAudioLevelMonitoring();
-      }
-    };
-  }, [isMonitoring, stopAudioLevelMonitoring]);
-
-  // Handle device refresh
   const handleRefresh = async () => {
     setRefreshing(true);
     await fetchDevices();
   };
 
-  // Handle microphone device selection
-  const handleMicDeviceChange = (deviceName: string) => {
-    const newDevices = {
+  const handleMicDeviceChange = (deviceId: string) => {
+    onDeviceChange({
       ...selectedDevices,
-      micDevice: deviceName === "default" ? null : deviceName,
-    };
-    onDeviceChange(newDevices);
+      micDevice: deviceId === "default" ? null : deviceId,
+    });
   };
 
-  // Handle system audio device selection
-  const handleSystemDeviceChange = (deviceName: string) => {
-    const newDevices = {
+  const handleSystemDeviceChange = (deviceId: string) => {
+    onDeviceChange({
       ...selectedDevices,
-      systemDevice: deviceName === "default" ? null : deviceName,
-    };
-    onDeviceChange(newDevices);
-  };
-
-  // Start audio level monitoring
-  const startAudioLevelMonitoring = async () => {
-    try {
-      // Only monitor input devices for now (microphones)
-      const deviceNames = inputDevices.map((device) => device.name);
-      if (deviceNames.length === 0) {
-        setError("No microphone devices found to monitor");
-        return;
-      }
-
-      await invoke("start_audio_level_monitoring", { deviceNames });
-      setIsMonitoring(true);
-      setShowLevels(true);
-      console.log(
-        "Started audio level monitoring for input devices:",
-        deviceNames,
-      );
-    } catch (err) {
-      console.error("Failed to start audio level monitoring:", err);
-      setError("Failed to start audio level monitoring");
-    }
-  };
-
-  // Toggle audio level monitoring
-  const toggleAudioLevelMonitoring = async () => {
-    if (isMonitoring) {
-      await stopAudioLevelMonitoring();
-    } else {
-      await startAudioLevelMonitoring();
-    }
+      systemDevice: deviceId === "default" ? null : deviceId,
+    });
   };
 
   if (loading) {
@@ -214,35 +107,20 @@ export function DeviceSelection({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h4 className="text-sm font-medium text-foreground">Audio Devices</h4>
-        <div className="flex items-center space-x-2">
-          {/* TODO: Monitoring */}
-          {/* <button */}
-          {/*   onClick={toggleAudioLevelMonitoring} */}
-          {/*   disabled={disabled || inputDevices.length === 0} */}
-          {/*   className={`px-3 py-1 text-sm font-medium rounded-md transition-colors ${ */}
-          {/*     isMonitoring */}
-          {/*       ? 'bg-destructive/10 text-destructive hover:bg-destructive/10' */}
-          {/*       : 'bg-success-muted text-success hover:bg-success-muted' */}
-          {/*   } disabled:pointer-events-none disabled:opacity-50`} */}
-          {/*   title={inputDevices.length === 0 ? 'No microphones available to test' : ''} */}
-          {/* > */}
-          {/*   {isMonitoring ? 'Stop Test' : 'Test Mic'} */}
-          {/* </button> */}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={handleRefresh}
-            disabled={refreshing || disabled}
-            className="size-8"
-          >
-            <RefreshCw
-              className={`
-                size-4
-                ${refreshing ? "animate-spin" : ""}
-              `}
-            />
-          </Button>
-        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={handleRefresh}
+          disabled={refreshing || disabled}
+          className="size-8"
+        >
+          <RefreshCw
+            className={`
+              size-4
+              ${refreshing ? "animate-spin" : ""}
+            `}
+          />
+        </Button>
       </div>
 
       {error && (
@@ -277,58 +155,17 @@ export function DeviceSelection({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="default">Default Microphone</SelectItem>
-              {inputDevices.map((device) => (
-                <SelectItem key={device.name} value={device.name}>
-                  {device.name}
+              {microphones.map((device) => (
+                <SelectItem key={device.id} value={device.id}>
+                  {device.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          {inputDevices.length === 0 && (
+          {microphones.length === 0 && (
             <p className="text-sm text-muted-foreground">
               No microphone devices found
             </p>
-          )}
-
-          {/* Audio Level Meters for Input Devices */}
-          {showLevels && inputDevices.length > 0 && (
-            <div className="space-y-2 border-t border-border pt-2">
-              <p className="text-sm font-medium text-muted-foreground">
-                Microphone Levels:
-              </p>
-              {inputDevices.map((device) => {
-                const levelData = audioLevels.get(device.name);
-                return (
-                  <div key={`level-${device.name}`} className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span
-                        className="
-                        max-w-50 truncate text-sm text-muted-foreground
-                      "
-                      >
-                        {device.name}
-                      </span>
-                      {levelData && (
-                        <CompactAudioLevelMeter
-                          rmsLevel={levelData.rms_level}
-                          peakLevel={levelData.peak_level}
-                          isActive={levelData.is_active}
-                        />
-                      )}
-                    </div>
-                    {levelData && (
-                      <AudioLevelMeter
-                        rmsLevel={levelData.rms_level}
-                        peakLevel={levelData.peak_level}
-                        isActive={levelData.is_active}
-                        deviceName={device.name}
-                        size="small"
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
           )}
         </div>
 
@@ -354,25 +191,18 @@ export function DeviceSelection({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="default">Default System Audio</SelectItem>
-              {outputDevices.map((device) => (
-                <SelectItem key={device.name} value={device.name}>
-                  {device.name}
+              {systemDevices.map((device) => (
+                <SelectItem key={device.id} value={device.id}>
+                  {device.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
 
-          {outputDevices.length === 0 && (
+          {systemDevices.length === 0 && (
             <p className="text-sm text-muted-foreground">
               No system audio devices found
             </p>
-          )}
-
-          {/* Backend Selection - available on all platforms */}
-          {!disabled && (
-            <div className="border-t border-border pt-3">
-              <AudioBackendSelector disabled={disabled} />
-            </div>
           )}
         </div>
       </div>
@@ -384,20 +214,8 @@ export function DeviceSelection({
         </p>
         <p>
           • <strong>System Audio:</strong> Records computer audio (music, calls,
-          etc.)
+          etc.) from the selected output device
         </p>
-        {isMonitoring && (
-          <p>
-            • <strong>Mic Levels:</strong> Green = good, Yellow = loud, Red =
-            too loud
-          </p>
-        )}
-        {!isMonitoring && inputDevices.length > 0 && (
-          <p>
-            • <strong>Tip:</strong> Click &quot;Test Mic&quot; to check if your
-            microphone is working
-          </p>
-        )}
       </div>
     </div>
   );

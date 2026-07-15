@@ -207,6 +207,8 @@ impl ProfessionalAudioMixer {
 /// Simplified audio capture without broadcast channels
 #[derive(Clone)]
 pub struct AudioCapture {
+    // Kept for logging/diagnostics context on the capture path.
+    #[allow(dead_code)]
     device: Arc<AudioDevice>,
     state: Arc<RecordingState>,
     sample_rate: u32, // Original device sample rate
@@ -688,35 +690,6 @@ impl AudioCapture {
         }
     }
 
-    /// Handle stream errors with enhanced disconnect detection
-    pub fn handle_stream_error(&self, error: cpal::StreamError) {
-        error!("Audio stream error for {}: {}", self.device.name, error);
-
-        let error_str = error.to_string().to_lowercase();
-
-        // Enhanced error detection for device disconnection
-        let audio_error = if error_str.contains("device is no longer available")
-            || error_str.contains("device not found")
-            || error_str.contains("device disconnected")
-            || error_str.contains("no such device")
-            || error_str.contains("device unavailable")
-            || error_str.contains("device removed")
-        {
-            warn!("🔌 Device disconnect detected for: {}", self.device.name);
-            AudioError::DeviceDisconnected
-        } else if error_str.contains("permission") || error_str.contains("access denied") {
-            AudioError::PermissionDenied
-        } else if error_str.contains("channel closed") {
-            AudioError::ChannelClosed
-        } else if error_str.contains("stream") && error_str.contains("failed") {
-            AudioError::StreamFailed
-        } else {
-            warn!("Unknown audio error: {}", error);
-            AudioError::StreamFailed
-        };
-
-        self.state.report_error(audio_error);
-    }
 }
 
 /// VAD-driven audio processing pipeline

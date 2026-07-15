@@ -69,34 +69,31 @@ export function DeviceSummary({ disabled = false }: DeviceSummaryProps) {
     };
   }, []);
 
-  // Drop any device literally named "default" — that's the CPAL alias
-  // for the system default device, and we already render an explicit
-  // "Default …" option at the top of each list. Without this filter the
-  // Select gets two options with `value="default"` and React warns about
-  // duplicate keys.
-  const inputs = devices.filter(
-    (d) => d.device_type === "Input" && d.name !== "default",
-  );
-  const outputs = devices.filter(
-    (d) => d.device_type === "Output" && d.name !== "default",
-  );
+  const inputs = devices.filter((d) => d.kind === "microphone");
+  const outputs = devices.filter((d) => d.kind === "system");
 
   // "default" is the canonical sentinel — same value DeviceSelection
   // uses on the Settings page. Storing `null` in the context means
   // "use the system default device" (the backend treats null this way).
-  const setMic = (name: string) =>
+  const setMic = (id: string) =>
     setSelectedDevices({
       ...selectedDevices,
-      micDevice: name === "default" ? null : name,
+      micDevice: id === "default" ? null : id,
     } as SelectedDevices);
-  const setSystem = (name: string) =>
+  const setSystem = (id: string) =>
     setSelectedDevices({
       ...selectedDevices,
-      systemDevice: name === "default" ? null : name,
+      systemDevice: id === "default" ? null : id,
     } as SelectedDevices);
 
-  const micLabel = selectedDevices?.micDevice ?? "Default microphone";
-  const systemLabel = selectedDevices?.systemDevice ?? "Default system audio";
+  // Selections are stored as PipeWire node ids; show the human label.
+  const labelFor = (id: string | null | undefined, fallback: string) =>
+    id ? (devices.find((d) => d.id === id)?.label ?? id) : fallback;
+  const micLabel = labelFor(selectedDevices?.micDevice, "Default microphone");
+  const systemLabel = labelFor(
+    selectedDevices?.systemDevice,
+    "Default system audio",
+  );
   const languageLabel =
     LANGUAGE_OPTIONS.find((l) => l.value === selectedLanguage)?.label ??
     "Auto detect";
@@ -108,7 +105,7 @@ export function DeviceSummary({ disabled = false }: DeviceSummaryProps) {
         value={micLabel}
         options={[
           { value: "default", label: "Default microphone" },
-          ...inputs.map((d) => ({ value: d.name, label: d.name })),
+          ...inputs.map((d) => ({ value: d.id, label: d.label })),
         ]}
         selectedValue={selectedDevices?.micDevice ?? "default"}
         onSelect={setMic}
@@ -120,7 +117,7 @@ export function DeviceSummary({ disabled = false }: DeviceSummaryProps) {
         value={systemLabel}
         options={[
           { value: "default", label: "Default system audio" },
-          ...outputs.map((d) => ({ value: d.name, label: d.name })),
+          ...outputs.map((d) => ({ value: d.id, label: d.label })),
         ]}
         selectedValue={selectedDevices?.systemDevice ?? "default"}
         onSelect={setSystem}
