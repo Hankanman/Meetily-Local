@@ -11,6 +11,9 @@ import { ModelConfig } from "@/components/ModelSettingsModal";
 import { SummaryGeneratorButtonGroup } from "./SummaryGeneratorButtonGroup";
 import { SummaryUpdaterButtonGroup } from "./SummaryUpdaterButtonGroup";
 import { CalendarEventPanel } from "./CalendarEventPanel";
+import { ActionItemsPanel } from "./ActionItemsPanel";
+import { MeetingNotesPanel } from "./MeetingNotesPanel";
+import { ExportMenu } from "./ExportMenu";
 import { RefObject } from "react";
 
 interface SummaryPanelProps {
@@ -131,6 +134,15 @@ export function SummaryPanel({
           />
         </div>
 
+        {/* Export stays reachable before a summary exists: a transcript-only
+            meeting is still worth handing to another tool. With a summary it
+            lives in the button row below instead, next to the other actions. */}
+        {!aiSummary && !isSummaryLoading && (
+          <div className="flex justify-end">
+            <ExportMenu meetingId={meeting.id} />
+          </div>
+        )}
+
         {/* Button groups - only show when summary exists */}
         {aiSummary && !isSummaryLoading && (
           <div className="flex w-full items-center justify-center gap-2 pt-0">
@@ -167,6 +179,11 @@ export function SummaryPanel({
                 onOpenFolder={onOpenFolder}
                 hasSummary={!!aiSummary}
               />
+            </div>
+
+            {/* Whole-meeting export (summary + action items + transcript) */}
+            <div className="shrink-0">
+              <ExportMenu meetingId={meeting.id} />
             </div>
           </div>
         )}
@@ -231,6 +248,12 @@ export function SummaryPanel({
             }
             isGenerating={isSummaryLoading}
           />
+
+          {/* Action items still apply without a summary — the user may want to
+              jot commitments down before (or instead of) generating one. */}
+          <div className="px-6 pb-6">
+            <ActionItemsPanel meetingId={meeting.id} hasSummary={false} />
+          </div>
         </div>
       ) : (
         transcripts?.length > 0 && (
@@ -317,6 +340,12 @@ export function SummaryPanel({
                   created_at: meeting.created_at,
                 }}
               />
+            </div>
+
+            {/* Extracted + manual action items, as a checkable task list */}
+            <div className="px-6 pb-6">
+              <ActionItemsPanel meetingId={meeting.id} hasSummary={!!aiSummary} />
+              <MeetingNotesPanel meetingId={meeting.id} />
             </div>
             {summaryStatus !== "idle" && (
               <div

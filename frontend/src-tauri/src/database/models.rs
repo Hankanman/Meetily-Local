@@ -61,6 +61,45 @@ pub struct VoiceProfile {
     pub updated_at: String,
 }
 
+/// A single tracked action item belonging to a meeting.
+///
+/// Rows are created either by the post-summary extraction pass
+/// (`source = "summary"`), by the user in the UI (`source = "manual"`), or by
+/// an agent over the MCP server (`source = "agent"`). Only the `summary` rows
+/// are owned by the extractor — a re-extraction replaces them and leaves the
+/// other two provenances untouched (see `ActionItemsRepository::replace_summary_items`).
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ActionItem {
+    pub id: String,
+    pub meeting_id: String,
+    pub text: String,
+    /// Named owner when one could be determined ("Seb to send the deck").
+    pub assignee: Option<String>,
+    /// Free-text due hint exactly as spoken ("by Friday"). Deliberately not
+    /// parsed into a date — the phrasing is what the user recognizes.
+    pub due_hint: Option<String>,
+    /// `"open"` | `"done"`.
+    pub status: String,
+    /// `"summary"` | `"manual"` | `"agent"`.
+    pub source: String,
+    /// Opaque id in an external tracker once pushed there; NULL until then.
+    pub external_ref: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub completed_at: Option<String>,
+}
+
+/// A free-text note attached to a meeting, written by the user or an agent.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct MeetingNote {
+    pub id: String,
+    pub meeting_id: String,
+    pub body: String,
+    /// `"manual"` | `"agent"`.
+    pub source: String,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct SummaryProcess {
     pub meeting_id: String,

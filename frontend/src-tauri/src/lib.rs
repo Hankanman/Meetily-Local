@@ -750,6 +750,20 @@ pub fn run() {
             api::api_save_custom_openai_config,
             api::api_get_custom_openai_config,
             api::api_test_custom_openai_connection,
+            // Action items + meeting notes
+            api::action_items::list_action_items,
+            api::action_items::list_open_action_items,
+            api::action_items::create_action_item,
+            api::action_items::set_action_item_status,
+            api::action_items::update_action_item,
+            api::action_items::delete_action_item,
+            api::action_items::extract_action_items,
+            api::action_items::add_meeting_note,
+            api::action_items::list_meeting_notes,
+            api::action_items::delete_meeting_note,
+            // AI-ingestable meeting export
+            api::export::export_meeting,
+            api::export::export_meeting_to_file,
             // Summary commands
             summary::commands::api_process_transcript,
             summary::commands::api_get_summary,

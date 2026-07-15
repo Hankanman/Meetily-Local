@@ -29,6 +29,7 @@ pub struct CustomOpenAIConfig {
     pub top_p: Option<f32>,
 }
 
+pub mod action_extraction;
 pub mod commands;
 pub mod llm_client;
 pub mod markdown_export;
