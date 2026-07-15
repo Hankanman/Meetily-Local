@@ -1,6 +1,24 @@
 use crate::database::models::{Setting, TranscriptSetting};
+use crate::state::AppState;
 use crate::summary::CustomOpenAIConfig;
 use sqlx::SqlitePool;
+use tauri::State;
+
+// ===== NAMESPACED JSON SETTING KEYS =====
+//
+// Keys for the generic `app_settings` key-value store (see the "GENERIC
+// KEY-VALUE SETTINGS" section below). Each backs a JSON blob previously
+// persisted via tauri-plugin-store or hand-rolled file I/O:
+
+/// Onboarding status (see `onboarding::OnboardingStatus`).
+pub const KEY_ONBOARDING_STATUS: &str = "onboarding_status";
+/// Recording preferences (see `audio::recording_preferences::RecordingPreferences`).
+pub const KEY_RECORDING_PREFERENCES: &str = "recording_preferences";
+/// Notification settings (see `notifications::settings::NotificationSettings`).
+pub const KEY_NOTIFICATION_SETTINGS: &str = "notification_settings";
+/// Frontend UI config (language, confidence indicator, auto-summary, provider model cache, ...).
+/// Shape is owned by the frontend; the backend stores it as an opaque JSON blob.
+pub const KEY_UI_CONFIG: &str = "ui_config";
 
 #[derive(serde::Deserialize, Debug)]
 pub struct SaveModelConfigRequest {
@@ -346,4 +364,122 @@ impl SettingsRepository {
 
         Ok(())
     }
+
+    // ===== GENERIC KEY-VALUE SETTINGS =====
+    //
+    // Backs namespaced JSON settings blobs (onboarding status, recording
+    // preferences, notification settings, frontend UI config) in the
+    // `app_settings` table, replacing tauri-plugin-store JSON files and
+    // hand-rolled config file I/O across the app.
+
+    /// Gets the raw JSON string stored under `key`, if any.
+    pub async fn get_setting_json(
+        pool: &SqlitePool,
+        key: &str,
+    ) -> std::result::Result<Option<String>, sqlx::Error> {
+        let value: Option<String> =
+            sqlx::query_scalar("SELECT value FROM app_settings WHERE key = $1")
+                .bind(key)
+                .fetch_optional(pool)
+                .await?;
+        Ok(value)
+    }
+
+    /// Upserts a raw JSON string under `key`.
+    pub async fn set_setting_json(
+        pool: &SqlitePool,
+        key: &str,
+        value: &str,
+    ) -> std::result::Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES ($1, $2, $3)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(key)
+        .bind(value)
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Deletes the row stored under `key`, if any.
+    pub async fn delete_setting(
+        pool: &SqlitePool,
+        key: &str,
+    ) -> std::result::Result<(), sqlx::Error> {
+        sqlx::query("DELETE FROM app_settings WHERE key = $1")
+            .bind(key)
+            .execute(pool)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Gets and deserializes a typed setting stored under `key`.
+    pub async fn get_setting<T: serde::de::DeserializeOwned>(
+        pool: &SqlitePool,
+        key: &str,
+    ) -> std::result::Result<Option<T>, sqlx::Error> {
+        match Self::get_setting_json(pool, key).await? {
+            Some(json) => {
+                let value = serde_json::from_str(&json).map_err(|e| {
+                    sqlx::Error::Protocol(
+                        format!("Invalid JSON for setting '{}': {}", key, e).into(),
+                    )
+                })?;
+                Ok(Some(value))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Serializes and upserts a typed setting under `key`.
+    pub async fn set_setting<T: serde::Serialize>(
+        pool: &SqlitePool,
+        key: &str,
+        value: &T,
+    ) -> std::result::Result<(), sqlx::Error> {
+        let json = serde_json::to_string(value).map_err(|e| {
+            sqlx::Error::Protocol(format!("Failed to serialize setting '{}': {}", key, e).into())
+        })?;
+        Self::set_setting_json(pool, key, &json).await
+    }
+}
+
+// ===== FRONTEND UI CONFIG COMMANDS =====
+//
+// Thin Tauri commands backing ConfigContext's previously-localStorage-only
+// preferences (primary language, confidence indicator toggle, auto-summary
+// toggle, per-provider model cache, ...). The shape is owned entirely by the
+// frontend — the backend just persists whatever JSON blob it's handed.
+
+/// Gets the saved frontend UI config blob, or `None` if nothing has been saved yet.
+#[tauri::command]
+pub async fn api_get_ui_config(
+    state: State<'_, AppState>,
+) -> std::result::Result<Option<serde_json::Value>, String> {
+    let pool = state.db_manager.pool();
+    SettingsRepository::get_setting_json(pool, KEY_UI_CONFIG)
+        .await
+        .map(|opt| opt.and_then(|json| serde_json::from_str(&json).ok()))
+        .map_err(|e| format!("Failed to load UI config: {}", e))
+}
+
+/// Saves the frontend UI config blob (full replace).
+#[tauri::command]
+pub async fn api_save_ui_config(
+    state: State<'_, AppState>,
+    config: serde_json::Value,
+) -> std::result::Result<(), String> {
+    let pool = state.db_manager.pool();
+    SettingsRepository::set_setting(pool, KEY_UI_CONFIG, &config)
+        .await
+        .map_err(|e| format!("Failed to save UI config: {}", e))
 }

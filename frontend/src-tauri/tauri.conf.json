@@ -66,7 +66,6 @@
                         "core:tray:default",
                         "core:webview:default",
                         "core:window:allow-set-title",
-                        "store:default",
                         "notification:default",
                         "notification:allow-is-permission-granted",
                         "process:default",

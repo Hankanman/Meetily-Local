@@ -49,6 +49,18 @@ export interface RecordingPreferences {
 }
 
 /**
+ * Frontend-owned UI preferences persisted as a single JSON blob in SQLite
+ * (replacing what used to live in localStorage). All fields optional so
+ * partial updates can be merged in by the caller.
+ */
+export interface UiConfig {
+  primaryLanguage?: string;
+  showConfidenceIndicator?: boolean;
+  isAutoSummary?: boolean;
+  providerModelMap?: Record<string, string>;
+}
+
+/**
  * Configuration Service
  * Singleton service for managing app configuration
  */
@@ -75,6 +87,23 @@ export class ConfigService {
    */
   async getRecordingPreferences(): Promise<RecordingPreferences> {
     return invoke<RecordingPreferences>("get_recording_preferences");
+  }
+
+  /**
+   * Get the saved frontend UI config blob (language, confidence indicator,
+   * auto-summary, provider model cache, ...).
+   * @returns Promise with UiConfig, or null if nothing has been saved yet
+   */
+  async getUiConfig(): Promise<UiConfig | null> {
+    return invoke<UiConfig | null>("api_get_ui_config");
+  }
+
+  /**
+   * Save the frontend UI config blob (full replace — callers should merge
+   * with the previous value before calling this).
+   */
+  async saveUiConfig(config: UiConfig): Promise<void> {
+    return invoke("api_save_ui_config", { config });
   }
 
   /**

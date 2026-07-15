@@ -1,5 +1,7 @@
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { invoke } from "@tauri-apps/api/core";
+import type { RecordingPreferences } from "@/components/RecordingSettings";
 
 /**
  * Shows the recording notification toast with compliance message.
@@ -12,10 +14,10 @@ import { Button } from "@/components/ui/button";
  */
 export async function showRecordingNotification(): Promise<void> {
   try {
-    const { Store } = await import("@tauri-apps/plugin-store");
-    const store = await Store.load("preferences.json");
-    const showNotification =
-      (await store.get<boolean>("show_recording_notification")) ?? true;
+    const preferences = await invoke<RecordingPreferences>(
+      "get_recording_preferences",
+    );
+    const showNotification = preferences.show_recording_notification ?? true;
 
     if (showNotification) {
       let dontShowAgain = false;
@@ -51,10 +53,19 @@ export async function showRecordingNotification(): Promise<void> {
               size="sm"
               onClick={async () => {
                 if (dontShowAgain) {
-                  const { Store } = await import("@tauri-apps/plugin-store");
-                  const store = await Store.load("preferences.json");
-                  await store.set("show_recording_notification", false);
-                  await store.save();
+                  try {
+                    await invoke("set_recording_preferences", {
+                      preferences: {
+                        ...preferences,
+                        show_recording_notification: false,
+                      },
+                    });
+                  } catch (error) {
+                    console.error(
+                      "Failed to save notification preference:",
+                      error,
+                    );
+                  }
                 }
                 toast.dismiss(toastId);
               }}

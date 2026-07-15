@@ -1,9 +1,14 @@
 use anyhow::{anyhow, Result};
 use dirs;
-use log::info as log_info;
+use log::{info as log_info, warn as log_warn};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::{AppHandle, Runtime};
+use std::sync::Arc;
+use tauri::{AppHandle, Manager, Runtime};
+use tokio::sync::RwLock;
+
+use crate::database::repositories::setting::{SettingsRepository, KEY_NOTIFICATION_SETTINGS};
+use crate::state::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationSettings {
@@ -95,57 +100,133 @@ impl Default for NotificationPreferences {
 
 /// Manages notification consent and user preferences
 pub struct ConsentManager<R: Runtime> {
-    #[allow(dead_code)] // Reserved for future functionality
     app_handle: AppHandle<R>,
-    settings_path: PathBuf,
+    /// Legacy on-disk location (~/.config/meetily/notifications.json), kept
+    /// only for a one-time read-only import into SQLite. Never written to
+    /// anymore.
+    legacy_settings_path: PathBuf,
+    /// In-memory cache so callers still get their last-known-good settings
+    /// during the brief startup window before `AppState` (and the SQLite
+    /// pool) has been managed. Kept in sync with SQLite once the pool is
+    /// available.
+    cache: Arc<RwLock<Option<NotificationSettings>>>,
 }
 
 impl<R: Runtime> ConsentManager<R> {
     pub fn new(app_handle: AppHandle<R>) -> Result<Self> {
-        let settings_path = Self::get_settings_path()?;
+        let legacy_settings_path = Self::get_legacy_settings_path()?;
 
         Ok(Self {
             app_handle,
-            settings_path,
+            legacy_settings_path,
+            cache: Arc::new(RwLock::new(None)),
         })
     }
 
-    /// Get the path where notification settings are stored
-    fn get_settings_path() -> Result<PathBuf> {
+    /// Path of the legacy hand-rolled JSON settings file (pre-SQLite)
+    fn get_legacy_settings_path() -> Result<PathBuf> {
         let mut path =
             dirs::config_dir().ok_or_else(|| anyhow!("Could not find config directory"))?;
 
         path.push("meetily");
         path.push("notifications.json");
 
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-
         Ok(path)
     }
 
-    /// Load notification settings from disk
-    pub async fn load_settings(&self) -> Result<NotificationSettings> {
-        if !self.settings_path.exists() {
-            log_info!("No notification settings file found, using defaults");
-            return Ok(NotificationSettings::default());
-        }
-
-        let content = tokio::fs::read_to_string(&self.settings_path).await?;
-        let settings: NotificationSettings = serde_json::from_str(&content)?;
-
-        log_info!("Loaded notification settings from disk");
-        Ok(settings)
+    /// Fetch the SQLite pool, if `AppState` has been managed yet.
+    fn db_pool(&self) -> Option<sqlx::SqlitePool> {
+        self.app_handle
+            .try_state::<AppState>()
+            .map(|s| s.db_manager.pool().clone())
     }
 
-    /// Save notification settings to disk
-    pub async fn save_settings(&self, settings: &NotificationSettings) -> Result<()> {
-        let content = serde_json::to_string_pretty(settings)?;
-        tokio::fs::write(&self.settings_path, content).await?;
+    /// One-time, read-only import of the legacy hand-rolled JSON settings
+    /// file, if present. The file is left in place afterward.
+    async fn load_legacy_settings(&self) -> Option<NotificationSettings> {
+        if !self.legacy_settings_path.exists() {
+            return None;
+        }
 
-        log_info!("Saved notification settings to disk");
+        match tokio::fs::read_to_string(&self.legacy_settings_path).await {
+            Ok(content) => match serde_json::from_str(&content) {
+                Ok(settings) => Some(settings),
+                Err(e) => {
+                    log_warn!("Failed to deserialize legacy notification settings: {}", e);
+                    None
+                }
+            },
+            Err(e) => {
+                log_warn!("Failed to read legacy notification settings file: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Load notification settings from the database (importing the legacy
+    /// JSON file into SQLite on first read, if present). Falls back to the
+    /// in-memory cache (or defaults) if the database isn't ready yet.
+    pub async fn load_settings(&self) -> Result<NotificationSettings> {
+        if let Some(pool) = self.db_pool() {
+            match SettingsRepository::get_setting::<NotificationSettings>(
+                &pool,
+                KEY_NOTIFICATION_SETTINGS,
+            )
+            .await
+            {
+                Ok(Some(settings)) => {
+                    *self.cache.write().await = Some(settings.clone());
+                    log_info!("Loaded notification settings from database");
+                    return Ok(settings);
+                }
+                Ok(None) => {
+                    let settings = if let Some(imported) = self.load_legacy_settings().await {
+                        log_info!(
+                            "Importing legacy notification settings from {:?}",
+                            self.legacy_settings_path
+                        );
+                        if let Err(e) = SettingsRepository::set_setting(
+                            &pool,
+                            KEY_NOTIFICATION_SETTINGS,
+                            &imported,
+                        )
+                        .await
+                        {
+                            log_warn!("Failed to persist imported notification settings: {}", e);
+                        }
+                        imported
+                    } else {
+                        log_info!("No notification settings found, using defaults");
+                        NotificationSettings::default()
+                    };
+                    *self.cache.write().await = Some(settings.clone());
+                    return Ok(settings);
+                }
+                Err(e) => {
+                    log_warn!("Failed to load notification settings from database: {}", e);
+                }
+            }
+        }
+
+        // Database not ready yet (early startup) — fall back to the
+        // in-memory cache, or defaults if nothing has been loaded yet.
+        if let Some(cached) = self.cache.read().await.clone() {
+            return Ok(cached);
+        }
+        log_info!("Database not yet available, using default notification settings");
+        Ok(NotificationSettings::default())
+    }
+
+    /// Save notification settings to the database
+    pub async fn save_settings(&self, settings: &NotificationSettings) -> Result<()> {
+        *self.cache.write().await = Some(settings.clone());
+
+        let pool = self
+            .db_pool()
+            .ok_or_else(|| anyhow!("Database not yet initialized — try again shortly"))?;
+        SettingsRepository::set_setting(&pool, KEY_NOTIFICATION_SETTINGS, settings).await?;
+
+        log_info!("Saved notification settings to database");
         Ok(())
     }
 
@@ -219,15 +300,13 @@ impl<R: Runtime> ConsentManager<R> {
 
     /// Initialize notification settings on first app launch
     pub async fn initialize_on_first_launch(&self) -> Result<NotificationSettings> {
-        if self.settings_path.exists() {
-            return self.load_settings().await;
-        }
-
-        log_info!("First launch detected, initializing notification settings");
-        let default_settings = NotificationSettings::default();
-        self.save_settings(&default_settings).await?;
-
-        Ok(default_settings)
+        // `load_settings` already resolves the right value regardless of
+        // whether anything has been saved yet (defaults, a fresh SQLite row,
+        // or a one-time import from the legacy JSON file), so this just
+        // needs to make sure it's persisted.
+        let settings = self.load_settings().await?;
+        self.save_settings(&settings).await?;
+        Ok(settings)
     }
 
     /// Get settings with migration if needed

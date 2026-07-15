@@ -603,7 +603,6 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_os::init())
@@ -870,11 +869,6 @@ pub fn run() {
             notifications::commands::get_notification_stats,
             // Database import commands
             database::commands::check_first_launch,
-            database::commands::select_legacy_database_path,
-            database::commands::detect_legacy_database,
-            database::commands::check_default_legacy_database,
-            database::commands::check_homebrew_database,
-            database::commands::import_and_initialize_database,
             database::commands::initialize_fresh_database,
             // Database and Models path commands
             database::commands::get_database_directory,
@@ -885,6 +879,10 @@ pub fn run() {
             onboarding::save_onboarding_status_cmd,
             onboarding::reset_onboarding_status_cmd,
             onboarding::complete_onboarding,
+            // Frontend UI config commands (language, confidence indicator,
+            // auto-summary, provider model cache, ...)
+            database::repositories::setting::api_get_ui_config,
+            database::repositories::setting::api_save_ui_config,
             // System settings commands
             #[cfg(target_os = "macos")]
             utils::open_system_settings,

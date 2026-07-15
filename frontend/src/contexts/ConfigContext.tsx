@@ -12,7 +12,7 @@ import React, {
 } from "react";
 import { TranscriptModelProps } from "@/components/TranscriptSettings";
 import { SelectedDevices } from "@/components/DeviceSelection";
-import { configService, ModelConfig } from "@/services/configService";
+import { configService, ModelConfig, UiConfig } from "@/services/configService";
 import { invoke } from "@tauri-apps/api/core";
 import {
   BetaFeatures,
@@ -114,6 +114,16 @@ interface ConfigContextType {
 
 const ConfigContext = createContext<ConfigContextType | undefined>(undefined);
 
+// Read a boolean preference that was previously persisted to localStorage as
+// the string "true"/"false". Used both for the initial (synchronous, SSR-safe)
+// state seed and to reconstruct the localStorage-cached UiConfig snapshot
+// before writing through to the backend.
+function readStoredBool(key: string, defaultValue: boolean): boolean {
+  if (typeof window === "undefined") return defaultValue;
+  const saved = localStorage.getItem(key);
+  return saved !== null ? saved === "true" : defaultValue;
+}
+
 export function ConfigProvider({ children }: { children: ReactNode }) {
   // Model configuration state
   const [modelConfig, setModelConfig] = useState<ModelConfig>({
@@ -198,6 +208,28 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   const preferencesLoadedRef = useRef(false);
   const isLoadingRef = useRef(false);
 
+  // Write the current UI config through to the backend (SQLite), merging in
+  // any partial update. localStorage stays as a synchronous read cache (so
+  // the next cold start can hydrate state instantly, before this async call
+  // resolves) but the backend is now the durable source of truth.
+  const persistUiConfig = useCallback((partial: Partial<UiConfig>) => {
+    if (typeof window === "undefined") return;
+
+    const merged: UiConfig = {
+      primaryLanguage: localStorage.getItem("primaryLanguage") || "auto",
+      showConfidenceIndicator: readStoredBool("showConfidenceIndicator", true),
+      isAutoSummary: readStoredBool("isAutoSummary", false),
+      providerModelMap: JSON.parse(
+        localStorage.getItem("providerModelMap") || "{}",
+      ),
+      ...partial,
+    };
+
+    configService.saveUiConfig(merged).catch((error) => {
+      console.error("[ConfigContext] Failed to persist UI config:", error);
+    });
+  }, []);
+
   // Load Ollama models (uses saved endpoint, re-runs when endpoint changes after config load)
   useEffect(() => {
     const loadModels = async () => {
@@ -266,6 +298,79 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Load UI config (language, confidence indicator, auto-summary, provider
+  // model cache) from the backend on mount. If nothing has been saved there
+  // yet, import the current localStorage-cached values (existing users on
+  // their first run after this migration) and write them through once.
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadUiConfig = async () => {
+      try {
+        const backendConfig = await configService.getUiConfig();
+        if (cancelled) return;
+
+        if (backendConfig) {
+          if (typeof backendConfig.primaryLanguage === "string") {
+            setSelectedLanguage(backendConfig.primaryLanguage);
+            localStorage.setItem(
+              "primaryLanguage",
+              backendConfig.primaryLanguage,
+            );
+            // Re-sync to Rust in case this differs from the localStorage
+            // value the mount-only sync effect above already pushed.
+            invoke("set_language_preference", {
+              language: backendConfig.primaryLanguage,
+            }).catch((err) =>
+              console.error(
+                "[ConfigContext] Failed to sync loaded language preference to Rust:",
+                err,
+              ),
+            );
+          }
+          if (typeof backendConfig.showConfidenceIndicator === "boolean") {
+            setShowConfidenceIndicator(backendConfig.showConfidenceIndicator);
+            localStorage.setItem(
+              "showConfidenceIndicator",
+              String(backendConfig.showConfidenceIndicator),
+            );
+          }
+          if (typeof backendConfig.isAutoSummary === "boolean") {
+            setisAutoSummary(backendConfig.isAutoSummary);
+            localStorage.setItem(
+              "isAutoSummary",
+              String(backendConfig.isAutoSummary),
+            );
+          }
+          if (backendConfig.providerModelMap) {
+            localStorage.setItem(
+              "providerModelMap",
+              JSON.stringify(backendConfig.providerModelMap),
+            );
+          }
+          console.log("[ConfigContext] Loaded UI config from backend");
+        } else {
+          // Nothing saved yet — import from localStorage and write through.
+          persistUiConfig({});
+          console.log(
+            "[ConfigContext] No backend UI config found, imported from localStorage",
+          );
+        }
+      } catch (error) {
+        console.error(
+          "[ConfigContext] Failed to load UI config from backend:",
+          error,
+        );
+      }
+    };
+
+    loadUiConfig();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Load model configuration on mount
   useEffect(() => {
     const fetchModelConfig = async () => {
@@ -303,6 +408,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
                   );
                   map[data.provider] = resolvedModel;
                   localStorage.setItem("providerModelMap", JSON.stringify(map));
+                  persistUiConfig({ providerModelMap: map });
                 }
 
                 return; // Early return
@@ -331,6 +437,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
             );
             map[data.provider] = data.model;
             localStorage.setItem("providerModelMap", JSON.stringify(map));
+            persistUiConfig({ providerModelMap: map });
           }
         }
       } catch (error) {
@@ -341,7 +448,7 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
       }
     };
     fetchModelConfig();
-  }, []);
+  }, [persistUiConfig]);
 
   // Load all provider API keys on mount
   useEffect(() => {
@@ -454,24 +561,33 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
     [models],
   );
 
-  // Toggle confidence indicator with localStorage persistence
-  const toggleConfidenceIndicator = useCallback((checked: boolean) => {
-    setShowConfidenceIndicator(checked);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("showConfidenceIndicator", checked.toString());
-    }
-    // Trigger a custom event to notify other components
-    window.dispatchEvent(
-      new CustomEvent("confidenceIndicatorChanged", { detail: checked }),
-    );
-  }, []);
+  // Toggle confidence indicator — persisted to the backend (SQLite), with
+  // localStorage kept as a synchronous read cache.
+  const toggleConfidenceIndicator = useCallback(
+    (checked: boolean) => {
+      setShowConfidenceIndicator(checked);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("showConfidenceIndicator", checked.toString());
+      }
+      persistUiConfig({ showConfidenceIndicator: checked });
+      // Trigger a custom event to notify other components
+      window.dispatchEvent(
+        new CustomEvent("confidenceIndicatorChanged", { detail: checked }),
+      );
+    },
+    [persistUiConfig],
+  );
 
-  const toggleIsAutoSummary = useCallback((checked: boolean) => {
-    setisAutoSummary(checked);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("isAutoSummary", checked.toString());
-    }
-  }, []);
+  const toggleIsAutoSummary = useCallback(
+    (checked: boolean) => {
+      setisAutoSummary(checked);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("isAutoSummary", checked.toString());
+      }
+      persistUiConfig({ isAutoSummary: checked });
+    },
+    [persistUiConfig],
+  );
 
   // Toggle beta feature with localStorage persistence
   const toggleBetaFeature = useCallback(
@@ -557,16 +673,20 @@ export function ConfigProvider({ children }: { children: ReactNode }) {
   );
 
   // Wrapper for setSelectedLanguage that persists to localStorage and syncs to Rust
-  const handleSetSelectedLanguage = useCallback((lang: string) => {
-    setSelectedLanguage(lang);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("primaryLanguage", lang);
-    }
-    // Sync with Rust in-memory state for live recording
-    invoke("set_language_preference", { language: lang }).catch((err) =>
-      console.error("Failed to sync language preference to Rust:", err),
-    );
-  }, []);
+  const handleSetSelectedLanguage = useCallback(
+    (lang: string) => {
+      setSelectedLanguage(lang);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("primaryLanguage", lang);
+      }
+      persistUiConfig({ primaryLanguage: lang });
+      // Sync with Rust in-memory state for live recording
+      invoke("set_language_preference", { language: lang }).catch((err) =>
+        console.error("Failed to sync language preference to Rust:", err),
+      );
+    },
+    [persistUiConfig],
+  );
 
   const value: ConfigContextType = useMemo(
     () => ({

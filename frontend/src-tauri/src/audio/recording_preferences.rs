@@ -1,10 +1,12 @@
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::{AppHandle, Runtime};
-use tauri_plugin_store::StoreExt;
+use tauri::{AppHandle, Manager, Runtime};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+
+use crate::database::repositories::setting::{SettingsRepository, KEY_RECORDING_PREFERENCES};
+use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RecordingPreferences {
@@ -15,6 +17,16 @@ pub struct RecordingPreferences {
     pub preferred_mic_device: Option<String>,
     #[serde(default)]
     pub preferred_system_device: Option<String>,
+    /// Show the "inform participants" toast when a recording starts.
+    /// Previously its own tauri-plugin-store file (`preferences.json`,
+    /// written by the frontend directly); folded in here so all recording
+    /// settings live in one place.
+    #[serde(default = "default_true")]
+    pub show_recording_notification: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for RecordingPreferences {
@@ -25,6 +37,7 @@ impl Default for RecordingPreferences {
             file_format: "mp4".to_string(),
             preferred_mic_device: None,
             preferred_system_device: None,
+            show_recording_notification: true,
         }
     }
 }
@@ -82,34 +95,105 @@ pub fn generate_recording_filename(format: &str) -> String {
     format!("recording_{}.{}", timestamp, format)
 }
 
-/// Load recording preferences from store
+/// Fetch the SQLite pool, if `AppState` has been managed yet. `None` early
+/// in startup — e.g. on a first-launch cold start, before the frontend has
+/// created the database.
+fn db_pool<R: Runtime>(app: &AppHandle<R>) -> Option<sqlx::SqlitePool> {
+    app.try_state::<AppState>()
+        .map(|s| s.db_manager.pool().clone())
+}
+
+/// One-time, read-only import of recording preferences from the legacy
+/// tauri-plugin-store JSON file (`recording_preferences.json`), written
+/// before this moved to SQLite. Read directly off disk (same `$APPDATA`
+/// location and flat `{"preferences": ...}` shape the store plugin used,
+/// with its default serializer) so this module no longer depends on the
+/// plugin at all. The file is left in place afterward.
+fn import_legacy_recording_preferences<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Option<RecordingPreferences> {
+    let path = app
+        .path()
+        .app_data_dir()
+        .ok()?
+        .join("recording_preferences.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    let root: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let value = root.get("preferences")?;
+    match serde_json::from_value::<RecordingPreferences>(value.clone()) {
+        Ok(prefs) => Some(prefs),
+        Err(e) => {
+            warn!("Failed to deserialize legacy recording preferences: {}", e);
+            None
+        }
+    }
+}
+
+/// One-time, read-only import of the "show recording notification" toggle
+/// from the legacy tauri-plugin-store JSON file (`preferences.json`) — a
+/// *different* file from `recording_preferences.json`, written directly by
+/// the frontend's JS-side `Store` API (`RecordingSettings.tsx` /
+/// `recordingNotification.tsx`). Folded into `RecordingPreferences` on
+/// import so it lives in the same SQLite row going forward. The file is
+/// left in place afterward.
+fn import_legacy_show_recording_notification<R: Runtime>(app: &AppHandle<R>) -> Option<bool> {
+    let path = app.path().app_data_dir().ok()?.join("preferences.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    let root: serde_json::Value = serde_json::from_str(&content).ok()?;
+    root.get("show_recording_notification")?.as_bool()
+}
+
+/// Load recording preferences from the database
 pub async fn load_recording_preferences<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<RecordingPreferences> {
-    // Try to load from Tauri store
-    let store = match app.store("recording_preferences.json") {
-        Ok(store) => store,
-        Err(e) => {
-            warn!("Failed to access store: {}, using defaults", e);
+    let pool = match db_pool(app) {
+        Some(pool) => pool,
+        None => {
+            info!("Database not yet initialized, using default recording preferences");
             return Ok(RecordingPreferences::default());
         }
     };
 
-    // Try to get the preferences from store
-    let prefs = if let Some(value) = store.get("preferences") {
-        match serde_json::from_value::<RecordingPreferences>(value.clone()) {
-            Ok(p) => {
-                info!("Loaded recording preferences from store");
-                p
-            }
-            Err(e) => {
-                warn!("Failed to deserialize preferences: {}, using defaults", e);
+    let prefs = match SettingsRepository::get_setting::<RecordingPreferences>(
+        &pool,
+        KEY_RECORDING_PREFERENCES,
+    )
+    .await
+    {
+        Ok(Some(p)) => {
+            info!("Loaded recording preferences from database");
+            p
+        }
+        Ok(None) => {
+            let base_imported = import_legacy_recording_preferences(app);
+            let notification_imported = import_legacy_show_recording_notification(app);
+
+            if base_imported.is_none() && notification_imported.is_none() {
+                info!("No stored preferences found, using defaults");
                 RecordingPreferences::default()
+            } else {
+                let mut imported = base_imported.unwrap_or_default();
+                if let Some(show_notification) = notification_imported {
+                    imported.show_recording_notification = show_notification;
+                }
+                info!("Importing legacy recording preferences (recording_preferences.json / preferences.json)");
+                if let Err(e) =
+                    SettingsRepository::set_setting(&pool, KEY_RECORDING_PREFERENCES, &imported)
+                        .await
+                {
+                    warn!("Failed to persist imported recording preferences: {}", e);
+                }
+                imported
             }
         }
-    } else {
-        info!("No stored preferences found, using defaults");
-        RecordingPreferences::default()
+        Err(e) => {
+            warn!(
+                "Failed to load recording preferences: {}, using defaults",
+                e
+            );
+            RecordingPreferences::default()
+        }
     };
 
     info!("Loaded recording preferences: save_folder={:?}, auto_save={}, format={}, mic={:?}, system={:?}",
@@ -118,7 +202,7 @@ pub async fn load_recording_preferences<R: Runtime>(
     Ok(prefs)
 }
 
-/// Save recording preferences to store
+/// Save recording preferences to the database
 pub async fn save_recording_preferences<R: Runtime>(
     app: &AppHandle<R>,
     preferences: &RecordingPreferences,
@@ -127,24 +211,13 @@ pub async fn save_recording_preferences<R: Runtime>(
           preferences.save_folder, preferences.auto_save, preferences.file_format,
           preferences.preferred_mic_device, preferences.preferred_system_device);
 
-    // Get or create store
-    let store = app
-        .store("recording_preferences.json")
-        .map_err(|e| anyhow::anyhow!("Failed to access store: {}", e))?;
+    let pool =
+        db_pool(app).ok_or_else(|| anyhow!("Database not yet initialized — try again shortly"))?;
+    SettingsRepository::set_setting(&pool, KEY_RECORDING_PREFERENCES, preferences)
+        .await
+        .map_err(|e| anyhow!("Failed to save recording preferences: {}", e))?;
 
-    // Serialize preferences to JSON value
-    let prefs_value = serde_json::to_value(preferences)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize preferences: {}", e))?;
-
-    // Save to store
-    store.set("preferences", prefs_value);
-
-    // Persist to disk
-    store
-        .save()
-        .map_err(|e| anyhow::anyhow!("Failed to save store to disk: {}", e))?;
-
-    info!("Successfully persisted recording preferences to disk");
+    info!("Successfully persisted recording preferences to database");
 
     // Ensure the directory exists
     ensure_recordings_directory(&preferences.save_folder)?;

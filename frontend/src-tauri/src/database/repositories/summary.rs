@@ -75,7 +75,7 @@ impl SummaryProcessesRepository {
         meeting_id: &str,
     ) -> Result<Option<SummaryProcess>, sqlx::Error> {
         sqlx::query_as::<_, SummaryProcess>(
-            "SELECT p.* FROM summary_processes p JOIN transcript_chunks t ON p.meeting_id = t.meeting_id WHERE p.meeting_id = ?",
+            "SELECT * FROM summary_processes WHERE meeting_id = ?",
         )
         .bind(meeting_id)
         .fetch_optional(pool)

@@ -28,9 +28,6 @@ pub struct Transcript {
     pub meeting_id: String,
     pub transcript: String,
     pub timestamp: String,
-    pub summary: Option<String>,
-    pub action_items: Option<String>,
-    pub key_points: Option<String>,
     // Recording-relative timestamps for audio-transcript synchronization
     pub audio_start_time: Option<f64>,
     pub audio_end_time: Option<f64>,
@@ -74,18 +71,6 @@ pub struct SummaryProcess {
     pub metadata: Option<String>,      // JSON
     pub result_backup: Option<String>, // Backup of result before regeneration
     pub result_backup_timestamp: Option<chrono::DateTime<chrono::Utc>>, // When backup was created
-}
-
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
-pub struct TranscriptChunk {
-    pub meeting_id: String,
-    pub meeting_name: Option<String>,
-    pub transcript_text: String,
-    pub model: String,
-    pub model_name: String,
-    pub chunk_size: Option<i64>,
-    pub overlap: Option<i64>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

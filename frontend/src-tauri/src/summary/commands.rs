@@ -1,6 +1,5 @@
 use crate::database::repositories::{
     meeting::MeetingsRepository, summary::SummaryProcessesRepository,
-    transcript_chunk::TranscriptChunksRepository,
 };
 use crate::state::AppState;
 use crate::summary::service::SummaryService;
@@ -211,24 +210,6 @@ pub async fn api_process_transcript<R: Runtime>(
         .map_err(|e| format!("Failed to initialize process: {}", e))?;
 
     log_info!("✓ Summary process initialized for meeting_id: {}", &m_id);
-
-    // Save transcript chunks data (matching Python backend behavior)
-    let chunk_size = _chunk_size.unwrap_or(40000);
-    let overlap = _overlap.unwrap_or(1000);
-
-    TranscriptChunksRepository::save_transcript_data(
-        &pool,
-        &m_id,
-        &text,
-        &model,
-        &model_name,
-        chunk_size,
-        overlap,
-    )
-    .await
-    .map_err(|e| format!("Failed to save transcript data: {}", e))?;
-
-    log_info!("✓ Transcript chunks saved for meeting_id: {}", &m_id);
 
     // Spawn background task for actual processing
     let meeting_id_clone = m_id.clone();

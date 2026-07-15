@@ -142,7 +142,6 @@ chrono-tz = "0.10"
 tauri = { version = "2.11.0", features = [ "devtools", "macos-private-api", "protocol-asset", "tray-icon"] }
 tauri-plugin-fs = "2.5.0"
 tauri-plugin-dialog = "2.7.0"
-tauri-plugin-store = "2.4.2"
 tauri-plugin-notification = "2.3.3"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-os = "2.3.2"

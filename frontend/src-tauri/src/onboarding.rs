@@ -1,10 +1,9 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Runtime};
-use tauri_plugin_store::StoreExt;
+use tauri::{AppHandle, Manager, Runtime};
 
-use crate::database::repositories::setting::SettingsRepository;
+use crate::database::repositories::setting::{SettingsRepository, KEY_ONBOARDING_STATUS};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -24,7 +23,7 @@ pub struct ModelStatus {
     /// Now reflects the local Whisper model state.
     #[serde(rename = "parakeet", alias = "transcription")]
     pub transcription: String,
-    pub summary: String,  // Summary model (gemma3:1b or gemma3:4b)
+    pub summary: String, // Summary model (gemma3:1b or gemma3:4b)
 }
 
 impl Default for OnboardingStatus {
@@ -42,44 +41,84 @@ impl Default for OnboardingStatus {
     }
 }
 
-/// Load onboarding status from store
-pub async fn load_onboarding_status<R: Runtime>(app: &AppHandle<R>) -> Result<OnboardingStatus> {
-    // Try to load from Tauri store
-    let store = match app.store("onboarding-status.json") {
-        Ok(store) => store,
-        Err(e) => {
-            warn!("Failed to access onboarding store: {}, using defaults", e);
-            return Ok(OnboardingStatus::default());
-        }
-    };
-
-    // Try to get the status from store
-    let status = if let Some(value) = store.get("status") {
-        match serde_json::from_value::<OnboardingStatus>(value.clone()) {
-            Ok(s) => {
-                info!(
-                    "Loaded onboarding status from store - Step: {}, Completed: {}",
-                    s.current_step, s.completed
-                );
-                s
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to deserialize onboarding status: {}, using defaults",
-                    e
-                );
-                OnboardingStatus::default()
-            }
-        }
-    } else {
-        info!("No stored onboarding status found, using defaults");
-        OnboardingStatus::default()
-    };
-
-    Ok(status)
+/// Fetch the SQLite pool, if `AppState` has been managed yet. `None` early
+/// in startup — e.g. on a first-launch cold start, before the frontend has
+/// created the database via `initialize_fresh_database` /
+/// `import_and_initialize_database`.
+fn db_pool<R: Runtime>(app: &AppHandle<R>) -> Option<sqlx::SqlitePool> {
+    app.try_state::<AppState>()
+        .map(|s| s.db_manager.pool().clone())
 }
 
-/// Save onboarding status to store
+/// One-time, read-only import of onboarding status from the legacy
+/// tauri-plugin-store JSON file (`onboarding-status.json`), written before
+/// this moved to SQLite. Read directly off disk (same `$APPDATA` location
+/// and flat `{"status": ...}` shape the store plugin used, with its default
+/// serializer) so this module no longer depends on the plugin at all. The
+/// file is left in place afterward.
+fn import_legacy_onboarding_status<R: Runtime>(app: &AppHandle<R>) -> Option<OnboardingStatus> {
+    let path = app
+        .path()
+        .app_data_dir()
+        .ok()?
+        .join("onboarding-status.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    let root: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let value = root.get("status")?;
+    match serde_json::from_value::<OnboardingStatus>(value.clone()) {
+        Ok(status) => Some(status),
+        Err(e) => {
+            warn!("Failed to deserialize legacy onboarding status: {}", e);
+            None
+        }
+    }
+}
+
+/// Read onboarding status straight from the database, distinguishing "no DB
+/// pool yet" / "pool ready but nothing saved" (both `None`) from an actual
+/// saved status (imports the legacy JSON file into SQLite on first read, if
+/// present).
+async fn fetch_onboarding_status<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Option<OnboardingStatus>> {
+    let pool = match db_pool(app) {
+        Some(pool) => pool,
+        None => return Ok(None),
+    };
+
+    match SettingsRepository::get_setting::<OnboardingStatus>(&pool, KEY_ONBOARDING_STATUS).await {
+        Ok(Some(status)) => {
+            info!(
+                "Loaded onboarding status from database - Step: {}, Completed: {}",
+                status.current_step, status.completed
+            );
+            Ok(Some(status))
+        }
+        Ok(None) => {
+            if let Some(imported) = import_legacy_onboarding_status(app) {
+                info!("Importing legacy onboarding status from onboarding-status.json");
+                if let Err(e) =
+                    SettingsRepository::set_setting(&pool, KEY_ONBOARDING_STATUS, &imported).await
+                {
+                    warn!("Failed to persist imported onboarding status: {}", e);
+                }
+                Ok(Some(imported))
+            } else {
+                info!("No stored onboarding status found, using defaults");
+                Ok(None)
+            }
+        }
+        Err(e) => Err(anyhow!("Failed to load onboarding status: {}", e)),
+    }
+}
+
+/// Load onboarding status, falling back to defaults if nothing has been
+/// saved yet (or the database isn't ready yet during early startup).
+pub async fn load_onboarding_status<R: Runtime>(app: &AppHandle<R>) -> Result<OnboardingStatus> {
+    Ok(fetch_onboarding_status(app).await?.unwrap_or_default())
+}
+
+/// Save onboarding status to the database
 pub async fn save_onboarding_status<R: Runtime>(
     app: &AppHandle<R>,
     status: &OnboardingStatus,
@@ -89,46 +128,29 @@ pub async fn save_onboarding_status<R: Runtime>(
         status.current_step, status.completed
     );
 
-    // Get or create store
-    let store = app
-        .store("onboarding-status.json")
-        .map_err(|e| anyhow::anyhow!("Failed to access onboarding store: {}", e))?;
-
     // Update last_updated timestamp
     let mut status = status.clone();
     status.last_updated = chrono::Utc::now().to_rfc3339();
 
-    // Serialize status to JSON value
-    let status_value = serde_json::to_value(&status)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize onboarding status: {}", e))?;
+    let pool =
+        db_pool(app).ok_or_else(|| anyhow!("Database not yet initialized — try again shortly"))?;
+    SettingsRepository::set_setting(&pool, KEY_ONBOARDING_STATUS, &status)
+        .await
+        .map_err(|e| anyhow!("Failed to save onboarding status: {}", e))?;
 
-    // Save to store
-    store.set("status", status_value);
-
-    // Persist to disk
-    store
-        .save()
-        .map_err(|e| anyhow::anyhow!("Failed to save onboarding store to disk: {}", e))?;
-
-    info!("Successfully persisted onboarding status to disk");
+    info!("Successfully persisted onboarding status to database");
     Ok(())
 }
 
-/// Reset onboarding status (delete from store)
+/// Reset onboarding status (delete from database)
 pub async fn reset_onboarding_status<R: Runtime>(app: &AppHandle<R>) -> Result<()> {
     info!("Resetting onboarding status");
 
-    let store = app
-        .store("onboarding-status.json")
-        .map_err(|e| anyhow::anyhow!("Failed to access onboarding store: {}", e))?;
-
-    // Clear the status key
-    store.delete("status");
-
-    // Persist deletion to disk
-    store
-        .save()
-        .map_err(|e| anyhow::anyhow!("Failed to save onboarding store after reset: {}", e))?;
+    let pool =
+        db_pool(app).ok_or_else(|| anyhow!("Database not yet initialized — try again shortly"))?;
+    SettingsRepository::delete_setting(&pool, KEY_ONBOARDING_STATUS)
+        .await
+        .map_err(|e| anyhow!("Failed to reset onboarding status: {}", e))?;
 
     info!("Successfully reset onboarding status");
     Ok(())
@@ -139,21 +161,9 @@ pub async fn reset_onboarding_status<R: Runtime>(app: &AppHandle<R>) -> Result<(
 pub async fn get_onboarding_status<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<Option<OnboardingStatus>, String> {
-    let status = load_onboarding_status(&app)
+    fetch_onboarding_status(&app)
         .await
-        .map_err(|e| format!("Failed to load onboarding status: {}", e))?;
-
-    // Return None if it's the default (never saved before)
-    // Check if we have any saved data by seeing if the store has the key
-    let store = app
-        .store("onboarding-status.json")
-        .map_err(|e| format!("Failed to access store: {}", e))?;
-
-    if store.get("status").is_none() {
-        Ok(None)
-    } else {
-        Ok(Some(status))
-    }
+        .map_err(|e| format!("Failed to load onboarding status: {}", e))
 }
 
 #[tauri::command]
