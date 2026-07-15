@@ -2,7 +2,8 @@
 resolver = "2"
 members = [
     "frontend/src-tauri",
-    "llama-helper"
+    "llama-helper",
+    "meetily-mcp"
 ]
 
 # Shared workspace settings
@@ -24,5 +25,12 @@ tokio = { version = "1.32.0", features = ["full"] }
 # manifests). meetily uses cargo's default release profile (opt-level=3)
 # while llama-helper wants size-optimised "s" for faster sidecar startup.
 [profile.release.package.llama-helper]
+codegen-units = 1
+opt-level = "s"
+
+# meetily-mcp is a short-lived stdio sidecar spawned per MCP session — its cost
+# is startup and footprint, not throughput, so optimise it for size like
+# llama-helper.
+[profile.release.package.meetily-mcp]
 codegen-units = 1
 opt-level = "s"

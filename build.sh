@@ -154,6 +154,21 @@ find "$HELPER_DEST_DIR" -maxdepth 1 -name 'llama-helper-*' -delete
 cp "$HELPER_SRC" "$HELPER_DEST"
 echo "==> Staged sidecar: $HELPER_DEST"
 
+# ----- meetily-mcp -----
+# Not a Tauri sidecar: it's a standalone MCP server that an external client
+# (Claude Desktop / Claude Code) spawns by absolute path, and it talks to the
+# SQLite database directly rather than to the app. So it's built and left in
+# target/release for the user to register — deliberately not staged into
+# frontend/src-tauri/binaries. It has no GPU backend, hence no feature flags.
+echo "==> Building meetily-mcp (MCP server)"
+cargo build --release -p meetily-mcp
+
+MCP_BIN_NAME="meetily-mcp"
+if [[ "$(uname -s)" == "MINGW"* || "$(uname -s)" == "MSYS"* ]]; then
+    MCP_BIN_NAME="meetily-mcp.exe"
+fi
+MCP_BIN="$ROOT/target/release/$MCP_BIN_NAME"
+
 echo "==> Running tauri build --bundles appimage (${MODE})"
 # Tauri exits 1 on the post-bundle TAURI_SIGNING_PRIVATE_KEY warning even when
 # bundles succeeded — verify by artifact existence rather than exit code.
@@ -177,6 +192,10 @@ if [[ -n "$APPIMAGE" ]]; then
     echo
     echo "==> Build succeeded"
     echo "    AppImage: $APPIMAGE ($(du -h "$APPIMAGE" | cut -f1))"
+    if [[ -f "$MCP_BIN" ]]; then
+        echo "    MCP server: $MCP_BIN ($(du -h "$MCP_BIN" | cut -f1))"
+        echo "                register it with your MCP client — see meetily-mcp/README.md"
+    fi
     exit 0
 else
     echo
