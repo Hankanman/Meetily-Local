@@ -382,12 +382,21 @@ pub fn start_transcription_task<R: Runtime>(
                                         // for system).
                                         let (source_tag, default_speaker) =
                                             default_speaker_for_source(chunk_source);
-                                        let diarization_result = chunk_audio_for_diarization
-                                            .as_ref()
-                                            .and_then(|samples| {
-                                                let diarizer =
-                                                    crate::speaker_diarization::current_diarizer()?;
-                                                match diarizer.process(sequence_id, samples) {
+                                        // Speaker embedding is CPU-bound ONNX
+                                        // inference; run it off the async
+                                        // runtime so it can't stall other tasks
+                                        // (same reasoning as whisper inference).
+                                        let diarization_result = match (
+                                            chunk_audio_for_diarization,
+                                            crate::speaker_diarization::current_diarizer(),
+                                        ) {
+                                            (Some(samples), Some(diarizer)) => {
+                                                tokio::task::spawn_blocking(move || {
+                                                    diarizer.process(sequence_id, &samples)
+                                                })
+                                                .await
+                                                .ok()
+                                                .and_then(|res| match res {
                                                     Ok(result) => Some(result),
                                                     Err(e) => {
                                                         log::debug!(
@@ -397,8 +406,10 @@ pub fn start_transcription_task<R: Runtime>(
                                                         );
                                                         None
                                                     }
-                                                }
-                                            });
+                                                })
+                                            }
+                                            _ => None,
+                                        };
                                         let (speaker_label, voice_profile_id) =
                                             match diarization_result {
                                                 Some(r) => (r.label, r.voice_profile_id),

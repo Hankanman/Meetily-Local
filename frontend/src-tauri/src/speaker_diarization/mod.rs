@@ -1,10 +1,15 @@
 //! Speaker diarization layer.
 //!
 //! Sits behind the dual-VAD audio pipeline (see `audio::pipeline`): when a
-//! system-source speech segment is about to be transcribed, we extract a
-//! 192-dim speaker embedding and assign it to a cluster (online, real-time)
-//! so the transcription gets tagged with "Speaker 1", "Speaker 2", etc.
-//! Mic-source segments bypass this layer — they're labeled "Me" directly.
+//! speech segment is about to be transcribed, we extract a 512-dim CAM++
+//! speaker embedding and assign it to a cluster (online, real-time) so the
+//! transcription gets tagged with "Speaker 1", "Speaker 2", etc.
+//!
+//! Both mic AND system segments run through this layer when a diarizer is
+//! loaded — in a speakers-in-a-room setup the mic captures every
+//! participant, so clustering the mic stream separates those voices instead
+//! of lumping them under the local user. The "Me" placeholder is used only
+//! when no diarizer is loaded (speaker model not downloaded).
 //!
 //! ## Lifecycle
 //! - At app startup the model file is checked but not loaded (lazy).
