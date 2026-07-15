@@ -380,6 +380,13 @@ pub fn start_transcription_task<R: Runtime>(
                                         // clustering. When no model is loaded, falls back to the
                                         // source-specific placeholder ("Me" for mic, "Speaker"
                                         // for system).
+                                        //
+                                        // The local user reads as "Me" here too, without a branch:
+                                        // if they've enrolled their voice in settings, their
+                                        // profile is named "Me" and matches like any other stored
+                                        // speaker. If they haven't, they cluster as "Speaker N"
+                                        // like anyone else in the room. See
+                                        // `speaker_diarization::enrollment`.
                                         let (source_tag, default_speaker) =
                                             default_speaker_for_source(chunk_source);
                                         // Speaker embedding is CPU-bound ONNX

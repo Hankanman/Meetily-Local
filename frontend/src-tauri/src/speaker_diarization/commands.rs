@@ -662,13 +662,16 @@ pub async fn merge_cluster_into_profile<R: Runtime>(
     })
 }
 
-/// Run the post-recording 2-pass refinement and return refined speaker
-/// assignments, one per system-source segment (keyed by `sequence_id`).
+/// Run the post-recording offline refinement and return refined speaker
+/// assignments, one per diarized segment (keyed by `sequence_id`).
 /// Frontend consumers update displayed transcripts whose `sequence_id`
 /// matches. Stored profile matches pass through unchanged.
 ///
 /// Also emits `transcript-refinement-complete` (`{ refined_count, changed_count }`)
 /// so UI can show a brief "speakers refined" toast.
+///
+/// This is the *manual* entry point and does not touch the database — see
+/// [`refine_and_persist`] for the automatic post-meeting pass.
 #[command]
 pub async fn refine_speaker_assignments<R: Runtime>(
     app: AppHandle<R>,
@@ -695,6 +698,103 @@ pub async fn refine_speaker_assignments<R: Runtime>(
     );
 
     Ok(refined)
+}
+
+/// Re-cluster the just-finished recording offline and write the improved
+/// speaker labels into `meeting_id`'s saved transcripts.
+///
+/// Called right after the meeting is saved (see
+/// `audio::recording_commands::trigger_post_meeting_refine`). Emits
+/// `speakers-refined` (`{ meeting_id, changed_count }`) on success so the
+/// meeting-details view can reload the transcript.
+///
+/// Every skip path is a no-op rather than an error to the user: this runs
+/// unattended and the live labels are already saved and usable, so the worst
+/// realistic outcome is "labels stay as they were".
+///
+/// ## Diarizer lifetime
+///
+/// This depends on [`current_diarizer`] still holding the diarizer that
+/// produced the meeting. That holds at the call site:
+/// `stop_recording` deliberately does *not* clear the slot (see
+/// [`shutdown_for_recording`]) precisely so promote/refine can still reach
+/// the history, and only the next `try_init_for_recording` replaces it. If
+/// the slot is empty anyway (speaker model never downloaded, so no diarizer
+/// was ever built) we log and skip.
+pub async fn refine_and_persist<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) -> Result<usize> {
+    let Some(diarizer) = current_diarizer() else {
+        log::info!(
+            "No diarizer available for meeting {} — skipping speaker refinement",
+            meeting_id
+        );
+        return Ok(0);
+    };
+
+    let history = diarizer.export_history();
+    if history.is_empty() {
+        log::info!(
+            "Diarizer history empty for meeting {} — nothing to refine",
+            meeting_id
+        );
+        return Ok(0);
+    }
+
+    // Clustering is pure CPU work over the whole session's embeddings; keep
+    // it off the async runtime so it can't stall other tasks (same reasoning
+    // as whisper/embedding inference elsewhere).
+    let refined = tokio::task::spawn_blocking(move || {
+        refine_assignments(&history, DEFAULT_CLUSTER_THRESHOLD)
+    })
+    .await
+    .map_err(|e| anyhow!("Speaker refinement task panicked: {}", e))?;
+
+    let updates: Vec<(u64, String, String)> = refined
+        .iter()
+        .filter(|r| r.changed)
+        .map(|r| {
+            (
+                r.sequence_id,
+                r.previous_speaker.clone(),
+                r.speaker.clone(),
+            )
+        })
+        .collect();
+
+    if updates.is_empty() {
+        log::info!(
+            "Speaker refinement for meeting {}: {} segments, live labels already optimal",
+            meeting_id,
+            refined.len()
+        );
+        return Ok(0);
+    }
+
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| anyhow!("AppState unavailable; cannot persist speaker refinement"))?;
+    let pool = state.db_manager.pool();
+
+    let changed_count =
+        TranscriptsRepository::update_speakers_by_sequence(pool, meeting_id, &updates)
+            .await
+            .map_err(|e| anyhow!("DB error applying speaker refinement: {}", e))?;
+
+    log::info!(
+        "Speaker refinement for meeting {}: {} segments re-clustered, {} rows relabeled",
+        meeting_id,
+        refined.len(),
+        changed_count
+    );
+
+    let _ = app.emit(
+        "speakers-refined",
+        serde_json::json!({
+            "meeting_id": meeting_id,
+            "changed_count": changed_count,
+        }),
+    );
+
+    Ok(changed_count as usize)
 }
 
 /// Combine two centroid+sample_count pairs into a single L2-normalized

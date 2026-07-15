@@ -942,12 +942,49 @@ pub async fn get_recording_meeting_name() -> Result<Option<String>, String> {
 /// `retranscription::spawn_auto_refine`, so this never blocks the UI. All
 /// skip/failure reasons are logged there and surfaced only via the
 /// `meeting-refining` / `meeting-refined` / `meeting-refine-failed` events.
+///
+/// Two passes run here, in a deliberate order inside one background task:
+///
+/// 1. **Speaker refinement** — re-clusters the live session's embeddings
+///    offline and rewrites `speaker` labels in place (fast: in-memory
+///    clustering plus a handful of UPDATEs).
+/// 2. **Transcription auto-refine** — optionally re-transcribes the whole
+///    meeting with a higher-accuracy model.
+///
+/// The order is load-bearing, and they must not overlap. Auto-refine
+/// `DELETE`s every transcript row for the meeting and re-`INSERT`s from its
+/// own batch pass; running speaker refinement concurrently would race that,
+/// with its UPDATEs landing on rows about to be deleted. It also installs
+/// its batch diarizer as the process-wide `current_diarizer`, which would
+/// swap the history out from under a concurrent refinement. Running speaker
+/// refinement first, awaited, avoids both: it reads the live diarizer and
+/// finishes before auto-refine can touch anything.
+///
+/// When auto-refine does run, it re-diarizes from scratch and supersedes
+/// pass 1's labels — which is fine and intended: batch diarization over the
+/// full audio is strictly better than re-clustering the live embeddings.
+/// Pass 1 is what makes the common case good, since auto-refine skips
+/// whenever no higher-accuracy model is downloaded.
 #[tauri::command]
 pub async fn trigger_post_meeting_refine<R: Runtime>(
     app: AppHandle<R>,
     meeting_id: String,
     meeting_folder_path: String,
 ) -> Result<(), String> {
-    super::retranscription::spawn_auto_refine(app, meeting_id, meeting_folder_path);
+    tauri::async_runtime::spawn(async move {
+        // Never let a speaker-refinement failure block the transcription
+        // pass — they're independent improvements to the same meeting.
+        if let Err(e) =
+            crate::speaker_diarization::commands::refine_and_persist(&app, &meeting_id).await
+        {
+            log::warn!(
+                "Speaker refinement failed for meeting {}: {} (transcript labels left as recorded)",
+                meeting_id,
+                e
+            );
+        }
+
+        super::retranscription::spawn_auto_refine(app, meeting_id, meeting_folder_path);
+    });
     Ok(())
 }

@@ -693,6 +693,12 @@ pub fn run() {
             speaker_diarization::commands::merge_voice_profiles,
             speaker_diarization::commands::merge_cluster_into_profile,
             speaker_diarization::commands::refine_speaker_assignments,
+            // "Record my voice" self-enrollment
+            speaker_diarization::enrollment::start_self_voice_enrollment,
+            speaker_diarization::enrollment::cancel_self_voice_enrollment,
+            speaker_diarization::enrollment::finish_self_voice_enrollment,
+            speaker_diarization::enrollment::self_voice_status,
+            speaker_diarization::enrollment::delete_self_voice_profile,
             get_audio_devices,
             trigger_microphone_permission,
             start_recording_with_devices,

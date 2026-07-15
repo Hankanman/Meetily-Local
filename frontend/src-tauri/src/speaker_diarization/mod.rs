@@ -11,6 +11,24 @@
 //! of lumping them under the local user. The "Me" placeholder is used only
 //! when no diarizer is loaded (speaker model not downloaded).
 //!
+//! ## How the local user gets labelled "Me" with a diarizer loaded
+//!
+//! Because mic segments are clustered rather than assumed to be the user, the
+//! user's own voice would otherwise surface as "Speaker N". The fix is
+//! enrollment (see [`enrollment`]): the user records a baseline of their own
+//! voice in settings, and it's stored as an ordinary voice profile — flagged
+//! `is_self` and named [`SELF_SPEAKER_LABEL`]. Nothing in the diarizer
+//! special-cases it: [`SpeakerProfileMatcher`] recognizes it like any other
+//! stored speaker, and [`Diarizer::process`] renders the matched profile's
+//! name, which for that row is "Me".
+//!
+//! That's why the label lives in the profile's *name* rather than being
+//! derived from the flag at match time: it needs no branch on any hot path,
+//! self-attribution works on mic and system sources alike (a user dialled into
+//! their own meeting still matches), and the flag stays what it should be —
+//! the stable identity enrollment uses to find and replace the profile,
+//! independent of what the row is called.
+//!
 //! ## Lifecycle
 //! - At app startup the model file is checked but not loaded (lazy).
 //! - When recording starts and the model file is present, a [`Diarizer`] is
@@ -28,6 +46,7 @@ use std::sync::{Arc, Mutex};
 
 pub(crate) mod clusterer;
 mod embedder;
+pub mod enrollment;
 pub mod model;
 mod profile_matcher;
 mod refinement;
@@ -48,10 +67,19 @@ use anyhow::Result;
 /// single speaker into multiple "Speaker N" labels.
 pub const DEFAULT_CLUSTER_THRESHOLD: f32 = 0.55;
 
+/// Display label for the local user's own voice, and therefore the `name`
+/// stored on their enrolled voice profile (`is_self = 1`). Matches the
+/// no-diarizer mic placeholder in
+/// `audio::transcription::worker::default_speaker_for_source`, so a transcript
+/// reads the same whether or not a speaker model is loaded.
+pub const SELF_SPEAKER_LABEL: &str = "Me";
+
 /// Result of diarizing a single speech segment.
 #[derive(Debug, Clone)]
 pub struct DiarizationResult {
     /// Display label: a stored profile name when matched, else "Speaker N".
+    /// The user's enrolled profile is named [`SELF_SPEAKER_LABEL`], so their
+    /// own voice comes back as "Me" through the ordinary match path.
     pub label: String,
     /// Stored voice profile id when this segment matched a known speaker;
     /// `None` for in-session-only clusters.
@@ -116,6 +144,8 @@ impl Diarizer {
         };
 
         // A stored-profile match takes precedence over the cluster label.
+        // This is also the self-attribution path: the enrolled self profile is
+        // just another entry in the matcher, named "Me".
         let profile_match = self
             .profile_matcher
             .as_ref()

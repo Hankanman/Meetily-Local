@@ -4,21 +4,28 @@
 //! The centroid is stored as a packed little-endian f32 BLOB; the dim is
 //! stored alongside so a model change can be detected at load time before
 //! we feed a wrong-shaped vector to the matcher.
+//!
+//! One profile may carry `is_self = 1`: the local user's enrolled voice (see
+//! `speaker_diarization::enrollment`). It's an ordinary profile in every
+//! other respect — the matcher loads it alongside the rest, so the user's own
+//! voice gets recognized in meetings like any known speaker.
 
 use crate::database::models::VoiceProfile;
 use chrono::Utc;
 use sqlx::{Error as SqlxError, SqlitePool};
 use uuid::Uuid;
 
+/// Columns of `voice_profiles` in the order [`VoiceProfile`] declares them.
+const PROFILE_COLUMNS: &str =
+    "id, name, email, embedding, embedding_dim, sample_count, is_self, created_at, updated_at";
+
 pub struct VoiceProfilesRepository;
 
 impl VoiceProfilesRepository {
     pub async fn list_all(pool: &SqlitePool) -> Result<Vec<VoiceProfile>, SqlxError> {
-        sqlx::query_as::<_, VoiceProfile>(
-            "SELECT id, name, email, embedding, embedding_dim, sample_count, created_at, updated_at
-             FROM voice_profiles
-             ORDER BY name COLLATE NOCASE",
-        )
+        sqlx::query_as::<_, VoiceProfile>(&format!(
+            "SELECT {PROFILE_COLUMNS} FROM voice_profiles ORDER BY name COLLATE NOCASE"
+        ))
         .fetch_all(pool)
         .await
     }
@@ -27,17 +34,122 @@ impl VoiceProfilesRepository {
         pool: &SqlitePool,
         id: &str,
     ) -> Result<Option<VoiceProfile>, SqlxError> {
-        sqlx::query_as::<_, VoiceProfile>(
-            "SELECT id, name, email, embedding, embedding_dim, sample_count, created_at, updated_at
-             FROM voice_profiles WHERE id = ?",
-        )
+        sqlx::query_as::<_, VoiceProfile>(&format!(
+            "SELECT {PROFILE_COLUMNS} FROM voice_profiles WHERE id = ?"
+        ))
         .bind(id)
         .fetch_optional(pool)
         .await
     }
 
-    /// Insert a new profile. `email` is optional — pass `None` if the user
-    /// only provided a display name. Returns the generated id.
+    /// The local user's enrolled voice profile, if they've recorded one.
+    /// At most one row can satisfy this (partial unique index on `is_self`).
+    pub async fn get_self(pool: &SqlitePool) -> Result<Option<VoiceProfile>, SqlxError> {
+        sqlx::query_as::<_, VoiceProfile>(&format!(
+            "SELECT {PROFILE_COLUMNS} FROM voice_profiles WHERE is_self = 1"
+        ))
+        .fetch_optional(pool)
+        .await
+    }
+
+    /// Clear the self flag from every profile, leaving the rows themselves
+    /// intact. Returns the number of profiles demoted (0 or 1 in practice).
+    ///
+    /// Used to demote-without-deleting, and internally by [`Self::upsert_self`]
+    /// to guarantee the "only one self profile" invariant holds *before* the
+    /// new self row is flagged — the unique index is checked per statement, so
+    /// clearing first avoids a transient two-self state that would abort the
+    /// transaction.
+    pub async fn clear_self(pool: &SqlitePool) -> Result<u64, SqlxError> {
+        let now = Utc::now().to_rfc3339();
+        let res = sqlx::query("UPDATE voice_profiles SET is_self = 0, updated_at = ? WHERE is_self = 1")
+            .bind(&now)
+            .execute(pool)
+            .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// Create or replace the local user's self profile in one atomic step.
+    ///
+    /// Re-enrollment **reuses the existing row's id** rather than deleting and
+    /// re-inserting, so transcripts already linked to the self profile
+    /// (`transcripts.voice_profile_id`) keep pointing at it — a user
+    /// re-recording their baseline shouldn't orphan their meeting history.
+    ///
+    /// `sample_count` is the number of embedding windows that went into
+    /// `embedding` (the centroid), not a delta: enrollment always rebuilds the
+    /// centroid from scratch out of the fresh recording.
+    pub async fn upsert_self(
+        pool: &SqlitePool,
+        name: &str,
+        embedding: &[f32],
+        sample_count: i64,
+    ) -> Result<String, SqlxError> {
+        let now = Utc::now().to_rfc3339();
+        let bytes = floats_to_bytes(embedding);
+        let mut tx = pool.begin().await?;
+
+        let existing: Option<String> =
+            sqlx::query_scalar("SELECT id FROM voice_profiles WHERE is_self = 1")
+                .fetch_optional(&mut *tx)
+                .await?;
+
+        // Demote every currently-flagged row first (see `clear_self`).
+        sqlx::query("UPDATE voice_profiles SET is_self = 0, updated_at = ? WHERE is_self = 1")
+            .bind(&now)
+            .execute(&mut *tx)
+            .await?;
+
+        let id = match existing {
+            Some(id) => {
+                sqlx::query(
+                    "UPDATE voice_profiles
+                     SET name = ?, embedding = ?, embedding_dim = ?, sample_count = ?,
+                         is_self = 1, updated_at = ?
+                     WHERE id = ?",
+                )
+                .bind(name)
+                .bind(&bytes)
+                .bind(embedding.len() as i64)
+                .bind(sample_count)
+                .bind(&now)
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?;
+                id
+            }
+            None => {
+                let id = format!("profile-{}", Uuid::new_v4());
+                sqlx::query(
+                    "INSERT INTO voice_profiles
+                     (id, name, email, embedding, embedding_dim, sample_count, is_self,
+                      created_at, updated_at)
+                     VALUES (?, ?, NULL, ?, ?, ?, 1, ?, ?)",
+                )
+                .bind(&id)
+                .bind(name)
+                .bind(&bytes)
+                .bind(embedding.len() as i64)
+                .bind(sample_count)
+                .bind(&now)
+                .bind(&now)
+                .execute(&mut *tx)
+                .await?;
+                id
+            }
+        };
+
+        tx.commit().await?;
+        Ok(id)
+    }
+
+    /// Insert a new profile for *another* speaker. `email` is optional — pass
+    /// `None` if the user only provided a display name. Returns the generated
+    /// id.
+    ///
+    /// Always creates a non-self profile; the local user's own profile has its
+    /// own entry point ([`Self::upsert_self`]) because it carries a
+    /// replace-in-place invariant this API doesn't.
     pub async fn create(
         pool: &SqlitePool,
         name: &str,
@@ -51,8 +163,9 @@ impl VoiceProfilesRepository {
 
         sqlx::query(
             "INSERT INTO voice_profiles
-             (id, name, email, embedding, embedding_dim, sample_count, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+             (id, name, email, embedding, embedding_dim, sample_count, is_self,
+              created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
         )
         .bind(&id)
         .bind(name)

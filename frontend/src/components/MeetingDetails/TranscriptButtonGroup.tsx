@@ -4,10 +4,11 @@ import { useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Spinner } from "@/components/ui/spinner";
-import { Copy, FolderOpen, RefreshCw, Sparkles } from "lucide-react";
+import { Copy, FolderOpen, RefreshCw, Sparkles, Users } from "lucide-react";
 import { RetranscribeDialog } from "./RetranscribeDialog";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useMeetingRefinedStatus } from "@/hooks/meeting-details/useMeetingRefinedStatus";
+import { useSpeakersRefined } from "@/hooks/meeting-details/useSpeakersRefined";
 
 interface TranscriptButtonGroupProps {
   transcriptCount: number;
@@ -42,8 +43,32 @@ export function TranscriptButtonGroup({
   // transcript replaces the fast live one.
   const refinedStatus = useMeetingRefinedStatus(meetingId, onRefetchTranscripts);
 
+  // Passive post-meeting speaker-refinement indicator: the offline
+  // re-clustering pass (see refine_and_persist on the Rust side) rewrites
+  // speaker labels in the saved transcript, so reload to pick them up.
+  // Only fires when rows actually changed.
+  const speakersRefinedCount = useSpeakersRefined(
+    meetingId,
+    onRefetchTranscripts,
+  );
+
   return (
     <div className="flex w-full items-center justify-center gap-2">
+      {speakersRefinedCount > 0 && (
+        <span
+          className="
+            inline-flex shrink-0 items-center gap-1 rounded-full border
+            border-border bg-background px-2 py-0.5 text-xs
+            text-muted-foreground
+          "
+          title={`Speaker grouping improved across ${speakersRefinedCount} ${
+            speakersRefinedCount === 1 ? "segment" : "segments"
+          } after recording`}
+        >
+          <Users className="size-3" />
+          <span className="hidden lg:inline">Speakers refined</span>
+        </span>
+      )}
       {refinedStatus === "refining" && (
         <span
           className="

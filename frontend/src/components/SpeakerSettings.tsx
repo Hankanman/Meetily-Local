@@ -27,6 +27,8 @@ import {
   updateVoiceProfile,
   VoiceProfile,
 } from "@/lib/voice-profiles";
+import { SelfVoiceEnrollment } from "./SelfVoiceEnrollment";
+import type { SelfVoiceStatus } from "@/lib/self-voice";
 
 type EditingState =
   | { kind: "idle" }
@@ -46,14 +48,15 @@ function formatRelative(iso: string): string {
 }
 
 export function SpeakerSettings() {
-  const [profiles, setProfiles] = useState<VoiceProfile[] | null>(null);
+  const [allProfiles, setAllProfiles] = useState<VoiceProfile[] | null>(null);
+  const [selfProfileId, setSelfProfileId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditingState>({ kind: "idle" });
 
   const refresh = useCallback(async () => {
     try {
       const list = await listVoiceProfiles();
-      setProfiles(list);
+      setAllProfiles(list);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -64,13 +67,37 @@ export function SpeakerSettings() {
     void refresh();
   }, [refresh]);
 
+  // The enrolled self profile is a row in `voice_profiles` like any other, but
+  // it's owned by the "Your voice" section above — showing it in the table too
+  // would offer rename/merge/delete on a profile whose name ("Me") the
+  // transcript labelling depends on.
+  const handleSelfChange = useCallback(
+    (status: SelfVoiceStatus) => {
+      setSelfProfileId(status.profile_id);
+      void refresh();
+    },
+    [refresh],
+  );
+
+  const profiles =
+    allProfiles?.filter((p) => p.id !== selfProfileId) ?? null;
+
   return (
     <div className="space-y-6 pt-6">
       <div>
         <h2 className="text-lg font-semibold">Speakers</h2>
         <p className="text-sm text-muted-foreground">
-          People you&apos;ve named on a transcript. Future meetings will
-          auto-tag the same voice when it&apos;s recognised.
+          Who said what in your meetings — your own voice, plus anyone
+          you&apos;ve named on a transcript.
+        </p>
+      </div>
+
+      <SelfVoiceEnrollment onChange={handleSelfChange} />
+
+      <div>
+        <h3 className="text-sm font-medium">Saved speakers</h3>
+        <p className="text-xs text-muted-foreground">
+          Future meetings auto-tag these voices when they&apos;re recognised.
         </p>
       </div>
 

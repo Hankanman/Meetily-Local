@@ -52,6 +52,11 @@ pub struct VoiceProfile {
     pub embedding: Vec<u8>,
     pub embedding_dim: i64,
     pub sample_count: i64,
+    /// True for the single profile holding the local user's own enrolled
+    /// voice. At most one row has this set (enforced by a partial unique
+    /// index); it is what makes the user's mic speech render as "Me" instead
+    /// of "Speaker N" once a diarizer is loaded.
+    pub is_self: bool,
     pub created_at: String,
     pub updated_at: String,
 }

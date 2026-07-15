@@ -44,11 +44,16 @@ impl TranscriptsRepository {
         info!("Successfully created meeting with id: {}", meeting_id);
 
         // 2. Save each transcript segment with audio timing + speaker fields
+        //
+        // `sequence_id` is persisted (rather than dropped in favour of the
+        // generated uuid key) so post-meeting speaker refinement can match a
+        // diarizer embedding back to the row it produced. The live-recording
+        // path always carries one; batch paths leave it `None`.
         for segment in transcripts {
             let transcript_id = format!("transcript-{}", Uuid::new_v4());
             let result = sqlx::query(
-                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, voice_profile_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, voice_profile_id, sequence_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             )
             .bind(&transcript_id)
             .bind(&meeting_id)
@@ -64,6 +69,7 @@ impl TranscriptsRepository {
             .bind(segment.duration)
             .bind(&segment.speaker)
             .bind(&segment.voice_profile_id)
+            .bind(segment.sequence_id.map(|s| s as i64))
             .execute(&mut *transaction)
             .await;
 
@@ -139,6 +145,81 @@ impl TranscriptsRepository {
         .execute(pool)
         .await?;
         Ok(res.rows_affected())
+    }
+
+    /// Apply post-meeting speaker refinement to `meeting_id`'s transcripts.
+    ///
+    /// `updates` is `(sequence_id, expected_current_speaker, new_speaker)`.
+    /// Returns the number of rows actually rewritten.
+    ///
+    /// Three guards keep this from ever damaging a deliberate label, since
+    /// refinement runs unattended in the background:
+    ///
+    /// 1. `voice_profile_id IS NULL` — a row matched to an enrolled voice (or
+    ///    named by the user via promote/merge) is authoritative and is never
+    ///    re-clustered. This mirrors the pinning in `refinement::refine` and
+    ///    holds even if the in-memory diarizer history disagrees with the DB.
+    /// 2. `speaker = expected_current_speaker` — makes each update a no-op
+    ///    unless the row still carries the exact label the live pass gave it,
+    ///    so a rename that landed between save and refinement wins, and a
+    ///    re-run of refinement changes nothing.
+    /// 3. `sequence_id = ?` — only ever matches rows the live path wrote a
+    ///    sequence for; NULL-sequence rows (pre-migration, or from the batch
+    ///    import/retranscription paths) are silently left alone.
+    ///
+    /// All updates share one transaction: refinement is a single logical
+    /// re-labelling of the meeting, so a failure partway through must not
+    /// leave half the meeting re-clustered against the other half.
+    pub async fn update_speakers_by_sequence(
+        pool: &SqlitePool,
+        meeting_id: &str,
+        updates: &[(u64, String, String)],
+    ) -> Result<u64, SqlxError> {
+        if updates.is_empty() {
+            return Ok(0);
+        }
+
+        let mut conn = pool.acquire().await?;
+        let mut transaction = conn.begin().await?;
+
+        let mut changed = 0u64;
+        for (sequence_id, expected_speaker, new_speaker) in updates {
+            let result = sqlx::query(
+                "UPDATE transcripts
+                 SET speaker = ?
+                 WHERE meeting_id = ?
+                   AND sequence_id = ?
+                   AND speaker = ?
+                   AND voice_profile_id IS NULL",
+            )
+            .bind(new_speaker)
+            .bind(meeting_id)
+            .bind(*sequence_id as i64)
+            .bind(expected_speaker)
+            .execute(&mut *transaction)
+            .await;
+
+            match result {
+                Ok(r) => changed += r.rows_affected(),
+                Err(e) => {
+                    error!(
+                        "Failed to refine speaker for meeting {} sequence {}: {}",
+                        meeting_id, sequence_id, e
+                    );
+                    transaction.rollback().await?;
+                    return Err(e);
+                }
+            }
+        }
+
+        transaction.commit().await?;
+        info!(
+            "Speaker refinement rewrote {} of {} candidate rows in meeting {}",
+            changed,
+            updates.len(),
+            meeting_id
+        );
+        Ok(changed)
     }
 
     /// Searches for a query string within the transcripts.
