@@ -31,6 +31,12 @@ pub struct RecordingPreferences {
     /// transcript unless the refine pass fully succeeds.
     #[serde(default = "default_true")]
     pub auto_refine: bool,
+    /// Show streaming preview text while someone is still speaking (decoded
+    /// from the in-progress utterance and replaced by the final transcript
+    /// when the segment completes). Best-effort overlay; the committed
+    /// transcript is unaffected when off. Defaults on.
+    #[serde(default = "default_true")]
+    pub streaming_partials: bool,
 }
 
 fn default_true() -> bool {
@@ -47,6 +53,7 @@ impl Default for RecordingPreferences {
             preferred_system_device: None,
             show_recording_notification: true,
             auto_refine: true,
+            streaming_partials: true,
         }
     }
 }

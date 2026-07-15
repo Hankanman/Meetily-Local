@@ -17,7 +17,7 @@ import { Spinner } from "./ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RecordingStatusBar } from "./RecordingStatusBar";
 import { motion, AnimatePresence } from "framer-motion";
-import { TranscriptSegmentData } from "@/types";
+import { TranscriptSegmentData, PartialsBySource } from "@/types";
 import { formatRecordingTime } from "@/lib/utils";
 import { EditableSpeakerChip } from "./EditableSpeakerChip";
 
@@ -53,6 +53,12 @@ export interface VirtualizedTranscriptViewProps {
    *  reload transcripts so other rows showing the same speaker pick up the
    *  rename. */
   onSpeakerProfileChanged?: () => void;
+
+  /** Ephemeral streaming preview text for in-progress utterances, keyed by
+   *  source ("mic" | "system"). Rendered as a subordinate overlay below all
+   *  committed segments; never affects `segments` itself. Live-recording
+   *  only - omit (or pass isRecording=false) for the past-meeting view. */
+  partials?: PartialsBySource;
 }
 
 // Threshold for enabling virtualization (below this, use simple rendering)
@@ -144,6 +150,42 @@ const TranscriptSegment = memo(function TranscriptSegment({
   );
 });
 
+// Streaming preview row for one source's in-progress utterance. Visually
+// subordinate to committed segments (muted, italic, pulsing affordance) and
+// deliberately mirrors TranscriptSegment's gutter/text layout without a
+// timestamp, since a partial has no finalized audio_start_time yet.
+const PARTIAL_SOURCE_LABEL: Record<"mic" | "system", string> = {
+  mic: "Me",
+  system: "Speaker",
+};
+
+const PartialPreview = memo(function PartialPreview({
+  source,
+  text,
+}: {
+  source: "mic" | "system";
+  text: string;
+}) {
+  return (
+    <div className="mb-3 opacity-70">
+      <div className="flex items-start gap-2">
+        <span className="mt-1 flex min-w-12.5 shrink-0 justify-center">
+          <span className="size-2 animate-pulse rounded-full bg-info" />
+        </span>
+        <div className="flex-1">
+          <span className="mr-2 text-xs font-medium text-muted-foreground/80">
+            {PARTIAL_SOURCE_LABEL[source]}
+          </span>
+          <p className="text-sm/relaxed text-muted-foreground italic">
+            {text}
+            <span className="ml-0.5 animate-pulse">…</span>
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export const VirtualizedTranscriptView: React.FC<
   VirtualizedTranscriptViewProps
 > = ({
@@ -162,6 +204,7 @@ export const VirtualizedTranscriptView: React.FC<
   onLoadMore,
   meetingId,
   onSpeakerProfileChanged,
+  partials,
 }) => {
   // Create scroll ref first - shared between virtualizer and auto-scroll hook
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -269,6 +312,16 @@ export const VirtualizedTranscriptView: React.FC<
 
   // Use simple rendering for small lists, virtualization for large lists
   const useVirtualization = segments.length >= VIRTUALIZATION_THRESHOLD;
+
+  // Streaming preview overlay - live-recording only, purely additive (never
+  // part of `segments`). At most one entry per source.
+  const activePartials: Array<{ source: "mic" | "system"; text: string }> =
+    isRecording && partials
+      ? (["mic", "system"] as const)
+          .filter((source) => !!partials[source]?.text)
+          .map((source) => ({ source, text: partials[source]!.text }))
+      : [];
+  const hasActivePartials = activePartials.length > 0;
 
   return (
     <div
@@ -388,11 +441,13 @@ export const VirtualizedTranscriptView: React.FC<
                 </div>
               )}
 
-            {/* Listening indicator when recording */}
+            {/* Listening indicator when recording (suppressed while an
+                active partial preview is already showing motion) */}
             {!isStopping &&
               isRecording &&
               !isPaused &&
               !isProcessing &&
+              !hasActivePartials &&
               segments.length > 0 && (
                 <motion.div
                   initial={{ opacity: 0 }}
@@ -459,11 +514,13 @@ export const VirtualizedTranscriptView: React.FC<
                 </div>
               )}
 
-            {/* Listening indicator when recording */}
+            {/* Listening indicator when recording (suppressed while an
+                active partial preview is already showing motion) */}
             {!isStopping &&
               isRecording &&
               !isPaused &&
               !isProcessing &&
+              !hasActivePartials &&
               segments.length > 0 && (
                 <motion.div
                   initial={{ opacity: 0 }}
@@ -476,6 +533,17 @@ export const VirtualizedTranscriptView: React.FC<
                 </motion.div>
               )}
           </>
+        )}
+
+        {/* Streaming partial-transcription preview overlay - always renders
+            after all committed segments (this is the newest in-progress
+            speech). Ephemeral only: never part of `segments`, never saved. */}
+        {hasActivePartials && (
+          <div className="mt-3">
+            {activePartials.map(({ source, text }) => (
+              <PartialPreview key={source} source={source} text={text} />
+            ))}
+          </div>
         )}
       </div>
     </div>

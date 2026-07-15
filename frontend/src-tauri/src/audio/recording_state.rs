@@ -8,7 +8,7 @@ use super::buffer_pool::AudioBufferPool;
 use super::devices::AudioDevice;
 
 /// Device type for audio chunks
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DeviceType {
     Microphone,
     System,
@@ -22,6 +22,17 @@ pub struct AudioChunk {
     pub timestamp: f64,
     pub chunk_id: u64,
     pub device_type: DeviceType,
+}
+
+/// A snapshot of an in-progress (not-yet-finalized) utterance, sent from the
+/// pipeline to the partial-decode task for streaming preview transcription.
+/// Samples are 16 kHz mono. `utterance_id` is monotonic per source and lets
+/// the decoder reset its stabilization state at utterance boundaries.
+#[derive(Debug, Clone)]
+pub struct PartialAudioChunk {
+    pub samples: Vec<f32>,
+    pub source: DeviceType,
+    pub utterance_id: u64,
 }
 
 /// Processed audio chunk (post-VAD) for recording

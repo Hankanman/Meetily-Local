@@ -7,7 +7,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { TranscriptUpdate, Transcript } from "@/types";
+import { TranscriptUpdate, TranscriptPartialUpdate, Transcript } from "@/types";
 
 export interface TranscriptionStatus {
   chunks_in_queue: number;
@@ -53,6 +53,21 @@ class TranscriptService {
     callback: (update: TranscriptUpdate) => void,
   ): Promise<UnlistenFn> {
     return listen<TranscriptUpdate>("transcript-update", (event) => {
+      callback(event.payload);
+    });
+  }
+
+  /**
+   * Listen for streaming partial-transcription previews. Fires repeatedly
+   * during an in-progress utterance with stabilized, growing text; the
+   * matching `transcript-update` (final) for the same source supersedes it.
+   * @param callback - Function to call when a partial preview arrives
+   * @returns Promise that resolves to unlisten function
+   */
+  async onTranscriptPartial(
+    callback: (update: TranscriptPartialUpdate) => void,
+  ): Promise<UnlistenFn> {
+    return listen<TranscriptPartialUpdate>("transcript-partial", (event) => {
       callback(event.payload);
     });
   }

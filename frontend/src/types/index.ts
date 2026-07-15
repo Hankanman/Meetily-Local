@@ -36,6 +36,26 @@ export interface TranscriptUpdate {
   voice_profile_id?: string;
 }
 
+// Streaming preview for the CURRENTLY-IN-PROGRESS utterance on a source.
+// Ephemeral — never enters the saved transcript buffer. Superseded by the
+// matching `transcript-update` (final) for the same source, or cleared by
+// an empty-text partial / a new utterance_id / recording stop.
+export interface TranscriptPartialUpdate {
+  /** Audio-stream tag: "mic" or "system". */
+  source: string;
+  /** Stabilized, monotonically-growing preview text. May be empty to clear. */
+  text: string;
+  utterance_id: number;
+}
+
+export interface ActivePartial {
+  text: string;
+  utterance_id: number;
+}
+
+/** At most one active partial per source. */
+export type PartialsBySource = Partial<Record<"mic" | "system", ActivePartial>>;
+
 export interface Block {
   id: string;
   type: string;

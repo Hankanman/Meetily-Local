@@ -99,7 +99,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     let mut manager = RecordingManager::new();
 
     // Load recording preferences to get auto_save AND device preferences
-    let (auto_save, preferred_mic_name, preferred_system_name) =
+    let (auto_save, preferred_mic_name, preferred_system_name, streaming_partials) =
         match super::recording_preferences::load_recording_preferences(&app).await {
             Ok(prefs) => {
                 info!("📋 Loaded recording preferences: auto_save={}, preferred_mic={:?}, preferred_system={:?}",
@@ -108,6 +108,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     prefs.auto_save,
                     prefs.preferred_mic_device,
                     prefs.preferred_system_device,
+                    prefs.streaming_partials,
                 )
             }
             Err(e) => {
@@ -115,7 +116,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     "Failed to load recording preferences, using defaults: {}",
                     e
                 );
-                (true, None, None)
+                (true, None, None, true)
             }
         };
 
@@ -175,9 +176,13 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
 
     // Start recording with resolved devices (replaces start_recording_with_defaults_and_auto_save call)
     let transcription_receiver = manager
-        .start_recording(microphone_device, system_device, auto_save)
+        .start_recording(microphone_device, system_device, auto_save, streaming_partials)
         .await
         .map_err(|e| format!("Failed to start recording: {}", e))?;
+
+    // Claim the streaming-partial receiver before the manager is moved into
+    // the global (None when partials are disabled).
+    let partial_receiver = manager.take_partial_receiver();
 
     // Store the manager globally to keep it alive
     {
@@ -204,6 +209,12 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     {
         let mut global_task = TRANSCRIPTION_TASK.lock().unwrap();
         *global_task = Some(task_handle);
+    }
+
+    // Start the streaming-partial preview task (best-effort, additive to the
+    // final path). Detached — it ends when the pipeline drops its sender.
+    if let Some(rx) = partial_receiver {
+        transcription::start_partial_decode_task(app.clone(), rx);
     }
 
     // CRITICAL: Listen for transcript-update events and save to recording manager
@@ -325,22 +336,23 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     let mut manager = RecordingManager::new();
 
     // Load recording preferences to check auto_save setting
-    let auto_save = match super::recording_preferences::load_recording_preferences(&app).await {
-        Ok(prefs) => {
-            info!(
-                "📋 Loaded recording preferences: auto_save={}",
-                prefs.auto_save
-            );
-            prefs.auto_save
-        }
-        Err(e) => {
-            warn!(
-                "Failed to load recording preferences, defaulting to auto_save=true: {}",
-                e
-            );
-            true // Default to saving if preferences can't be loaded
-        }
-    };
+    let (auto_save, streaming_partials) =
+        match super::recording_preferences::load_recording_preferences(&app).await {
+            Ok(prefs) => {
+                info!(
+                    "📋 Loaded recording preferences: auto_save={}",
+                    prefs.auto_save
+                );
+                (prefs.auto_save, prefs.streaming_partials)
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to load recording preferences, defaulting to auto_save=true: {}",
+                    e
+                );
+                (true, true) // Defaults if preferences can't be loaded
+            }
+        };
 
     // Always ensure a meeting name is set so incremental saver initializes
     let effective_meeting_name = meeting_name.clone().unwrap_or_else(|| {
@@ -357,9 +369,13 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
 
     // Start recording with specified devices and auto_save setting
     let transcription_receiver = manager
-        .start_recording(mic_device, system_device, auto_save)
+        .start_recording(mic_device, system_device, auto_save, streaming_partials)
         .await
         .map_err(|e| format!("Failed to start recording: {}", e))?;
+
+    // Claim the streaming-partial receiver before the manager is moved into
+    // the global (None when partials are disabled).
+    let partial_receiver = manager.take_partial_receiver();
 
     // Store the manager globally to keep it alive
     {
@@ -386,6 +402,12 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     {
         let mut global_task = TRANSCRIPTION_TASK.lock().unwrap();
         *global_task = Some(task_handle);
+    }
+
+    // Start the streaming-partial preview task (best-effort, additive to the
+    // final path). Detached — it ends when the pipeline drops its sender.
+    if let Some(rx) = partial_receiver {
+        transcription::start_partial_decode_task(app.clone(), rx);
     }
 
     // CRITICAL: Listen for transcript-update events and save to recording manager

@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 use super::devices::{AudioDevice, DeviceType};
 use super::pipeline::AudioPipelineManager;
 use super::recording_saver::RecordingSaver;
-use super::recording_state::{AudioChunk, RecordingState};
+use super::recording_state::{AudioChunk, PartialAudioChunk, RecordingState};
 use super::stream::AudioStreamManager;
 
 /// Recording manager that coordinates all audio components
@@ -15,6 +15,10 @@ pub struct RecordingManager {
     stream_manager: AudioStreamManager,
     pipeline_manager: AudioPipelineManager,
     recording_saver: RecordingSaver,
+    /// Receiver for streaming-partial snapshots, produced in `start_recording`
+    /// when partials are enabled and claimed once by the command layer (which
+    /// owns the AppHandle needed to emit `transcript-partial` events).
+    partial_receiver: Option<mpsc::UnboundedReceiver<PartialAudioChunk>>,
 }
 
 impl RecordingManager {
@@ -29,7 +33,15 @@ impl RecordingManager {
             stream_manager,
             pipeline_manager,
             recording_saver: RecordingSaver::new(),
+            partial_receiver: None,
         }
+    }
+
+    /// Claim the streaming-partial receiver (available after `start_recording`
+    /// when partials are enabled). Returns None if partials are disabled or
+    /// already claimed.
+    pub fn take_partial_receiver(&mut self) -> Option<mpsc::UnboundedReceiver<PartialAudioChunk>> {
+        self.partial_receiver.take()
     }
 
     // Remove app handle storage for now - will be passed directly when saving
@@ -45,12 +57,28 @@ impl RecordingManager {
         microphone_device: Option<Arc<AudioDevice>>,
         system_device: Option<Arc<AudioDevice>>,
         auto_save: bool,
+        enable_partials: bool,
     ) -> Result<mpsc::UnboundedReceiver<AudioChunk>> {
-        info!("Starting recording manager (auto_save: {})", auto_save);
+        info!(
+            "Starting recording manager (auto_save: {}, partials: {})",
+            auto_save, enable_partials
+        );
 
         // Set up transcription channel
         let (transcription_sender, transcription_receiver) =
             mpsc::unbounded_channel::<AudioChunk>();
+
+        // Streaming-partial channel (only when enabled). The command layer
+        // claims the receiver via take_partial_receiver() and spawns the
+        // partial-decode task with its AppHandle.
+        let partial_sender = if enable_partials {
+            let (tx, rx) = mpsc::unbounded_channel::<PartialAudioChunk>();
+            self.partial_receiver = Some(rx);
+            Some(tx)
+        } else {
+            self.partial_receiver = None;
+            None
+        };
 
         // CRITICAL FIX: Create recording sender for pre-mixed audio from pipeline
         // Pipeline will mix mic + system audio professionally and send to this channel
@@ -101,6 +129,7 @@ impl RecordingManager {
             0,                      // Ignored - using dynamic sizing internally
             48000,                  // 48kHz sample rate
             Some(recording_sender), // CRITICAL: Pass recording sender to receive pre-mixed audio
+            partial_sender,         // Streaming partials (None when disabled)
             mic_name,
             mic_kind,
             sys_name,
@@ -144,7 +173,7 @@ impl RecordingManager {
             DeviceType::Output,
         )));
 
-        self.start_recording(microphone_device, system_device, auto_save)
+        self.start_recording(microphone_device, system_device, auto_save, true)
             .await
     }
 

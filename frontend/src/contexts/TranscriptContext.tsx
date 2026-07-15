@@ -10,7 +10,12 @@ import React, {
   ReactNode,
   MutableRefObject,
 } from "react";
-import { Transcript, TranscriptUpdate } from "@/types";
+import {
+  Transcript,
+  TranscriptUpdate,
+  TranscriptPartialUpdate,
+  PartialsBySource,
+} from "@/types";
 import { toast } from "sonner";
 import { useRecordingState } from "./RecordingStateContext";
 import { transcriptService } from "@/services/transcriptService";
@@ -29,6 +34,9 @@ interface TranscriptContextType {
   clearTranscripts: () => void;
   currentMeetingId: string | null;
   markMeetingAsSaved: () => Promise<void>;
+  /** Ephemeral streaming preview text, keyed by source. Never enters
+   *  `transcripts` / IndexedDB / sequence_id ordering — overlay only. */
+  partials: PartialsBySource;
 }
 
 const TranscriptContext = createContext<TranscriptContextType | undefined>(
@@ -39,6 +47,9 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [meetingTitle, setMeetingTitle] = useState("+ New Call");
   const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null);
+  // Ephemeral streaming preview overlay (transcript-partial events). Purely
+  // additive - never touches `transcripts`, IndexedDB, or sequence ordering.
+  const [partials, setPartials] = useState<PartialsBySource>({});
 
   // Recording state context - provides backend-synced state
   const recordingState = useRecordingState();
@@ -170,6 +181,10 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
         // Listen for recording-stopped event
         unlistenRecordingStopped = await recordingService.onRecordingStopped(
           async (payload) => {
+            // Recording has ended - there is no "finishing" utterance left
+            // to preview, so drop any in-flight partial previews.
+            setPartials({});
+
             try {
               if (currentMeetingId) {
                 // Update folder path in IndexedDB
@@ -348,6 +363,19 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
             buffer_size_before: transcriptBuffer.size,
           });
 
+          // The final for this source has arrived - it's the authoritative
+          // handoff, so drop that source's in-progress preview immediately
+          // (regardless of dedup/buffering below - the preview is stale
+          // either way once a final for the same source shows up).
+          const finalSource = update.source === "mic" || update.source === "system"
+            ? update.source
+            : undefined;
+          if (finalSource) {
+            setPartials((prev) =>
+              prev[finalSource] ? { ...prev, [finalSource]: undefined } : prev,
+            );
+          }
+
           // Check for duplicate sequence_id before processing
           if (transcriptBuffer.has(update.sequence_id)) {
             console.log(
@@ -420,6 +448,54 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
       }
     };
   }, [currentMeetingId]); // Add currentMeetingId dependency
+
+  // Streaming partial-transcription preview listener. Single registration,
+  // cleaned up on unmount. This is a pure overlay: it never writes to
+  // `transcripts`, IndexedDB, or the sequence_id buffer above - only to the
+  // ephemeral `partials` state.
+  useEffect(() => {
+    let unlistenPartial: (() => void) | undefined;
+
+    const setupPartialListener = async () => {
+      try {
+        unlistenPartial = await transcriptService.onTranscriptPartial(
+          (update: TranscriptPartialUpdate) => {
+            const source =
+              update.source === "mic" || update.source === "system"
+                ? update.source
+                : undefined;
+            if (!source) return;
+
+            setPartials((prev) => {
+              // Empty text clears the source's partial (explicit clear, or
+              // a new utterance that hasn't produced stabilized text yet).
+              if (!update.text) {
+                if (!prev[source]) return prev;
+                return { ...prev, [source]: undefined };
+              }
+              return {
+                ...prev,
+                [source]: {
+                  text: update.text,
+                  utterance_id: update.utterance_id,
+                },
+              };
+            });
+          },
+        );
+      } catch (error) {
+        console.error("Failed to setup transcript-partial listener:", error);
+      }
+    };
+
+    setupPartialListener();
+
+    return () => {
+      if (unlistenPartial) {
+        unlistenPartial();
+      }
+    };
+  }, []);
 
   // Sync transcript history and meeting name from backend on reload
   // This fixes the issue where reloading during active recording causes state desync
@@ -614,6 +690,7 @@ export function TranscriptProvider({ children }: { children: ReactNode }) {
     clearTranscripts,
     currentMeetingId,
     markMeetingAsSaved,
+    partials,
   };
 
   return (

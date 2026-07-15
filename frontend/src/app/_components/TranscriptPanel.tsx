@@ -28,8 +28,13 @@ export function TranscriptPanel({
   showModal,
 }: TranscriptPanelProps) {
   // Contexts
-  const { transcripts, transcriptContainerRef, copyTranscript, currentMeetingId } =
-    useTranscripts();
+  const {
+    transcripts,
+    transcriptContainerRef,
+    copyTranscript,
+    currentMeetingId,
+    partials,
+  } = useTranscripts();
   const { transcriptModelConfig } = useConfig();
   const { isRecording, isPaused } = useRecordingState();
 
@@ -115,6 +120,7 @@ export function TranscriptPanel({
               enableStreaming={isRecording}
               showConfidence={true}
               meetingId={currentMeetingId ?? undefined}
+              partials={partials}
             />
           </div>
         </div>

@@ -6,6 +6,7 @@
 
 pub mod echo_dedup;
 pub mod engine;
+pub mod partial_worker;
 pub mod worker;
 
 // Re-export commonly used types
@@ -13,6 +14,7 @@ pub use engine::{
     get_or_init_transcription_engine, get_or_init_whisper, validate_transcription_model_ready,
     TranscriptionEngine,
 };
+pub use partial_worker::start_partial_decode_task;
 pub use worker::{
     reset_speech_detected_flag, start_transcription_task, TranscriptUpdate, TranscriptionError,
 };

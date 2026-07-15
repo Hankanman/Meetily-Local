@@ -716,7 +716,30 @@ pub struct AudioPipeline {
     mixer: ProfessionalAudioMixer,
     // Recording sender for pre-mixed audio
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
+    // Streaming partials: snapshots of in-progress utterances sent to the
+    // partial-decode task. None when streaming partials are disabled.
+    partial_sender: Option<mpsc::UnboundedSender<super::recording_state::PartialAudioChunk>>,
+    mic_partial: PartialEmitState,
+    system_partial: PartialEmitState,
 }
+
+/// Per-source bookkeeping that throttles streaming-partial emission.
+#[derive(Default)]
+struct PartialEmitState {
+    /// Monotonic utterance counter, bumped on each silence→speech transition.
+    utterance_id: u64,
+    /// Whether speech was active on the previous window (edge detection).
+    was_active: bool,
+    /// Partial-buffer length at the last emitted snapshot, so we only re-emit
+    /// after enough new audio has accumulated.
+    samples_at_last_emit: usize,
+}
+
+// Emit a partial snapshot at most once per ~1.2 s of new speech audio, and
+// only once the utterance has at least ~0.8 s of audio (below that whisper has
+// little to work with and tends to hallucinate).
+const PARTIAL_MIN_SAMPLES: usize = 12_800; // 0.8 s @ 16 kHz
+const PARTIAL_EMIT_INTERVAL_SAMPLES: usize = 19_200; // 1.2 s @ 16 kHz
 
 impl AudioPipeline {
     pub fn new(
@@ -813,6 +836,9 @@ impl AudioPipeline {
             ring_buffer,
             mixer,
             recording_sender_for_mixed: None, // Will be set by manager
+            partial_sender: None,             // Will be set by manager if enabled
+            mic_partial: PartialEmitState::default(),
+            system_partial: PartialEmitState::default(),
         }
     }
 
@@ -960,9 +986,70 @@ impl AudioPipeline {
             DeviceType::Microphone => &mut self.mic_vad_processor,
             DeviceType::System => &mut self.system_vad_processor,
         };
-        match processor.process_audio(window) {
-            Ok(segments) => self.dispatch_segments(segments, source_label(source)),
-            Err(e) => warn!("⚠️ {} VAD error: {}", source_label(source), e),
+        let segments = match processor.process_audio(window) {
+            Ok(segments) => segments,
+            Err(e) => {
+                warn!("⚠️ {} VAD error: {}", source_label(source), e);
+                return;
+            }
+        };
+
+        // Streaming partial emission (best-effort, never blocks the final path).
+        // Read speech-active + in-progress buffer BEFORE dispatch clears state.
+        if self.partial_sender.is_some() {
+            let active = processor.is_speech_active();
+            let partial_len = processor.partial_samples().len();
+            let snapshot = if active && partial_len >= PARTIAL_MIN_SAMPLES {
+                Some(processor.partial_samples().to_vec())
+            } else {
+                None
+            };
+            self.maybe_emit_partial(source, active, partial_len, snapshot);
+        }
+
+        self.dispatch_segments(segments, source_label(source));
+    }
+
+    /// Decide whether to send a streaming-partial snapshot for `source`, using
+    /// per-source edge detection (silence→speech bumps the utterance id) and a
+    /// new-audio interval throttle.
+    fn maybe_emit_partial(
+        &mut self,
+        source: DeviceType,
+        active: bool,
+        partial_len: usize,
+        snapshot: Option<Vec<f32>>,
+    ) {
+        let state = match source {
+            DeviceType::Microphone => &mut self.mic_partial,
+            DeviceType::System => &mut self.system_partial,
+        };
+
+        // Edge: silence → speech starts a new utterance.
+        if active && !state.was_active {
+            state.utterance_id += 1;
+            state.samples_at_last_emit = 0;
+        }
+        // Edge: speech → silence ends the utterance (the final path takes over).
+        if !active && state.was_active {
+            state.samples_at_last_emit = 0;
+        }
+        state.was_active = active;
+
+        let Some(snapshot) = snapshot else { return };
+        let new_since_emit = partial_len.saturating_sub(state.samples_at_last_emit);
+        if new_since_emit < PARTIAL_EMIT_INTERVAL_SAMPLES {
+            return;
+        }
+        state.samples_at_last_emit = partial_len;
+
+        let utterance_id = state.utterance_id;
+        if let Some(sender) = &self.partial_sender {
+            let _ = sender.send(super::recording_state::PartialAudioChunk {
+                samples: snapshot,
+                source,
+                utterance_id,
+            });
         }
     }
 
@@ -1041,6 +1128,7 @@ impl AudioPipelineManager {
         target_chunk_duration_ms: u32,
         sample_rate: u32,
         recording_sender: Option<mpsc::UnboundedSender<AudioChunk>>,
+        partial_sender: Option<mpsc::UnboundedSender<super::recording_state::PartialAudioChunk>>,
         mic_device_name: String,
         mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
@@ -1078,6 +1166,8 @@ impl AudioPipelineManager {
         // CRITICAL FIX: Connect recording sender to receive pre-mixed audio
         // This ensures both mic AND system audio are captured in recordings
         pipeline.recording_sender_for_mixed = recording_sender;
+        // Streaming partials (None when disabled).
+        pipeline.partial_sender = partial_sender;
 
         let handle = tokio::spawn(async move { pipeline.run().await });
 

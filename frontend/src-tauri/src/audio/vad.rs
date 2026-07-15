@@ -48,7 +48,18 @@ pub struct ContinuousVadProcessor {
     processed_samples_16k: u64,
     /// Source tag stamped onto every emitted segment (Mic or System).
     source: DeviceType,
+    /// 16 kHz audio accumulated since the last completed segment — i.e. the
+    /// current in-progress utterance. Used only for streaming partial preview
+    /// decodes; reset whenever a segment finalizes (the authoritative final
+    /// path consumes the completed segment separately). Capped to bound memory
+    /// and partial-decode cost.
+    current_utterance_16k: Vec<f32>,
 }
+
+/// Cap on the in-progress partial buffer (~30 s at 16 kHz). Matches the VAD's
+/// own max_speech_duration so a single utterance can't grow the partial buffer
+/// unboundedly if silence never arrives.
+const MAX_PARTIAL_SAMPLES: usize = 30 * 16_000;
 
 const VAD_SAMPLE_RATE: i32 = 16_000;
 
@@ -118,7 +129,20 @@ impl ContinuousVadProcessor {
             sample_rate: input_sample_rate,
             processed_samples_16k: 0,
             source,
+            current_utterance_16k: Vec::new(),
         })
+    }
+
+    /// Whether sherpa currently considers speech to be active (inside an
+    /// in-progress utterance). Used to gate streaming partial decodes.
+    pub fn is_speech_active(&self) -> bool {
+        self.detector.detected()
+    }
+
+    /// 16 kHz mono samples of the current in-progress utterance (audio since
+    /// the last finalized segment). Empty between utterances.
+    pub fn partial_samples(&self) -> &[f32] {
+        &self.current_utterance_16k
     }
 
     /// Process incoming audio samples and return any complete speech segments.
@@ -133,7 +157,20 @@ impl ContinuousVadProcessor {
         self.detector.accept_waveform(resampled.as_ref());
         self.processed_samples_16k += resampled.as_ref().len() as u64;
 
-        Ok(self.drain_segments())
+        // Accumulate the in-progress utterance for streaming partial decodes,
+        // bounded by MAX_PARTIAL_SAMPLES.
+        if self.current_utterance_16k.len() < MAX_PARTIAL_SAMPLES {
+            self.current_utterance_16k.extend_from_slice(resampled.as_ref());
+        }
+
+        let segments = self.drain_segments();
+        // A finalized segment ends the current utterance — the authoritative
+        // final path takes over from here, so clear the partial accumulator
+        // and let the next utterance start fresh.
+        if !segments.is_empty() {
+            self.current_utterance_16k.clear();
+        }
+        Ok(segments)
     }
 
     /// Flush any remaining buffered audio and return final speech segments.
