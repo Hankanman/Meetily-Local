@@ -58,9 +58,10 @@ export function useAudioLevels(
       }
 
       try {
+        // Tauri v2 expects camelCase keys and maps them to snake_case params.
         await invoke("start_audio_level_monitoring", {
-          mic_device: micDevice,
-          system_device: systemDevice,
+          micDevice,
+          systemDevice,
         });
       } catch (err) {
         console.error("Failed to start audio level monitoring:", err);

@@ -71,10 +71,12 @@ export class RecordingService {
     systemDeviceName: string | null,
     meetingName: string,
   ): Promise<void> {
+    // Tauri v2 maps camelCase JS keys to snake_case Rust params; the
+    // previous snake_case keys silently deserialized every param as None.
     return invoke("start_recording_with_devices_and_meeting", {
-      mic_device_name: micDeviceName,
-      system_device_name: systemDeviceName,
-      meeting_name: meetingName,
+      micDeviceName,
+      systemDeviceName,
+      meetingName,
     });
   }
 
