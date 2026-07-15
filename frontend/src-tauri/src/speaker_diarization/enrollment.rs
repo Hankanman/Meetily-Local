@@ -53,7 +53,7 @@ use crate::audio::audio_processing::{audio_to_mono, resample_audio};
 use crate::audio::pw::{PwCaptureStream, CAPTURE_CHANNELS, CAPTURE_RATE};
 use crate::audio::recording_state::DeviceType;
 use crate::audio::stream::capture_target_for;
-use crate::audio::vad::extract_speech_16k;
+use crate::audio::vad::extract_enrollment_speech_16k;
 use crate::database::repositories::voice_profile::VoiceProfilesRepository;
 use crate::speaker_diarization::{
     default_model_path, model::model_is_ready, SpeakerEmbedder, SELF_SPEAKER_LABEL,
@@ -95,6 +95,13 @@ const MIN_WINDOW_SECS: f32 = 2.0;
 /// speech check above is the real gate, this only catches a totally silent
 /// device so the user gets "we heard nothing" instead of a garbage profile.
 const MIN_RMS: f32 = 0.005;
+
+/// Peak amplitude above which, if the VAD trimmed the recording below
+/// [`MIN_SPEECH_SECS`], we still enroll on the raw buffer rather than reject
+/// it. Distinguishes "clearly talking but the VAD was over-eager" (fall back)
+/// from "genuinely too quiet" (report it). Well below normal speech peaks
+/// (~0.2–0.8) yet safely above idle-mic noise.
+const ENROLL_FALLBACK_PEAK: f32 = 0.03;
 
 /// Progress tick for the enrollment UI (level meter + elapsed).
 #[derive(Debug, Clone, Serialize)]
@@ -426,11 +433,34 @@ fn build_centroid(
 
     let samples_16k = resample_audio(samples_48k_mono, CAPTURE_RATE, EMBED_RATE);
 
-    // Trim to speech. If the VAD model is unavailable we'd rather enroll on the
-    // raw (energy-checked) buffer than fail outright — a slightly noisier
-    // centroid still beats no self-attribution.
-    let speech = match extract_speech_16k(&samples_16k) {
-        Ok(s) => s,
+    // Trim to speech. The buffer already passed the RMS gate above, so it
+    // demonstrably contains audio; if the VAD keeps too little (or is
+    // unavailable) we enroll on the raw buffer rather than reject the user's
+    // recording outright. A slightly noisier centroid beats a baffling "no
+    // speech detected" when they were clearly talking, and the per-window
+    // embedding below still skips pure-silence windows.
+    let peak = samples_16k.iter().map(|&x| x.abs()).fold(0.0f32, f32::max);
+    let speech = match extract_enrollment_speech_16k(&samples_16k) {
+        Ok(s) if (s.len() as f32 / EMBED_RATE as f32) >= MIN_SPEECH_SECS => s,
+        Ok(s) if peak >= ENROLL_FALLBACK_PEAK => {
+            log::warn!(
+                "Voice enrollment: VAD kept only {:.1}s of {:.1}s (peak {:.3}); \
+                 enrolling on the full recording",
+                s.len() as f32 / EMBED_RATE as f32,
+                captured_secs,
+                peak
+            );
+            samples_16k.clone()
+        }
+        Ok(s) => {
+            // Little speech *and* a weak signal — genuinely too quiet.
+            return Err(anyhow!(
+                "Only {:.0}s of speech detected in {:.0}s of audio — move closer to the mic \
+                 and speak normally the whole time",
+                s.len() as f32 / EMBED_RATE as f32,
+                captured_secs
+            ));
+        }
         Err(e) => {
             log::warn!(
                 "Voice enrollment: VAD unavailable ({}), using the full recording",
@@ -441,14 +471,6 @@ fn build_centroid(
     };
 
     let speech_secs = speech.len() as f32 / EMBED_RATE as f32;
-    if speech_secs < MIN_SPEECH_SECS {
-        return Err(anyhow!(
-            "Only {:.0}s of speech detected in {:.0}s of audio — try again somewhere quieter, \
-             speaking normally the whole time",
-            speech_secs,
-            captured_secs
-        ));
-    }
 
     let window = (WINDOW_SECS * EMBED_RATE as f32) as usize;
     let min_window = (MIN_WINDOW_SECS * EMBED_RATE as f32) as usize;

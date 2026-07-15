@@ -20,6 +20,18 @@ import {
 
 type Mode = "idle" | "recording" | "saving";
 
+/// A passage to read aloud while enrolling. This is the opening of the public-
+/// domain "Rainbow Passage", long used in speech work because it's phonetically
+/// balanced — reading it exercises a broad range of sounds, which gives the
+/// speaker-embedding model a fuller picture of the voice than a few off-the-cuff
+/// words would. It also just gives the user something to say for ~20s so they
+/// don't trail off into silence (which is what "no speech detected" used to be).
+const READING_PASSAGE =
+  "When the sunlight strikes raindrops in the air, they act as a prism and " +
+  "form a rainbow. The rainbow is a division of white light into many " +
+  "beautiful colors. These take the shape of a long round arch, with its path " +
+  "high above, and its two ends apparently beyond the horizon.";
+
 interface SelfVoiceEnrollmentProps {
   /** Fires whenever the stored profile changes, so the parent can keep the
    *  saved-speakers list (which the self profile is excluded from) in sync. */
@@ -181,8 +193,8 @@ export function SelfVoiceEnrollment({ onChange }: SelfVoiceEnrollmentProps) {
         {mode === "recording" ? (
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-4">
-              <p className="text-sm">
-                Talk normally — read anything you like.
+              <p className="text-sm font-medium">
+                Read this aloud until the timer runs out
               </p>
               <span className="
                 shrink-0 font-mono text-sm tabular-nums text-muted-foreground
@@ -190,6 +202,16 @@ export function SelfVoiceEnrollment({ onChange }: SelfVoiceEnrollmentProps) {
                 {remaining ?? 0}s
               </span>
             </div>
+            <blockquote className="
+              rounded-md border-l-2 border-primary bg-muted/50 px-3 py-2
+              text-sm leading-relaxed text-foreground
+            ">
+              {READING_PASSAGE}
+            </blockquote>
+            <p className="text-xs text-muted-foreground">
+              Speak at a normal, steady pace. Anything works if you&apos;d
+              rather not read — just keep talking.
+            </p>
             <AudioLevelMeter
               rmsLevel={progress?.rms_level ?? 0}
               peakLevel={progress?.peak_level ?? 0}

@@ -78,6 +78,36 @@ impl ContinuousVadProcessor {
         redemption_time_ms: u32,
         source: DeviceType,
     ) -> Result<Self> {
+        // Force-cut after 20s. Real meeting utterances rarely exceed this;
+        // longer segments hurt diarization (multiple speakers get embedded as
+        // one) and Whisper accuracy.
+        Self::new_configured(input_sample_rate, redemption_time_ms, source, 20.0, 30.0)
+    }
+
+    /// A processor tuned for long, single-speaker capture (voice enrollment)
+    /// rather than a meeting. It raises `max_speech_duration` far above the
+    /// capture length so continuous reading is *not* force-cut: with the
+    /// meeting default of 20s, someone reading a passage steadily (no 400ms
+    /// pauses) hits the force-cut boundary and sherpa emits only a tiny tail
+    /// segment, so almost the entire recording is discarded as "not speech".
+    /// Here the only cuts are natural pauses.
+    pub fn new_for_enrollment(input_sample_rate: u32) -> Result<Self> {
+        // 60s force-cut / 65s buffer. Enrollment is capped well under this, so
+        // the force-cut never fires; the large value exists only to satisfy
+        // sherpa's "buffer >= max_speech_duration" invariant.
+        Self::new_configured(input_sample_rate, 400, DeviceType::Microphone, 60.0, 65.0)
+    }
+
+    /// Shared constructor. `max_speech_duration` force-cuts an unbroken speech
+    /// run; `buffer_secs` sizes sherpa's internal ring buffer and must be
+    /// `>= max_speech_duration` so it can look back when force-cutting.
+    fn new_configured(
+        input_sample_rate: u32,
+        redemption_time_ms: u32,
+        source: DeviceType,
+        max_speech_duration: f32,
+        buffer_secs: f32,
+    ) -> Result<Self> {
         let model_path = crate::speaker_diarization::model::silero_vad_path()
             .ok_or_else(|| anyhow!("silero-vad model dir not configured"))?;
         if !crate::speaker_diarization::model::model_is_ready(&model_path) {
@@ -101,10 +131,7 @@ impl ContinuousVadProcessor {
                 min_silence_duration,           // From caller (typically 400ms live, 800ms batch).
                 min_speech_duration: 0.25,      // Reject segments shorter than 250ms.
                 window_size: 512,               // 32 ms at 16 kHz, silero-vad's expected window.
-                // Force-cut after 20s. Real meeting utterances rarely exceed
-                // this; longer segments hurt diarization (multiple speakers
-                // get embedded as one) and Whisper accuracy.
-                max_speech_duration: 20.0,
+                max_speech_duration,
             },
             ten_vad: Default::default(),
             sample_rate: VAD_SAMPLE_RATE,
@@ -113,15 +140,13 @@ impl ContinuousVadProcessor {
             debug: false,
         };
 
-        // 30-second internal buffer — must be >= max_speech_duration so the
-        // VAD has room to look back when force-cutting.
-        let detector = VoiceActivityDetector::create(&config, 30.0)
+        let detector = VoiceActivityDetector::create(&config, buffer_secs)
             .ok_or_else(|| anyhow!("Failed to create sherpa VoiceActivityDetector"))?;
 
         info!(
             "VAD processor created (sherpa-onnx silero): input={}Hz, vad=16000Hz, \
-             min_silence={}ms, source={:?}",
-            input_sample_rate, redemption_time_ms, source
+             min_silence={}ms, max_speech={}s, source={:?}",
+            input_sample_rate, redemption_time_ms, max_speech_duration, source
         );
 
         Ok(Self {
@@ -316,6 +341,38 @@ pub fn extract_speech_16k(samples_mono_16k: &[f32]) -> Result<Vec<f32>> {
         samples_mono_16k.len(),
         result.len(),
         num_segments
+    );
+    Ok(result)
+}
+
+/// Trim a voice-enrollment recording (16 kHz mono) down to its voiced parts.
+///
+/// Unlike [`extract_speech_16k`], this uses [`ContinuousVadProcessor::new_for_enrollment`]
+/// so a person reading a passage continuously isn't force-cut and discarded.
+/// The audio is fed in slices, mirroring how the live pipeline drives the VAD.
+/// Returns the concatenated speech samples (empty if the VAD found none — the
+/// caller decides whether to fall back to the raw buffer).
+pub fn extract_enrollment_speech_16k(samples_mono_16k: &[f32]) -> Result<Vec<f32>> {
+    let mut processor = ContinuousVadProcessor::new_for_enrollment(16_000)?;
+
+    // 10s slices — cheap, and closer to how audio actually arrives than one
+    // giant push.
+    const CHUNK_SIZE: usize = 160_000;
+    let mut all_segments = Vec::new();
+    for chunk in samples_mono_16k.chunks(CHUNK_SIZE) {
+        all_segments.extend(processor.process_audio(chunk)?);
+    }
+    all_segments.extend(processor.flush()?);
+
+    let mut result = Vec::new();
+    for segment in &all_segments {
+        result.extend_from_slice(&segment.samples);
+    }
+    debug!(
+        "VAD (enrollment): {} samples → {} speech samples from {} segments",
+        samples_mono_16k.len(),
+        result.len(),
+        all_segments.len()
     );
     Ok(result)
 }
