@@ -172,6 +172,7 @@ export function ModelManager({
     const modelNameMapping: { [key: string]: string } = {
       small: "Small",
       "medium-q5_0": "Medium",
+      "large-v3-turbo-q5_0": "Large V3 Turbo Compressed",
       "large-v3-q5_0": "Large V3 Compressed",
       "large-v3-turbo": "Large V3 Turbo",
       "large-v3": "Large V3",
@@ -180,6 +181,7 @@ export function ModelManager({
     const basicModelNames = [
       "small",
       "medium-q5_0",
+      "large-v3-turbo-q5_0",
       "large-v3-q5_0",
       "large-v3-turbo",
       "large-v3",
@@ -486,6 +488,7 @@ export function ModelManager({
   const basicModelNames = [
     "small",
     "medium-q5_0",
+    "large-v3-turbo-q5_0",
     "large-v3-q5_0",
     "large-v3-turbo",
     "large-v3",
@@ -512,7 +515,9 @@ export function ModelManager({
           // getRecommendedModel()'s no-specs fallback in lib/whisper.ts)
           // and, unlike "base", is actually present in basicModelNames
           // above — so this badge can actually render.
-          const isRecommended = model.name === "medium-q5_0";
+          // Quantized turbo: near-large-v3 accuracy, faster than medium on
+          // GPU, and a quarter of large-v3's download size.
+          const isRecommended = model.name === "large-v3-turbo-q5_0";
           return (
             <ModelCard
               key={model.name}

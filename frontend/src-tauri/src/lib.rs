@@ -14,20 +14,7 @@ macro_rules! perf_debug {
     ($($arg:tt)*) => {};
 }
 
-#[cfg(debug_assertions)]
-macro_rules! perf_trace {
-    ($($arg:tt)*) => {
-        log::trace!($($arg)*)
-    };
-}
-
-#[cfg(not(debug_assertions))]
-macro_rules! perf_trace {
-    ($($arg:tt)*) => {};
-}
-
-// perf_debug! / perf_trace! are auto-visible through `crate::` paths; explicit
-// re-exports here were redundant.
+// perf_debug! is auto-visible through `crate::` paths.
 
 // Declare audio module
 pub mod anthropic;

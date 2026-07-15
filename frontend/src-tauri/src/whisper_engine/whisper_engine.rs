@@ -44,11 +44,6 @@ pub struct WhisperEngine {
     current_context: Arc<RwLock<Option<Arc<WhisperContext>>>>,
     current_model: Arc<RwLock<Option<String>>>,
     available_models: Arc<RwLock<HashMap<String, ModelInfo>>>,
-    // State tracking for smart logging
-    last_transcription_was_short: Arc<RwLock<bool>>,
-    short_audio_warning_logged: Arc<RwLock<bool>>,
-    // Performance optimization: reduce logging frequency
-    transcription_count: Arc<RwLock<u64>>,
     // Tracks in-flight downloads and cooperative cancellation requests
     // (shared with summary_engine::model_manager's downloader).
     download_guard: Arc<crate::utils::download::DownloadGuard>,
@@ -263,11 +258,6 @@ impl WhisperEngine {
             current_context: Arc::new(RwLock::new(None)),
             current_model: Arc::new(RwLock::new(None)),
             available_models: Arc::new(RwLock::new(HashMap::new())),
-            // Initialize state tracking
-            last_transcription_was_short: Arc::new(RwLock::new(false)),
-            short_audio_warning_logged: Arc::new(RwLock::new(false)),
-            // Performance optimization: reduce logging frequency
-            transcription_count: Arc::new(RwLock::new(0)),
             // Initialize download tracking
             download_guard: Arc::new(crate::utils::download::DownloadGuard::new()),
         };
@@ -600,11 +590,22 @@ impl WhisperEngine {
         repeated_words as f32 / total_words
     }
 
-    /// Transcribe audio with streaming support for partial results and adaptive quality
+    /// Transcribe audio with streaming support for partial results and adaptive quality.
+    ///
+    /// `context_prompt` conditions the decoder on the tail of the preceding
+    /// transcript (whisper's initial-prompt mechanism), which improves
+    /// cross-segment consistency for casing, punctuation, and proper nouns.
+    ///
+    /// The returned confidence is derived from whisper's own decoder
+    /// signals: the mean token probability of each segment, discounted by
+    /// the segment's no-speech probability. Roughly: clear speech lands
+    /// around 0.6–0.95, marginal/quiet speech 0.3–0.6, and hallucinated
+    /// text on near-silence below 0.3.
     pub async fn transcribe_audio_with_confidence(
         &self,
         audio_data: Vec<f32>,
         language: Option<String>,
+        context_prompt: Option<String>,
     ) -> Result<(String, f32, bool)> {
         let ctx = {
             let ctx_lock = self.current_context.read().await;
@@ -628,7 +629,7 @@ impl WhisperEngine {
         // `language` is captured by value, so nothing non-'static crosses
         // the spawn_blocking boundary.
         let (result, total_confidence, segment_count) =
-            tokio::task::spawn_blocking(move || -> Result<(String, f32, i32)> {
+            tokio::task::spawn_blocking(move || -> Result<(String, f32, u32)> {
                 // let _suppressor = crate::whisper_engine::StderrSuppressor::new();
 
                 // Get adaptive configuration based on hardware
@@ -680,10 +681,18 @@ impl WhisperEngine {
                 params.set_max_len(200);
                 params.set_single_segment(false);
 
-                // Set thread count based on hardware (if supported by whisper.cpp)
-                if let Some(_max_threads) = adaptive_config.max_threads {
-                    // Note: whisper.cpp may or may not expose thread control through params
-                    // Removed debug log to reduce I/O overhead in transcription hot path
+                // Condition the decoder on the preceding transcript tail.
+                // NOTE: whisper-rs's set_initial_prompt leaks its CString
+                // (into_raw without a matching free) — a few hundred bytes
+                // per segment, bounded by prompt truncation below; accepted
+                // until upstream fixes it. It also panics on interior NULs,
+                // hence the sanitization.
+                let sanitized_prompt = context_prompt
+                    .as_deref()
+                    .map(|p| p.replace('\0', " "))
+                    .filter(|p| !p.trim().is_empty());
+                if let Some(ref prompt) = sanitized_prompt {
+                    params.set_initial_prompt(prompt);
                 }
 
                 let mut state = ctx.create_state()?;
@@ -692,8 +701,10 @@ impl WhisperEngine {
                 // Suppressor dropped here, stderr restored
 
                 let mut result = String::new();
-                let mut total_confidence = 0.0f32;
-                let mut segment_count = 0;
+                // Weighted by token count so a long confident segment isn't
+                // dragged down by a two-token trailer.
+                let mut weighted_confidence = 0.0f32;
+                let mut total_tokens = 0u32;
 
                 for i in 0..num_segments {
                     let Some(segment) = state.get_segment(i) else {
@@ -704,15 +715,37 @@ impl WhisperEngine {
                         Err(_) => continue,
                     };
 
-                    // Calculate confidence based on segment length and duration (simplified approach)
-                    let segment_length = segment_text.len() as f32;
-                    let segment_confidence = if segment_length > 0.0 {
-                        (segment_length / 100.0).min(0.9) + 0.1 // 0.1 to 1.0 confidence based on text length
-                    } else {
-                        0.1
-                    };
-                    total_confidence += segment_confidence;
-                    segment_count += 1;
+                    // Real decoder confidence: mean probability of the
+                    // segment's text tokens (specials excluded), discounted
+                    // by the decoder's own no-speech probability for the
+                    // window this segment came from.
+                    let mut prob_sum = 0.0f32;
+                    let mut token_count = 0u32;
+                    for t in 0..segment.n_tokens() {
+                        let Some(token) = segment.get_token(t) else {
+                            continue;
+                        };
+                        // Skip special/control tokens ("<|...|>", "[_...]")
+                        // — they carry near-1.0 probabilities that would
+                        // inflate the average.
+                        let is_special = token
+                            .to_str()
+                            .map(|s| s.starts_with("<|") || s.starts_with("[_"))
+                            .unwrap_or(true);
+                        if is_special {
+                            continue;
+                        }
+                        prob_sum += token.token_probability();
+                        token_count += 1;
+                    }
+
+                    let no_speech = segment.no_speech_probability().clamp(0.0, 1.0);
+                    if token_count > 0 {
+                        let avg_p = prob_sum / token_count as f32;
+                        let segment_confidence = avg_p * (1.0 - no_speech);
+                        weighted_confidence += segment_confidence * token_count as f32;
+                        total_tokens += token_count;
+                    }
 
                     let cleaned_text = segment_text.trim();
                     if !cleaned_text.is_empty() {
@@ -723,7 +756,7 @@ impl WhisperEngine {
                     }
                 }
 
-                Ok((result, total_confidence, segment_count))
+                Ok((result, weighted_confidence, total_tokens))
             })
             .await
             .map_err(|e| anyhow!("Transcription task panicked: {}", e))??;
@@ -732,242 +765,12 @@ impl WhisperEngine {
         let cleaned_result = Self::clean_repetitive_text(&final_result);
 
         let avg_confidence = if segment_count > 0 {
-            total_confidence / segment_count as f32
+            (total_confidence / segment_count as f32).clamp(0.0, 1.0)
         } else {
             0.0
         };
 
         Ok((cleaned_result, avg_confidence, is_partial))
-    }
-
-    pub async fn transcribe_audio(
-        &self,
-        audio_data: Vec<f32>,
-        language: Option<String>,
-    ) -> Result<String> {
-        let ctx = {
-            let ctx_lock = self.current_context.read().await;
-            ctx_lock
-                .as_ref()
-                .cloned()
-                .ok_or_else(|| anyhow!("No model loaded. Please load a model first."))?
-        };
-
-        // Duration-based optimization is handled by beam search parameters
-        let duration_seconds = audio_data.len() as f64 / 16000.0; // Assuming 16kHz
-        let is_short_audio = duration_seconds < 1.0;
-
-        // Smart logging based on audio duration and previous states
-        let mut should_log_transcription = true;
-        let mut should_log_short_warning = false;
-
-        if is_short_audio {
-            let last_was_short = *self.last_transcription_was_short.read().await;
-            let warning_logged = *self.short_audio_warning_logged.read().await;
-
-            if !warning_logged {
-                should_log_short_warning = true;
-                *self.short_audio_warning_logged.write().await = true;
-            }
-
-            // Only log transcription start if it's the first short audio or previous wasn't short
-            should_log_transcription = !last_was_short;
-
-            *self.last_transcription_was_short.write().await = true;
-        } else {
-            let last_was_short = *self.last_transcription_was_short.read().await;
-
-            // Always log when transitioning from short to normal audio
-            if last_was_short {
-                log::info!("Audio duration normalized, resuming transcription");
-                *self.short_audio_warning_logged.write().await = false;
-            }
-
-            *self.last_transcription_was_short.write().await = false;
-        }
-
-        if should_log_short_warning {
-            log::warn!("Audio duration is short ({:.1}s < 1.0s). Consider padding the input audio with silence. Further short audio warnings will be suppressed.", duration_seconds);
-        }
-
-        // Performance optimization: reduce transcription start logging frequency
-        let transcription_count = {
-            let mut count = self.transcription_count.write().await;
-            *count += 1;
-            *count
-        };
-
-        // Only log every 10th transcription or significant audio (>10s) to reduce I/O overhead
-        if should_log_transcription && (transcription_count % 10 == 0 || duration_seconds > 10.0) {
-            log::info!(
-                "Starting transcription #{} of {} samples ({:.1}s duration)",
-                transcription_count,
-                audio_data.len(),
-                duration_seconds
-            );
-        }
-        // Whisper inference — including building `FullParams`, which is CPU-
-        // bound and can take seconds — runs on a blocking-pool thread so it
-        // doesn't stall the async runtime. `FullParams::set_language` borrows
-        // from `language`, so building it here (rather than outside and
-        // moving it in) keeps that borrow entirely local to this closure;
-        // `language` is captured by value, so nothing non-'static crosses
-        // the spawn_blocking boundary.
-        let result = tokio::task::spawn_blocking(move || -> Result<String> {
-            // Get adaptive configuration based on hardware
-            let hardware_profile = crate::audio::HardwareProfile::detect();
-            let adaptive_config = hardware_profile.get_whisper_config();
-
-            // ADAPTIVE parameters - optimized for current hardware
-            let mut params = FullParams::new(SamplingStrategy::BeamSearch {
-                beam_size: adaptive_config.beam_size as i32,
-                patience: 1.0,
-            });
-
-            // Configure for good quality
-            // If language is "auto" or None, use automatic language detection (pass None)
-            // If language is "auto-translate", enable translation to English
-            // Otherwise, use the specified language code
-            let (language_code, should_translate) = match language.as_deref() {
-                Some("auto") | None => (None, false),
-                Some("auto-translate") => (None, true),
-                Some(lang) => (Some(lang), false),
-            };
-            params.set_language(language_code);
-            params.set_translate(should_translate);
-
-            // CRITICAL: Disable timestamp tokens to prevent whisper.cpp chunking heuristics
-            // The "single timestamp ending - skip entire chunk" optimization incorrectly discards
-            // complete, valid transcriptions. Disabling timestamps forces whisper to return ALL text.
-            params.set_no_timestamps(true); // Prevent timestamp-based segment skipping
-            params.set_token_timestamps(true); // Keep for any timestamp-aware features
-
-            params.set_print_special(false);
-            params.set_print_progress(false);
-            params.set_print_realtime(false);
-            params.set_print_timestamps(false);
-
-            // BALANCED settings - good quality with reasonable speed
-            params.set_suppress_blank(true);
-            params.set_suppress_nst(true);
-            params.set_temperature(0.3); // Lower than 0.4 for consistency, higher than 0.0 for quality
-            params.set_max_initial_ts(1.0);
-            params.set_entropy_thold(2.4);
-            params.set_logprob_thold(-1.0);
-            // BALANCED FIX: Lowered from 0.75 to 0.55 to allow quiet speech detection
-            // Previous value was too aggressive and rejected valid quiet speech
-            // 0.55 is balanced - prevents hallucinations while preserving quiet speech
-            params.set_no_speech_thold(0.55);
-
-            // Reasonable length limits
-            params.set_max_len(200); // Reasonable length
-            params.set_single_segment(false); // Allow multiple segments for better accuracy
-
-            // Note: compression_ratio_threshold would be ideal but not available in current whisper-rs
-            // This would help detect repetitive outputs: params.set_compression_ratio_threshold(2.4);
-
-            let mut state = ctx.create_state()?;
-            state.full(params, &audio_data)?;
-
-            // Extract text with improved segment handling
-            let num_segments = state.full_n_segments();
-
-            // Performance optimization: reduce segment completion logging
-            // Only log for significant transcriptions to avoid I/O overhead
-            if (should_log_transcription || num_segments > 0)
-                && (num_segments > 3 || duration_seconds > 5.0)
-            {
-                perf_debug!(
-                    "Transcription #{} completed with {} segments ({:.1}s)",
-                    transcription_count,
-                    num_segments,
-                    duration_seconds
-                );
-            }
-            let mut result = String::new();
-
-            for i in 0..num_segments {
-                let Some(segment) = state.get_segment(i) else {
-                    continue;
-                };
-                let segment_text = match segment.to_str_lossy() {
-                    Ok(text) => text.into_owned(),
-                    Err(_) => continue,
-                };
-
-                let _start_time = segment.start_timestamp();
-                let _end_time = segment.end_timestamp();
-
-                // Performance optimization: remove per-segment debug logging
-                // This was causing significant I/O overhead during transcription
-                // Only log segments for very long audio (>30s) or when explicitly debugging
-                if duration_seconds > 30.0 {
-                    perf_trace!(
-                        "Segment {} ({:.2}s-{:.2}s): '{}'",
-                        i,
-                        _start_time as f64 / 100.0,
-                        _end_time as f64 / 100.0,
-                        segment_text
-                    );
-                }
-
-                // Clean and append segment text
-                let cleaned_text = segment_text.trim();
-                if !cleaned_text.is_empty() {
-                    if !result.is_empty() {
-                        result.push(' ');
-                    }
-                    result.push_str(cleaned_text);
-                }
-            }
-
-            Ok(result)
-        })
-        .await
-        .map_err(|e| anyhow!("Transcription task panicked: {}", e))??;
-
-        let final_result = result.trim().to_string();
-
-        // Check for repetition loops and clean them up
-        let cleaned_result = Self::clean_repetitive_text(&final_result);
-
-        // Performance optimization: smart logging for transcription results
-        if cleaned_result.is_empty() {
-            // Only log empty results occasionally to reduce spam
-            if should_log_transcription && transcription_count % 20 == 0 {
-                perf_debug!(
-                    "Transcription #{} result is empty - no speech detected",
-                    transcription_count
-                );
-            }
-        } else {
-            if cleaned_result != final_result {
-                log::info!(
-                    "Cleaned repetitive transcription #{}: '{}' -> '{}'",
-                    transcription_count,
-                    final_result,
-                    cleaned_result
-                );
-            }
-            // Reduce successful transcription logging frequency
-            // Only log every 5th result or significant results (>50 chars) to reduce I/O overhead
-            if transcription_count % 5 == 0 || cleaned_result.len() > 50 || duration_seconds > 10.0
-            {
-                log::info!(
-                    "Transcription #{} result: '{}'",
-                    transcription_count,
-                    cleaned_result
-                );
-            } else {
-                perf_debug!(
-                    "Transcription #{} result: '{}'",
-                    transcription_count,
-                    cleaned_result
-                );
-            }
-        }
-
-        Ok(cleaned_result)
     }
 
     pub async fn get_models_directory(&self) -> PathBuf {

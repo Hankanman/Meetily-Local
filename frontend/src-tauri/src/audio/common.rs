@@ -361,6 +361,10 @@ pub(crate) async fn run_batch_transcription(
 
     let mut all_transcripts: Vec<BatchTranscript> = Vec::new();
     let mut total_confidence = 0.0f32;
+    // Rolling tail of accepted text, fed as whisper's initial prompt so
+    // consecutive segments share decoder context (casing, punctuation,
+    // proper-noun consistency). Same mechanism as the live worker.
+    let mut context_tail = String::new();
 
     for (i, segment) in processable_segments.iter().enumerate() {
         if cancel_flag.load(Ordering::SeqCst) {
@@ -380,13 +384,43 @@ pub(crate) async fn run_batch_transcription(
             continue;
         }
 
+        let prompt = if context_tail.is_empty() {
+            None
+        } else {
+            Some(context_tail.clone())
+        };
         let (text, conf, _) = whisper_engine
-            .transcribe_audio_with_confidence(segment.samples.clone(), language.clone())
+            .transcribe_audio_with_confidence(segment.samples.clone(), language.clone(), prompt)
             .await
             .map_err(|e| anyhow!("Whisper transcription failed on segment {}: {}", i, e))?;
 
+        // Same hallucination screen as the live path.
+        if crate::audio::transcription::worker::is_likely_hallucination(&text, conf) {
+            debug!(
+                "Segment {}/{}: dropping likely hallucination '{}' (conf={:.2})",
+                i + 1,
+                processable_count,
+                text.trim(),
+                conf
+            );
+            continue;
+        }
+
         let trimmed = text.trim();
         if !trimmed.is_empty() {
+            if !context_tail.is_empty() {
+                context_tail.push(' ');
+            }
+            context_tail.push_str(trimmed);
+            if context_tail.len() > 600 {
+                let cut = context_tail.len() - 600;
+                let boundary = context_tail
+                    .char_indices()
+                    .map(|(idx, _)| idx)
+                    .find(|&idx| idx >= cut)
+                    .unwrap_or(0);
+                context_tail = context_tail.split_off(boundary);
+            }
             debug!(
                 "Segment {}/{}: {:.1}s, conf={:.2}, text='{}'",
                 i + 1,

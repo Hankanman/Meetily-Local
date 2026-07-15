@@ -173,6 +173,13 @@ pub fn start_transcription_task<R: Runtime>(
                     );
                 }
 
+                // Rolling tail of accepted transcript text, fed to whisper
+                // as the initial prompt for each chunk so the decoder keeps
+                // cross-segment context (consistent casing, punctuation,
+                // proper nouns). Naturally per-session: the worker task is
+                // spawned per recording.
+                let mut context_tail = String::new();
+
                 loop {
                     // Try to get a chunk to process
                     let chunk = {
@@ -228,9 +235,20 @@ pub fn start_transcription_task<R: Runtime>(
                                     None
                                 };
 
-                            // Transcribe with provider-agnostic approach
-                            match transcribe_chunk_with_provider(&engine_clone, chunk, &app_clone)
-                                .await
+                            // Transcribe with provider-agnostic approach,
+                            // conditioning on the accepted transcript so far.
+                            let prompt = if context_tail.is_empty() {
+                                None
+                            } else {
+                                Some(context_tail.clone())
+                            };
+                            match transcribe_chunk_with_provider(
+                                &engine_clone,
+                                chunk,
+                                &app_clone,
+                                prompt,
+                            )
+                            .await
                             {
                                 Ok((transcript, confidence_opt, is_partial)) => {
                                     // Provider-aware confidence threshold
@@ -250,7 +268,40 @@ pub fn start_transcription_task<R: Runtime>(
                                     let meets_threshold =
                                         confidence_opt.map_or(true, |c| c >= confidence_threshold);
 
-                                    if !transcript.trim().is_empty() && meets_threshold {
+                                    // Whisper's classic hallucinations on
+                                    // marginal audio: stock phrases and
+                                    // bracketed sound markers with mediocre
+                                    // decoder confidence.
+                                    let hallucinated = is_likely_hallucination(
+                                        &transcript,
+                                        confidence_opt.unwrap_or(1.0),
+                                    );
+                                    if hallucinated {
+                                        info!(
+                                            "Worker {} dropping likely hallucination: '{}' (confidence: {})",
+                                            worker_id, transcript, confidence_str
+                                        );
+                                    }
+
+                                    if !transcript.trim().is_empty() && meets_threshold && !hallucinated {
+                                        // Grow the conditioning context with
+                                        // accepted text, keeping only the tail
+                                        // (whisper's prompt window is ~224
+                                        // tokens; ~600 chars is comfortably
+                                        // within it).
+                                        if !context_tail.is_empty() {
+                                            context_tail.push(' ');
+                                        }
+                                        context_tail.push_str(transcript.trim());
+                                        if context_tail.len() > 600 {
+                                            let cut = context_tail.len() - 600;
+                                            let boundary = context_tail
+                                                .char_indices()
+                                                .map(|(i, _)| i)
+                                                .find(|&i| i >= cut)
+                                                .unwrap_or(0);
+                                            context_tail = context_tail.split_off(boundary);
+                                        }
                                         // PERFORMANCE: Only log transcription results, not every processing step
                                         info!("✅ Worker {} transcribed: {} (confidence: {}, partial: {})",
                                               worker_id, transcript, confidence_str, is_partial);
@@ -525,12 +576,66 @@ pub fn start_transcription_task<R: Runtime>(
     })
 }
 
+/// Stock phrases whisper reliably hallucinates on marginal/near-silent
+/// audio (trained-in subtitle credits and filler), plus bracketed sound
+/// markers like "[Music]" / "(applause)". Only applied below a confidence
+/// bar so genuine short utterances with a confident decode survive.
+pub fn is_likely_hallucination(text: &str, confidence: f32) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false; // empty is handled separately
+    }
+
+    // Bracket-only output is a sound-event marker, never meeting speech.
+    let bracket_only = (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        || (trimmed.starts_with('(') && trimmed.ends_with(')'))
+        || (trimmed.starts_with('♪') && trimmed.ends_with('♪'));
+    if bracket_only {
+        return true;
+    }
+
+    // Confident decodes are trusted even if the text matches a stock phrase.
+    if confidence >= 0.5 {
+        return false;
+    }
+
+    const STOCK_PHRASES: &[&str] = &[
+        "you",
+        "bye",
+        "thank you",
+        "thanks for watching",
+        "thank you for watching",
+        "thank you very much",
+        "please subscribe",
+        "subtitles by the amara.org community",
+        "www.mooji.org",
+    ];
+    let normalized: String = trimmed
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .map(|w| w.trim_matches('.'))
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    STOCK_PHRASES.contains(&normalized.as_str())
+}
+
 /// Transcribe audio chunk using the configured engine (Whisper or trait-based provider).
 /// Returns: (text, confidence Option, is_partial)
 async fn transcribe_chunk_with_provider<R: Runtime>(
     engine: &TranscriptionEngine,
     chunk: AudioChunk,
     app: &AppHandle<R>,
+    context_prompt: Option<String>,
 ) -> std::result::Result<(String, Option<f32>, bool), TranscriptionError> {
     // Convert to 16kHz mono for transcription
     let transcription_data = if chunk.sample_rate != 16000 {
@@ -593,7 +698,7 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
             let language = crate::get_language_preference_internal();
 
             match whisper_engine
-                .transcribe_audio_with_confidence(speech_samples, language)
+                .transcribe_audio_with_confidence(speech_samples, language, context_prompt)
                 .await
             {
                 Ok((text, confidence, is_partial)) => {
@@ -653,4 +758,40 @@ fn format_recording_time(seconds: f64) -> String {
     let secs = total_seconds % 60;
 
     format!("[{:02}:{:02}]", minutes, secs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_likely_hallucination;
+
+    #[test]
+    fn stock_phrases_dropped_at_low_confidence() {
+        assert!(is_likely_hallucination("you", 0.2));
+        assert!(is_likely_hallucination(" Thank you. ", 0.35));
+        assert!(is_likely_hallucination("Thanks for watching!", 0.4));
+    }
+
+    #[test]
+    fn confident_short_utterances_survive() {
+        assert!(!is_likely_hallucination("you", 0.8));
+        assert!(!is_likely_hallucination("Thank you.", 0.72));
+    }
+
+    #[test]
+    fn real_speech_survives_at_any_confidence() {
+        assert!(!is_likely_hallucination("I'm getting sick", 0.27));
+        assert!(!is_likely_hallucination("Sounds good, let's do that.", 0.31));
+    }
+
+    #[test]
+    fn sound_markers_always_dropped() {
+        assert!(is_likely_hallucination("[Music]", 0.9));
+        assert!(is_likely_hallucination("(applause)", 0.95));
+        assert!(is_likely_hallucination("♪ la la la ♪", 0.9));
+    }
+
+    #[test]
+    fn empty_is_not_flagged() {
+        assert!(!is_likely_hallucination("   ", 0.1));
+    }
 }
