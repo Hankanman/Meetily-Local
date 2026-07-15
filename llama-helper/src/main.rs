@@ -368,13 +368,18 @@ impl ModelState {
                 break;
             }
 
-            // Replaces deprecated `token_to_bytes(token, Special::Tokenize)`.
-            // Buffer size 8 matches the upstream deprecated impl; `true` is the
-            // boolean equivalent of `Special::Tokenize` (render special tokens
-            // as their textual form rather than skipping them).
-            let output_bytes = model
-                .token_to_piece_bytes(token, 8, true, None)
-                .context("Failed to convert token to bytes")?;
+            // `true` is the boolean equivalent of `Special::Tokenize` (render
+            // special tokens as their textual form rather than skipping them).
+            // Token pieces can exceed any fixed buffer (Gemma 3's tokenizer
+            // has pieces up to 48 bytes); on InsufficientBufferSpace llama.cpp
+            // reports the required size as a negative value, so retry with it.
+            let output_bytes = match model.token_to_piece_bytes(token, 32, true, None) {
+                Ok(bytes) => bytes,
+                Err(llama_cpp_2::TokenToStringError::InsufficientBufferSpace(needed)) => model
+                    .token_to_piece_bytes(token, needed.unsigned_abs() as usize, true, None)
+                    .context("Failed to convert token to bytes (after resize)")?,
+                Err(e) => return Err(e).context("Failed to convert token to bytes"),
+            };
 
             let mut token_text = String::with_capacity(32);
             let _ = decoder.decode_to_string(&output_bytes, &mut token_text, false);
