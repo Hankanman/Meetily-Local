@@ -174,18 +174,18 @@ pub fn start_transcription_task<R: Runtime>(
                     );
                 }
 
-                // Rolling tail of accepted transcript text, fed to whisper
-                // as the initial prompt for each chunk so the decoder keeps
-                // cross-segment context (consistent casing, punctuation,
-                // proper nouns). Naturally per-session: the worker task is
-                // spawned per recording.
-                let mut context_tail = String::new();
+                // NOTE: we deliberately do NOT feed a rolling transcript tail
+                // to whisper as an initial prompt on the live path. Live VAD
+                // chunks are short, and whisper.cpp readily regurgitates a
+                // growing prompt back into its output on short audio —
+                // producing duplicated, ever-lengthening lines littered with
+                // "..." continuation markers (it thinks it's mid-sentence).
+                // Each chunk is transcribed independently instead.
 
                 // Cross-source echo dedup state (mic bleed of system audio,
                 // or vice versa, in speaker-not-headphones setups). See
                 // echo_dedup.rs for the full rationale and policy. Lives
-                // per-worker-loop, i.e. per recording session, same as
-                // `context_tail` above.
+                // per-worker-loop, i.e. per recording session.
                 let mut echo_dedup = EchoDedup::new();
 
                 loop {
@@ -243,13 +243,11 @@ pub fn start_transcription_task<R: Runtime>(
                                     None
                                 };
 
-                            // Transcribe with provider-agnostic approach,
-                            // conditioning on the accepted transcript so far.
-                            let prompt = if context_tail.is_empty() {
-                                None
-                            } else {
-                                Some(context_tail.clone())
-                            };
+                            // Transcribe each chunk independently — no rolling
+                            // prompt (see the note at the top of the loop for
+                            // why conditioning on prior text corrupts the live
+                            // output).
+                            let prompt: Option<String> = None;
                             match transcribe_chunk_with_provider(
                                 &engine_clone,
                                 chunk,
@@ -320,24 +318,6 @@ pub fn start_transcription_task<R: Runtime>(
                                         && !hallucinated
                                         && !is_echo
                                     {
-                                        // Grow the conditioning context with
-                                        // accepted text, keeping only the tail
-                                        // (whisper's prompt window is ~224
-                                        // tokens; ~600 chars is comfortably
-                                        // within it).
-                                        if !context_tail.is_empty() {
-                                            context_tail.push(' ');
-                                        }
-                                        context_tail.push_str(transcript.trim());
-                                        if context_tail.len() > 600 {
-                                            let cut = context_tail.len() - 600;
-                                            let boundary = context_tail
-                                                .char_indices()
-                                                .map(|(i, _)| i)
-                                                .find(|&i| i >= cut)
-                                                .unwrap_or(0);
-                                            context_tail = context_tail.split_off(boundary);
-                                        }
                                         // PERFORMANCE: Only log transcription results, not every processing step
                                         info!("✅ Worker {} transcribed: {} (confidence: {}, partial: {})",
                                               worker_id, transcript, confidence_str, is_partial);
@@ -417,11 +397,26 @@ pub fn start_transcription_task<R: Runtime>(
                                             }
                                             _ => None,
                                         };
+                                        let diarized = diarization_result.is_some();
                                         let (speaker_label, voice_profile_id) =
                                             match diarization_result {
                                                 Some(r) => (r.label, r.voice_profile_id),
                                                 None => (default_speaker.to_string(), None),
                                             };
+                                        // Per-segment attribution trace. Debug-level so it's
+                                        // silent by default; enable with
+                                        // RUST_LOG=app_lib::audio::transcription::worker=debug
+                                        // to see whether live labels come from the diarizer
+                                        // (matched profile / "Speaker N") or the source
+                                        // fallback ("Me" / "Speaker").
+                                        log::debug!(
+                                            "Worker {} attribution: source={:?} speaker='{}' profile={:?} diarized={}",
+                                            worker_id,
+                                            chunk_source,
+                                            speaker_label,
+                                            voice_profile_id,
+                                            diarized
+                                        );
 
                                         let update = TranscriptUpdate {
                                             text: transcript,

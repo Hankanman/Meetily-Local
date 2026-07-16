@@ -436,7 +436,44 @@ impl WhisperEngine {
     }
 
     // Enhanced function to clean repetitive text patterns and meaningless outputs
+    /// whisper.cpp brackets short or uncertain segments with "..." continuation
+    /// markers (e.g. "...yeah..."). They're a decode artifact, not real
+    /// punctuation, so collapse any run of 3+ dots to a space. Shorter runs
+    /// (abbreviations, decimals like "3.5") are left alone.
+    fn strip_continuation_ellipses(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut dots = 0usize;
+        let flush = |out: &mut String, dots: usize| {
+            if dots >= 3 {
+                out.push(' ');
+            } else {
+                for _ in 0..dots {
+                    out.push('.');
+                }
+            }
+        };
+        for ch in text.chars() {
+            if ch == '.' {
+                dots += 1;
+            } else {
+                flush(&mut out, dots);
+                dots = 0;
+                out.push(ch);
+            }
+        }
+        flush(&mut out, dots);
+        out.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
     fn clean_repetitive_text(text: &str) -> String {
+        if text.is_empty() {
+            return String::new();
+        }
+
+        // Strip whisper's "..." continuation markers before any other analysis
+        // (they otherwise survive as literal "...word..." fragments in the UI).
+        let stripped = Self::strip_continuation_ellipses(text);
+        let text = stripped.as_str();
         if text.is_empty() {
             return String::new();
         }
