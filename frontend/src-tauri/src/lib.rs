@@ -543,35 +543,9 @@ pub fn run() {
                 log::error!("Failed to create system tray: {}", e);
             }
 
-            // Initialize notification system with proper defaults
-            log::info!("Initializing notification system...");
-            let app_for_notif = _app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let notif_state = app_for_notif.state::<NotificationManagerState<tauri::Wry>>();
-                match notifications::commands::initialize_notification_manager(
-                    app_for_notif.clone(),
-                )
-                .await
-                {
-                    Ok(manager) => {
-                        // Set default consent and permissions on first launch
-                        if let Err(e) = manager.set_consent(true).await {
-                            log::error!("Failed to set initial consent: {}", e);
-                        }
-                        if let Err(e) = manager.request_permission().await {
-                            log::error!("Failed to request initial permission: {}", e);
-                        }
-
-                        // Store the initialized manager
-                        let mut state_lock = notif_state.write().await;
-                        *state_lock = Some(manager);
-                        log::info!("Notification system initialized with default permissions");
-                    }
-                    Err(e) => {
-                        log::error!("Failed to initialize notification manager: {}", e);
-                    }
-                }
-            });
+            // Notification system is initialized *after* the database below —
+            // it reads consent and persists settings, so starting it before the
+            // DB is ready raced and logged a spurious init error every launch.
 
             // Set models directory to use app_data_dir (unified storage location)
             whisper_engine::commands::set_models_directory(&_app.handle());
@@ -655,6 +629,38 @@ pub fn run() {
                 database::setup::initialize_database_on_startup(&_app.handle()).await
             })
             .expect("Failed to initialize database");
+
+            // Initialize notification system now that the database is ready.
+            // (Consent lookup + settings persistence both need the DB pool; the
+            // block_on above guarantees it's initialized before this spawns.)
+            log::info!("Initializing notification system...");
+            let app_for_notif = _app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let notif_state = app_for_notif.state::<NotificationManagerState<tauri::Wry>>();
+                match notifications::commands::initialize_notification_manager(
+                    app_for_notif.clone(),
+                )
+                .await
+                {
+                    Ok(manager) => {
+                        // Set default consent and permissions on first launch
+                        if let Err(e) = manager.set_consent(true).await {
+                            log::error!("Failed to set initial consent: {}", e);
+                        }
+                        if let Err(e) = manager.request_permission().await {
+                            log::error!("Failed to request initial permission: {}", e);
+                        }
+
+                        // Store the initialized manager
+                        let mut state_lock = notif_state.write().await;
+                        *state_lock = Some(manager);
+                        log::info!("Notification system initialized with default permissions");
+                    }
+                    Err(e) => {
+                        log::error!("Failed to initialize notification manager: {}", e);
+                    }
+                }
+            });
 
             // Initialize bundled templates directory for dynamic template discovery
             log::info!("Initializing bundled templates directory...");
