@@ -2,6 +2,7 @@
 pub mod audio_processing;
 pub mod clip;
 pub mod decoder;
+pub mod playback;
 pub mod encode;
 pub mod ffmpeg;
 pub mod vad;

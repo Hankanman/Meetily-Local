@@ -760,6 +760,8 @@ pub fn run() {
             api::api_test_custom_openai_connection,
             // Action items + meeting notes
             audio::clip::get_meeting_audio_clip,
+            audio::clip::play_meeting_audio_clip,
+            audio::clip::stop_meeting_audio_clip,
             api::action_items::start_live_action_extraction,
             api::action_items::stop_live_action_extraction,
             api::action_items::list_action_items,

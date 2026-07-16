@@ -4,72 +4,78 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
-
-import { getMeetingAudioClip } from "@/lib/audio-clip";
 
 interface SegmentAudioValue {
   /** Segment key currently playing, or null. */
   playingKey: string | null;
-  /** Segment key whose clip is being fetched/decoded, or null. */
+  /** Segment key whose clip is being extracted, or null. */
   loadingKey: string | null;
   /** Play `[startSecs, endSecs]` of the meeting's audio for `key`, or stop it
-   *  if that key is already the active one. */
+   *  if that key is already the active one. `source` ("mic" | "system") selects
+   *  the matching channel of the stereo recording; omit to play a mono downmix. */
   toggle: (
     key: string,
     meetingId: string,
     startSecs: number,
     endSecs: number,
+    source?: string,
   ) => void;
   stop: () => void;
 }
 
 const SegmentAudioContext = createContext<SegmentAudioValue | null>(null);
 
+const PLAYBACK_ENDED_EVENT = "segment-playback-ended";
+
 /**
- * Shares a single Web Audio context and "only one segment plays at a time"
- * state across a transcript's segment rows. Playback uses decoded WAV clips
- * (see `lib/audio-clip`) rather than an <audio> element so it works even where
- * the webview's mp4/GStreamer path is broken.
+ * Coordinates "only one segment plays at a time" across a transcript's rows.
+ * Playback happens natively in Rust (see `audio::playback`) rather than in the
+ * webview: the AppImage's bundled WebKit/GStreamer ships no plugins, so every
+ * in-webview audio path fails ("element appsink not found"). The Rust side
+ * emits `segment-playback-ended` when a clip finishes on its own.
  */
 export function SegmentAudioProvider({ children }: { children: ReactNode }) {
   const [playingKey, setPlayingKey] = useState<string | null>(null);
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
 
-  const ctxRef = useRef<AudioContext | null>(null);
-  const sourceRef = useRef<AudioBufferSourceNode | null>(null);
-  // Bumped on every play/stop so a slow decode that resolves after the user
-  // moved on doesn't start stale audio or clobber newer state.
+  // Bumped on every play/stop so a slow extraction that resolves after the
+  // user moved on doesn't flip stale state.
   const requestRef = useRef(0);
 
-  const stopSource = useCallback(() => {
-    if (sourceRef.current) {
-      try {
-        sourceRef.current.onended = null;
-        sourceRef.current.stop();
-      } catch {
-        // already stopped
-      }
-      try {
-        sourceRef.current.disconnect();
-      } catch {
-        // already disconnected
-      }
-      sourceRef.current = null;
-    }
+  // A clip that finishes on its own clears the playing state. Playback that's
+  // replaced or explicitly stopped doesn't emit this (the backend guards it).
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void (async () => {
+      const fn = await listen(PLAYBACK_ENDED_EVENT, () => {
+        setPlayingKey(null);
+        setLoadingKey(null);
+      });
+      if (cancelled) fn();
+      else unlisten = fn;
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   const stop = useCallback(() => {
     requestRef.current++;
-    stopSource();
     setPlayingKey(null);
     setLoadingKey(null);
-  }, [stopSource]);
+    void invoke("stop_meeting_audio_clip").catch(() => {});
+  }, []);
 
   const play = useCallback(
     async (
@@ -77,35 +83,21 @@ export function SegmentAudioProvider({ children }: { children: ReactNode }) {
       meetingId: string,
       startSecs: number,
       endSecs: number,
+      source?: string,
     ) => {
       const reqId = ++requestRef.current;
-      stopSource();
       setPlayingKey(null);
       setLoadingKey(key);
       try {
-        const ctx =
-          ctxRef.current ??
-          (ctxRef.current = new (window.AudioContext ||
-            // Safari/WebKit legacy name
-            (window as unknown as { webkitAudioContext: typeof AudioContext })
-              .webkitAudioContext)());
-        if (ctx.state === "suspended") await ctx.resume();
-
-        const raw = await getMeetingAudioClip(meetingId, startSecs, endSecs);
-        const audioBuffer = await ctx.decodeAudioData(raw);
+        // Resolves once playback *starts* (the clip is extracted, then played
+        // natively); the end-event clears `playingKey` when it finishes.
+        await invoke("play_meeting_audio_clip", {
+          meetingId,
+          startSecs,
+          endSecs,
+          source: source ?? null,
+        });
         if (reqId !== requestRef.current) return; // superseded by a newer click
-
-        const source = ctx.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(ctx.destination);
-        source.onended = () => {
-          if (reqId === requestRef.current) {
-            sourceRef.current = null;
-            setPlayingKey(null);
-          }
-        };
-        sourceRef.current = source;
-        source.start();
         setLoadingKey(null);
         setPlayingKey(key);
       } catch (e) {
@@ -122,15 +114,21 @@ export function SegmentAudioProvider({ children }: { children: ReactNode }) {
         );
       }
     },
-    [stopSource],
+    [],
   );
 
   const toggle = useCallback(
-    (key: string, meetingId: string, startSecs: number, endSecs: number) => {
+    (
+      key: string,
+      meetingId: string,
+      startSecs: number,
+      endSecs: number,
+      source?: string,
+    ) => {
       if (playingKey === key || loadingKey === key) {
         stop();
       } else {
-        void play(key, meetingId, startSecs, endSecs);
+        void play(key, meetingId, startSecs, endSecs, source);
       }
     },
     [playingKey, loadingKey, play, stop],
