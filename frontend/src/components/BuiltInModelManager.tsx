@@ -3,7 +3,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
+import { Heading } from "@/components/ui/typography";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { Download, RefreshCw, BadgeAlert, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -253,6 +261,10 @@ export function BuiltInModelManager({
     }
   };
 
+  // The model to delete once confirmed. Deleting frees multi-GB files, so it
+  // goes through a confirm dialog rather than firing on the first click.
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+
   const deleteModel = async (modelName: string) => {
     try {
       await invoke("builtin_ai_delete_model", { modelName });
@@ -262,6 +274,12 @@ export function BuiltInModelManager({
       console.error("Failed to delete model:", error);
       toast.error(`Failed to delete ${modelName}`);
     }
+  };
+
+  const confirmDelete = async () => {
+    const name = pendingDelete;
+    setPendingDelete(null);
+    if (name) await deleteModel(name);
   };
 
   // Don't show loading spinner if we have downloads in progress - show the model list instead.
@@ -293,7 +311,7 @@ export function BuiltInModelManager({
   return (
     <div>
       <div className="mb-4 flex items-center justify-between">
-        <h4 className="text-sm font-bold">Built-in AI Models</h4>
+        <Heading level={3}>Built-in AI Models</Heading>
       </div>
 
       <div className="grid gap-4">
@@ -305,20 +323,39 @@ export function BuiltInModelManager({
           const isNotDownloaded = model.status.type === "not_downloaded";
           const isCorrupted = model.status.type === "corrupted";
           const isError = model.status.type === "error";
+          const selectable = isAvailable && !modelIsDownloading;
 
           return (
             <div
               key={model.name}
+              role={selectable ? "button" : undefined}
+              tabIndex={selectable ? 0 : undefined}
+              aria-pressed={selectable ? selectedModel === model.name : undefined}
+              onKeyDown={
+                selectable
+                  ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onModelSelect(model.name);
+                      }
+                    }
+                  : undefined
+              }
               className={cn(
                 "rounded-lg border p-4",
                 modelIsDownloading ? "border-border bg-background" : "bg-card",
                 selectedModel === model.name
                   ? "border-foreground ring-2 ring-foreground"
                   : "border-border",
-                isAvailable && !modelIsDownloading && "cursor-pointer",
+                selectable &&
+                  `
+                    cursor-pointer
+                    focus-visible:ring-2 focus-visible:ring-ring
+                    focus-visible:outline-none
+                  `,
               )}
               onClick={() => {
-                if (isAvailable && !modelIsDownloading) {
+                if (selectable) {
                   onModelSelect(model.name);
                 }
               }}
@@ -463,7 +500,7 @@ export function BuiltInModelManager({
                         size="sm"
                         onClick={(e) => {
                           e.stopPropagation();
-                          deleteModel(model.name);
+                          setPendingDelete(model.name);
                         }}
                       >
                         <Trash2 className="mr-2 size-4" />
@@ -476,19 +513,19 @@ export function BuiltInModelManager({
                   {isAvailable &&
                     !modelIsDownloading &&
                     selectedModel !== model.name && (
-                      <button
-                        className="
-                          rounded-md p-2 text-muted-foreground
-                          hover:bg-muted hover:text-destructive
-                        "
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-muted-foreground hover:text-destructive"
                         onClick={(e) => {
                           e.stopPropagation();
-                          deleteModel(model.name);
+                          setPendingDelete(model.name);
                         }}
+                        aria-label="Delete model"
                         title="Delete model"
                       >
                         <Trash2 className="size-4" />
-                      </button>
+                      </Button>
                     )}
                 </div>
               </div>
@@ -536,6 +573,32 @@ export function BuiltInModelManager({
           );
         })}
       </div>
+
+      <Dialog
+        open={!!pendingDelete}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete model?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This removes the downloaded files for{" "}
+            <span className="font-medium text-foreground">{pendingDelete}</span>{" "}
+            to free up disk space. You can download it again later.
+          </p>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingDelete(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmDelete}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

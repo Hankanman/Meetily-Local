@@ -23,6 +23,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { Heading } from "@/components/ui/typography";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface ModelManagerProps {
   selectedModel?: string;
@@ -451,6 +458,16 @@ export function ModelManager({
     }
   };
 
+  // The model pending deletion. Whisper models are up to ~3 GB, so deletion
+  // is confirmed rather than firing on the first click.
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+
+  const confirmDelete = async () => {
+    const name = pendingDelete;
+    setPendingDelete(null);
+    if (name) await deleteModel(name);
+  };
+
   // Delayed skeleton: only render the loading placeholder if the fetch
   // takes longer than ~250ms. The Tauri `WhisperAPI.init` + model-list
   // call typically completes in < 100ms on a warm cache, which made the
@@ -528,7 +545,7 @@ export function ModelManager({
               }}
               onDownload={() => downloadModel(model.name)}
               onCancel={() => cancelDownload(model.name)}
-              onDelete={() => deleteModel(model.name)}
+              onDelete={() => setPendingDelete(model.name)}
               isDownloading={downloadingModels.has(model.name)}
               displayName={getDisplayName(model.name)}
             />
@@ -558,7 +575,7 @@ export function ModelManager({
                     }}
                     onDownload={() => downloadModel(model.name)}
                     onCancel={() => cancelDownload(model.name)}
-                    onDelete={() => deleteModel(model.name)}
+                    onDelete={() => setPendingDelete(model.name)}
                     isDownloading={downloadingModels.has(model.name)}
                     displayName={getDisplayName(model.name)}
                   />
@@ -575,6 +592,34 @@ export function ModelManager({
           Using {getDisplayName(selectedModel)} for transcription
         </div>
       )}
+
+      <Dialog
+        open={!!pendingDelete}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete model?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This removes the downloaded files for{" "}
+            <span className="font-medium text-foreground">
+              {pendingDelete ? getDisplayName(pendingDelete) : ""}
+            </span>{" "}
+            to free up disk space. You can download it again later.
+          </p>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPendingDelete(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmDelete}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -623,8 +668,21 @@ function ModelCard({
     // when the page renders ~10 cards. The lone <motion.span> for
     // the ✓ checkmark on the selected card works standalone.
     <div
+      role={isAvailable ? "button" : undefined}
+      tabIndex={isAvailable ? 0 : undefined}
+      aria-pressed={isAvailable ? isSelected : undefined}
+      onKeyDown={
+        isAvailable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelect();
+              }
+            }
+          : undefined
+      }
       className={`
-        group relative cursor-pointer rounded-lg border-2
+        group relative rounded-lg border-2
         ${
           isSelected && isAvailable
             ? "border-info bg-info/10"
@@ -632,7 +690,15 @@ function ModelCard({
               ? "border-border bg-background"
               : "border-border bg-muted"
         }
-        ${isAvailable ? "" : "cursor-default"}
+        ${
+          isAvailable
+            ? `
+              cursor-pointer
+              focus-visible:ring-2 focus-visible:ring-ring
+              focus-visible:outline-none
+            `
+            : "cursor-default"
+        }
       `}
       onClick={() => {
         if (isAvailable) onSelect();

@@ -1,9 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Calendar as CalendarIcon, Search, X } from "lucide-react";
+import { Calendar as CalendarIcon, Search } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { listCalendarEvents, type CalendarEvent } from "@/lib/calendar";
 
 interface CalendarEventPickerProps {
@@ -112,35 +117,23 @@ export function CalendarEventPicker({
   }, [events, query, anchorMs]);
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Pick a calendar event"
-      className="
-        fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4
-      "
-      onClick={onClose}
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
     >
-      <div
+      <DialogContent
         className="
-          flex w-full max-w-xl flex-col overflow-hidden rounded-lg border
-          border-border bg-background shadow-xl
+          flex max-h-[min(80vh,640px)] w-full max-w-xl flex-col gap-0
+          overflow-hidden p-0
         "
-        style={{ maxHeight: "min(80vh, 640px)" }}
-        onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <h2 className="text-sm font-semibold">Link calendar event</h2>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            <X className="size-4" />
-          </Button>
-        </div>
+        <DialogHeader className="
+          space-y-0 border-b border-border px-4 py-3 text-left
+        ">
+          <DialogTitle className="text-sm">Link calendar event</DialogTitle>
+        </DialogHeader>
 
         <div className="border-b border-border p-3">
           <div className="relative">
@@ -187,7 +180,7 @@ export function CalendarEventPicker({
                       disabled={isSaving}
                       onClick={() => void onPick(e.id)}
                       className={`
-                        flex w-full items-start gap-2 rounded-md p-2 
+                        flex w-full items-start gap-2 rounded-md p-2
                         text-left text-sm
                         ${isCurrent
                           ? "bg-info/10 text-info"
@@ -218,7 +211,7 @@ export function CalendarEventPicker({
             </ul>
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
