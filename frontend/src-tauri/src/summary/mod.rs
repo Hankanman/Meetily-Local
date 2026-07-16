@@ -30,6 +30,7 @@ pub struct CustomOpenAIConfig {
 }
 
 pub mod action_extraction;
+pub mod transcript_action_items;
 pub mod commands;
 pub mod llm_client;
 pub mod markdown_export;

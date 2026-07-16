@@ -84,6 +84,13 @@ pub struct ActionItem {
     pub source: String,
     /// Opaque id in an external tracker once pushed there; NULL until then.
     pub external_ref: Option<String>,
+    /// Recording-relative seconds of the transcript segment this item was
+    /// extracted from, when the transcript-sourced extractor could ground it.
+    /// NULL for legacy/summary-sourced items and manual/agent entries.
+    pub source_start_secs: Option<f64>,
+    pub source_end_secs: Option<f64>,
+    /// The transcript sentence that triggered the item (for verification).
+    pub source_quote: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub completed_at: Option<String>,

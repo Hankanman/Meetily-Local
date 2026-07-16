@@ -36,12 +36,6 @@
       "item_format": "| **Decision** | **Rationale** | **Timestamp** |\n| --- | --- | --- |"
     },
     {
-      "title": "Action Items",
-      "instruction": "Tasks with owners, due dates, priority, and status",
-      "format": "list",
-      "item_format": "| **Owner** | **Task** | **Due Date** | **Priority** | **Status** |\n| --- | --- | --- | --- | --- |"
-    },
-    {
       "title": "Related Documents",
       "instruction": "Links to relevant documents, tickets, or designs discussed",
       "format": "list",

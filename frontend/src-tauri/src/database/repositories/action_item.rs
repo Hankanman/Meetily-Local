@@ -17,7 +17,8 @@ use uuid::Uuid;
 
 /// Columns of `action_items` in the order [`ActionItem`] declares them.
 const ACTION_ITEM_COLUMNS: &str = "id, meeting_id, text, assignee, due_hint, status, source, \
-     external_ref, created_at, updated_at, completed_at";
+     external_ref, source_start_secs, source_end_secs, source_quote, created_at, updated_at, \
+     completed_at";
 
 /// Lifecycle values accepted by [`ActionItemsRepository::set_status`].
 pub const STATUS_OPEN: &str = "open";
@@ -30,11 +31,17 @@ pub const SOURCE_AGENT: &str = "agent";
 
 /// An action item about to be written, before it has an id or timestamps.
 /// Produced by the extractor and by the manual-create command.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NewActionItem {
     pub text: String,
     pub assignee: Option<String>,
     pub due_hint: Option<String>,
+    /// Recording-relative seconds of the transcript segment the item was
+    /// grounded to (transcript-sourced extractor only). `None` otherwise.
+    pub source_start_secs: Option<f64>,
+    pub source_end_secs: Option<f64>,
+    /// The transcript sentence the model cited as evidence.
+    pub source_quote: Option<String>,
 }
 
 pub struct ActionItemsRepository;
@@ -320,8 +327,9 @@ impl ActionItemsRepository {
             sqlx::query(
                 "INSERT INTO action_items
                  (id, meeting_id, text, assignee, due_hint, status, source, external_ref,
+                  source_start_secs, source_end_secs, source_quote,
                   created_at, updated_at, completed_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&id)
             .bind(meeting_id)
@@ -331,6 +339,9 @@ impl ActionItemsRepository {
             .bind(&status)
             .bind(SOURCE_SUMMARY)
             .bind(&external_ref)
+            .bind(item.source_start_secs)
+            .bind(item.source_end_secs)
+            .bind(&item.source_quote)
             .bind(&created_at)
             .bind(&now)
             .bind(&completed_at)

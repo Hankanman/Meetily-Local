@@ -306,10 +306,6 @@ impl SummaryService {
                     }
                 }
 
-                // Kept for the action-item extraction pass below — `json!`
-                // moves `final_markdown` into the result payload.
-                let markdown_for_extraction = final_markdown.clone();
-
                 // Create result JSON with markdown only (summary_json will be added on first edit)
                 let result_json = serde_json::json!({
                     "markdown": final_markdown,
@@ -346,17 +342,17 @@ impl SummaryService {
                         );
                     }
 
-                    // Best-effort: re-read the finished summary and store its
-                    // action items as structured rows. Spawned rather than
-                    // awaited — the summary is already saved and the user is
-                    // looking at it; a slow or failing extraction must not
-                    // delay or affect that. Only runs once the summary is
-                    // committed, so a failure here can never roll one back.
-                    crate::summary::action_extraction::spawn_extraction(
+                    // Best-effort: extract structured action items from the
+                    // *transcript* (grounded to their timestamps), not the
+                    // summary. Spawned rather than awaited — the summary is
+                    // already saved and on screen; a slow or failing
+                    // extraction must not delay or affect it. Only runs once
+                    // the summary is committed, so a failure here can never
+                    // roll one back.
+                    crate::summary::transcript_action_items::spawn_transcript_extraction(
                         _app.clone(),
                         pool.clone(),
                         meeting_id.clone(),
-                        markdown_for_extraction,
                         model_provider.clone(),
                         model_name.clone(),
                     );

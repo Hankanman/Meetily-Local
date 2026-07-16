@@ -111,6 +111,18 @@ struct RawActionItem {
         alias = "when"
     )]
     due_hint: Option<String>,
+    /// The transcript sentence the item was drawn from. Only the
+    /// transcript-sourced extractor asks for this; the summary path leaves it
+    /// unset. Used to ground the item to a real timestamp (see
+    /// `transcript_action_items`).
+    #[serde(
+        default,
+        alias = "evidence",
+        alias = "source",
+        alias = "sentence",
+        alias = "supporting_quote"
+    )]
+    quote: Option<String>,
 }
 
 /// An array element: either a full object or a bare string. Models asked for
@@ -129,7 +141,7 @@ enum RawElement {
 /// and stores nothing); returns an empty vec when the model legitimately found
 /// no action items. That distinction matters: "the model said there are none"
 /// must clear stale items, while "we couldn't understand the response" must not.
-fn parse_action_items(raw: &str) -> Option<Vec<NewActionItem>> {
+pub(crate) fn parse_action_items(raw: &str) -> Option<Vec<NewActionItem>> {
     let cleaned = strip_code_fences(raw.trim());
 
     // Whole response is valid JSON: either the array itself, or an object
@@ -224,9 +236,11 @@ fn normalize_elements(elements: Vec<RawElement>) -> Vec<NewActionItem> {
     let mut seen: Vec<String> = Vec::new();
 
     for element in elements {
-        let (text, assignee, due_hint) = match element {
-            RawElement::Text(t) => (t, None, None),
-            RawElement::Object(o) => (o.text.unwrap_or_default(), o.assignee, o.due_hint),
+        let (text, assignee, due_hint, quote) = match element {
+            RawElement::Text(t) => (t, None, None, None),
+            RawElement::Object(o) => {
+                (o.text.unwrap_or_default(), o.assignee, o.due_hint, o.quote)
+            }
         };
 
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -256,6 +270,9 @@ fn normalize_elements(elements: Vec<RawElement>) -> Vec<NewActionItem> {
             text,
             assignee: clean_optional(assignee),
             due_hint: clean_optional(due_hint),
+            source_quote: clean_optional(quote),
+            source_start_secs: None,
+            source_end_secs: None,
         });
 
         if out.len() >= MAX_ITEMS {
@@ -287,15 +304,15 @@ fn clean_optional(value: Option<String>) -> Option<String> {
 /// the summary that produced its input), minus the context-window sizing — the
 /// summary markdown is small and this call is single-shot, so there's nothing to
 /// chunk.
-struct LlmCredentials {
-    provider: LLMProvider,
-    api_key: String,
-    ollama_endpoint: Option<String>,
-    custom_openai_endpoint: Option<String>,
+pub(crate) struct LlmCredentials {
+    pub(crate) provider: LLMProvider,
+    pub(crate) api_key: String,
+    pub(crate) ollama_endpoint: Option<String>,
+    pub(crate) custom_openai_endpoint: Option<String>,
 }
 
 impl LlmCredentials {
-    async fn resolve(pool: &SqlitePool, provider_name: &str) -> Result<Self, String> {
+    pub(crate) async fn resolve(pool: &SqlitePool, provider_name: &str) -> Result<Self, String> {
         let provider = LLMProvider::from_str(provider_name)?;
 
         let keyless = matches!(

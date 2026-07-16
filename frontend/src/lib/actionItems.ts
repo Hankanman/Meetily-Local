@@ -21,6 +21,13 @@ export interface ActionItem {
   status: ActionItemStatus;
   source: ActionItemSource;
   external_ref: string | null;
+  /** Recording-relative seconds of the transcript segment this item was
+   *  grounded to (transcript-sourced extraction). Null for summary/legacy
+   *  items and manual/agent entries. Enables per-item audio playback. */
+  source_start_secs: number | null;
+  source_end_secs: number | null;
+  /** The transcript sentence the item was drawn from. */
+  source_quote: string | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;

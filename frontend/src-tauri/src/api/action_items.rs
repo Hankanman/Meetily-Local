@@ -17,6 +17,7 @@ use crate::database::repositories::setting::SettingsRepository;
 use crate::database::repositories::summary::SummaryProcessesRepository;
 use crate::state::AppState;
 use crate::summary::action_extraction;
+use crate::summary::transcript_action_items;
 use crate::summary::markdown_export::extract_markdown;
 use tauri::{AppHandle, Runtime};
 use tracing::info;
@@ -69,6 +70,7 @@ pub async fn create_action_item<R: Runtime>(
         text,
         assignee: assignee.and_then(non_empty),
         due_hint: due_hint.and_then(non_empty),
+        ..Default::default()
     };
 
     ActionItemsRepository::create(state.db_manager.pool(), &meeting_id, &item, SOURCE_MANUAL)
@@ -139,20 +141,6 @@ pub async fn extract_action_items<R: Runtime>(
 ) -> Result<usize, String> {
     let pool = state.db_manager.pool();
 
-    let process = SummaryProcessesRepository::get_summary_data_for_meeting(pool, &meeting_id)
-        .await
-        .map_err(|e| format!("Failed to load summary: {e}"))?
-        .ok_or_else(|| "This meeting has no summary yet. Generate one first.".to_string())?;
-
-    let result_str = process
-        .result
-        .ok_or_else(|| "This meeting has no summary yet. Generate one first.".to_string())?;
-    let result_json: serde_json::Value = serde_json::from_str(&result_str)
-        .map_err(|e| format!("Stored summary is not valid JSON: {e}"))?;
-    let markdown = extract_markdown(&result_json)
-        .filter(|m| !m.trim().is_empty())
-        .ok_or_else(|| "The stored summary has no markdown body to extract from.".to_string())?;
-
     let config = SettingsRepository::get_model_config(pool)
         .await
         .map_err(|e| format!("Failed to read model config: {e}"))?
@@ -163,15 +151,54 @@ pub async fn extract_action_items<R: Runtime>(
         meeting_id, config.provider, config.model
     );
 
-    action_extraction::extract_for_meeting(
+    // Prefer the transcript (timestamped ground truth). Fall back to the
+    // summary only for meetings whose transcript segments aren't stored.
+    match transcript_action_items::extract_from_transcript(
         &app,
         pool,
         &meeting_id,
-        &markdown,
         &config.provider,
         &config.model,
     )
     .await
+    {
+        Ok(count) => Ok(count),
+        Err(transcript_err) => {
+            info!(
+                "Transcript extraction unavailable for {meeting_id} ({transcript_err}); \
+                 falling back to the summary"
+            );
+            let process =
+                SummaryProcessesRepository::get_summary_data_for_meeting(pool, &meeting_id)
+                    .await
+                    .map_err(|e| format!("Failed to load summary: {e}"))?
+                    .ok_or_else(|| {
+                        "No transcript to extract from, and no summary either. Generate a \
+                         summary first."
+                            .to_string()
+                    })?;
+            let result_str = process
+                .result
+                .ok_or_else(|| "This meeting has no summary yet. Generate one first.".to_string())?;
+            let result_json: serde_json::Value = serde_json::from_str(&result_str)
+                .map_err(|e| format!("Stored summary is not valid JSON: {e}"))?;
+            let markdown = extract_markdown(&result_json)
+                .filter(|m| !m.trim().is_empty())
+                .ok_or_else(|| {
+                    "Nothing to extract from: no transcript and an empty summary.".to_string()
+                })?;
+
+            action_extraction::extract_for_meeting(
+                &app,
+                pool,
+                &meeting_id,
+                &markdown,
+                &config.provider,
+                &config.model,
+            )
+            .await
+        }
+    }
 }
 
 #[tauri::command]

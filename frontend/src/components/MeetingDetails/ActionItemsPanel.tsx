@@ -1,7 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ListChecks, Plus, Sparkles, Trash2, User } from "lucide-react";
+import {
+  Check,
+  ListChecks,
+  Loader2,
+  Play,
+  Plus,
+  Sparkles,
+  Square,
+  Trash2,
+  User,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +19,14 @@ import { Spinner } from "@/components/ui/spinner";
 import { Heading } from "@/components/ui/typography";
 import { ActionItem } from "@/lib/actionItems";
 import { useActionItems } from "@/hooks/meeting-details/useActionItems";
+import {
+  SegmentAudioProvider,
+  useSegmentAudio,
+} from "@/contexts/SegmentAudioContext";
 import { cn } from "@/lib/utils";
+
+/** Default clip length when an action item has a start but no stored end. */
+const DEFAULT_CLIP_SECS = 8;
 
 interface ActionItemsPanelProps {
   meetingId: string;
@@ -108,16 +125,19 @@ export function ActionItemsPanel({ meetingId, hasSummary }: ActionItemsPanelProp
             : "No action items yet. Add one below."}
         </p>
       ) : (
-        <ul className="mb-3 space-y-1">
-          {items.map((item) => (
-            <ActionItemRow
-              key={item.id}
-              item={item}
-              onToggle={() => void toggleStatus(item)}
-              onDelete={() => void removeItem(item)}
-            />
-          ))}
-        </ul>
+        <SegmentAudioProvider>
+          <ul className="mb-3 space-y-1">
+            {items.map((item) => (
+              <ActionItemRow
+                key={item.id}
+                item={item}
+                meetingId={meetingId}
+                onToggle={() => void toggleStatus(item)}
+                onDelete={() => void removeItem(item)}
+              />
+            ))}
+          </ul>
+        </SegmentAudioProvider>
       )}
 
       <div className="flex items-center gap-2">
@@ -150,16 +170,61 @@ export function ActionItemsPanel({ meetingId, hasSummary }: ActionItemsPanelProp
   );
 }
 
+/** Play the recording slice this action item was extracted from. Renders
+ *  nothing unless the item is grounded to a timestamp. */
+function ActionItemPlayButton({
+  itemId,
+  meetingId,
+  startSecs,
+  endSecs,
+}: {
+  itemId: string;
+  meetingId: string;
+  startSecs: number;
+  endSecs: number;
+}) {
+  const audio = useSegmentAudio();
+  if (!audio) return null;
+
+  const isPlaying = audio.playingKey === itemId;
+  const isLoading = audio.loadingKey === itemId;
+
+  return (
+    <button
+      type="button"
+      onClick={() => audio.toggle(itemId, meetingId, startSecs, endSecs)}
+      aria-label={isPlaying ? "Stop playback" : "Play the moment this was said"}
+      title={isPlaying ? "Stop" : "Play the moment this was said"}
+      className="
+        inline-flex size-5 shrink-0 items-center justify-center rounded-full
+        text-muted-foreground transition-colors
+        hover:bg-muted hover:text-foreground
+      "
+    >
+      {isLoading ? (
+        <Loader2 className="size-3 animate-spin" />
+      ) : isPlaying ? (
+        <Square className="size-2.5 fill-current" />
+      ) : (
+        <Play className="size-3 fill-current" />
+      )}
+    </button>
+  );
+}
+
 function ActionItemRow({
   item,
+  meetingId,
   onToggle,
   onDelete,
 }: {
   item: ActionItem;
+  meetingId: string;
   onToggle: () => void;
   onDelete: () => void;
 }) {
   const isDone = item.status === "done";
+  const canPlay = item.source_start_secs != null;
 
   return (
     <li
@@ -201,8 +266,19 @@ function ActionItemRow({
         >
           {item.text}
         </span>
-        {(item.assignee || item.due_hint) && (
+        {(canPlay || item.assignee || item.due_hint) && (
           <div className="mt-0.5 flex flex-wrap items-center gap-2">
+            {canPlay && (
+              <ActionItemPlayButton
+                itemId={item.id}
+                meetingId={meetingId}
+                startSecs={item.source_start_secs!}
+                endSecs={
+                  item.source_end_secs ??
+                  item.source_start_secs! + DEFAULT_CLIP_SECS
+                }
+              />
+            )}
             {item.assignee && (
               <span className="
                 inline-flex items-center gap-1 text-xs text-muted-foreground
