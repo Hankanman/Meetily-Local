@@ -421,6 +421,16 @@ fn send_response(response: &Response) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    // Rust starts with SIGPIPE ignored, so writing our JSON response to a
+    // stdout whose reader (the Tauri app) has gone away returns EPIPE and
+    // `println!` panics with "failed printing to stdout: Broken pipe". Restore
+    // the default disposition so a vanished parent just terminates us quietly —
+    // the idiomatic behavior for a pipe-writing helper. Safe: this is the first
+    // thing main does, before any threads exist.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     // Get idle timeout from environment variable (default 5 minutes)
     let idle_timeout_secs = std::env::var("LLAMA_IDLE_TIMEOUT")
         .ok()
