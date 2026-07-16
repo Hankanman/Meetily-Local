@@ -21,6 +21,13 @@ import {
   updateVoiceProfile,
   VoiceProfile,
 } from "@/lib/voice-profiles";
+import { getEventForMeeting } from "@/lib/calendar";
+
+/** A calendar attendee reduced to what the name/email form needs. */
+interface AttendeeSuggestion {
+  label: string;
+  email: string | null;
+}
 
 const MERGE_NEW_VALUE = "__new__";
 
@@ -63,6 +70,9 @@ export function EditableSpeakerChip({
   // means "fall through to the name/email inputs".
   const [profiles, setProfiles] = useState<VoiceProfile[]>([]);
   const [mergeTargetId, setMergeTargetId] = useState<string>(MERGE_NEW_VALUE);
+  // Attendees of the linked calendar event, offered as one-click name/email
+  // fills when the meeting is associated with an event. Empty otherwise.
+  const [attendees, setAttendees] = useState<AttendeeSuggestion[]>([]);
 
   const isMe = speaker === ME_LABEL;
   const parsedClusterId = voiceProfileId
@@ -109,10 +119,35 @@ export function EditableSpeakerChip({
         }
       }
     })();
+
+    // If this meeting is linked to a calendar event, surface its attendees as
+    // quick name/email fills. Best-effort — a missing link just means none.
+    (async () => {
+      if (!meetingId) {
+        setAttendees([]);
+        return;
+      }
+      try {
+        const event = await getEventForMeeting(meetingId);
+        if (cancelled) return;
+        const seen = new Set<string>();
+        const suggestions: AttendeeSuggestion[] = [];
+        for (const a of event?.attendees ?? []) {
+          const label = (a.name?.trim() || a.email || "").trim();
+          if (!label || seen.has(label.toLowerCase())) continue;
+          seen.add(label.toLowerCase());
+          suggestions.push({ label, email: a.email });
+        }
+        setAttendees(suggestions);
+      } catch {
+        if (!cancelled) setAttendees([]);
+      }
+    })();
+
     return () => {
       cancelled = true;
     };
-  }, [open, speaker, voiceProfileId, isNamedProfile]);
+  }, [open, speaker, voiceProfileId, isNamedProfile, meetingId]);
 
   const chipClass = `
     mb-1 mr-2 inline-block rounded-full px-2 py-0.5 text-xs font-medium
@@ -219,6 +254,45 @@ export function EditableSpeakerChip({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+          )}
+
+          {!mergeTarget && attendees.length > 0 && (
+            <div className="space-y-1">
+              <Label>From this meeting&apos;s calendar</Label>
+              <div className="flex flex-wrap gap-1">
+                {attendees.map((a) => {
+                  const selected =
+                    name.trim() === a.label &&
+                    (email.trim() || null) === (a.email || null);
+                  return (
+                    <button
+                      key={a.label}
+                      type="button"
+                      onClick={() => {
+                        setName(a.label);
+                        setEmail(a.email ?? "");
+                      }}
+                      className={`
+                        rounded-full border px-2 py-0.5 text-xs transition-colors
+                        ${
+                          selected
+                            ? `
+                              border-primary bg-primary text-primary-foreground
+                            `
+                            : `
+                              border-border text-muted-foreground
+                              hover:bg-muted hover:text-foreground
+                            `
+                        }
+                      `}
+                      title={a.email ?? undefined}
+                    >
+                      {a.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
 
