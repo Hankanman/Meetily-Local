@@ -879,6 +879,27 @@ pub fn run() {
                     }
                 });
                 log::info!("Application cleanup complete");
+
+                // Exit immediately, skipping C/C++ static destructors.
+                //
+                // With a GPU whisper backend (CUDA/Vulkan/HIP), ggml's
+                // finalizers run `cudaStreamSynchronize` during __cxa_finalize
+                // — but by then the NVIDIA driver's own atexit handlers have
+                // begun tearing down (the log shows `current device: -1` /
+                // "CUDA error: driver shutting down"). ggml treats any CUDA
+                // error as fatal and abort()s, dumping core *after* everything
+                // we care about already succeeded (DB checkpointed above,
+                // sidecar stopped, transcript + summary persisted). It's a
+                // pure teardown-ordering race, harmless to data but alarming
+                // and it trips crash reporters.
+                //
+                // All real cleanup happens in this handler and the logger is
+                // unbuffered, so there is nothing left for the finalizers to
+                // do except crash. `_exit` ends the process at the kernel
+                // level and lets the driver reclaim the GPU context on process
+                // death. NOTE: this means shutdown work must live in *this
+                // handler*, not in Drop impls that expect a normal exit.
+                unsafe { libc::_exit(0) };
             }
         });
 }
