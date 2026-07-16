@@ -759,6 +759,7 @@ pub fn run() {
             api::api_get_custom_openai_config,
             api::api_test_custom_openai_connection,
             // Action items + meeting notes
+            audio::clip::get_meeting_audio_clip,
             api::action_items::list_action_items,
             api::action_items::list_open_action_items,
             api::action_items::create_action_item,

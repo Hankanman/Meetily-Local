@@ -1,5 +1,6 @@
 // src/audio/mod.rs
 pub mod audio_processing;
+pub mod clip;
 pub mod decoder;
 pub mod encode;
 pub mod ffmpeg;

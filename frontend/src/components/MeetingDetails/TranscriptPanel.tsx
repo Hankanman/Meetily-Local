@@ -3,6 +3,7 @@
 import { Transcript, TranscriptSegmentData } from "@/types";
 import { Textarea } from "@/components/ui/textarea";
 import { VirtualizedTranscriptView } from "@/components/VirtualizedTranscriptView";
+import { SegmentAudioProvider } from "@/contexts/SegmentAudioContext";
 import { TranscriptButtonGroup } from "./TranscriptButtonGroup";
 import { useMemo } from "react";
 
@@ -93,23 +94,26 @@ export function TranscriptPanel({
 
       {/* Transcript content - use virtualized view for better performance */}
       <div className="flex-1 overflow-hidden pb-4">
-        <VirtualizedTranscriptView
-          segments={convertedSegments}
-          isRecording={isRecording}
-          isPaused={false}
-          isProcessing={false}
-          isStopping={false}
-          enableStreaming={false}
-          showConfidence={true}
-          disableAutoScroll={disableAutoScroll}
-          hasMore={hasMore}
-          isLoadingMore={isLoadingMore}
-          totalCount={totalCount}
-          loadedCount={loadedCount}
-          onLoadMore={onLoadMore}
-          meetingId={meetingId}
-          onSpeakerProfileChanged={onRefetchTranscripts}
-        />
+        <SegmentAudioProvider>
+          <VirtualizedTranscriptView
+            segments={convertedSegments}
+            isRecording={isRecording}
+            isPaused={false}
+            isProcessing={false}
+            isStopping={false}
+            enableStreaming={false}
+            showConfidence={true}
+            disableAutoScroll={disableAutoScroll}
+            hasMore={hasMore}
+            isLoadingMore={isLoadingMore}
+            totalCount={totalCount}
+            loadedCount={loadedCount}
+            onLoadMore={onLoadMore}
+            meetingId={meetingId}
+            onSpeakerProfileChanged={onRefetchTranscripts}
+            enableSegmentPlayback={!isRecording && !!meetingId}
+          />
+        </SegmentAudioProvider>
       </div>
 
       {/* Custom prompt input at bottom of transcript section */}

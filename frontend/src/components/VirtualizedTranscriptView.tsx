@@ -21,6 +21,8 @@ import { TranscriptSegmentData, PartialsBySource } from "@/types";
 import { formatRecordingTime } from "@/lib/utils";
 import { EditableSpeakerChip } from "./EditableSpeakerChip";
 import { Heading } from "./ui/typography";
+import { Play, Square, Loader2 } from "lucide-react";
+import { useSegmentAudio } from "@/contexts/SegmentAudioContext";
 
 export interface VirtualizedTranscriptViewProps {
   /** Transcript segments to display */
@@ -54,6 +56,10 @@ export interface VirtualizedTranscriptViewProps {
    *  reload transcripts so other rows showing the same speaker pick up the
    *  rename. */
   onSpeakerProfileChanged?: () => void;
+  /** Show a per-segment play button (verify the speaker by ear). Requires a
+   *  SegmentAudioProvider ancestor and a `meetingId`; used by the
+   *  meeting-details view, not live recording. */
+  enableSegmentPlayback?: boolean;
 
   /** Ephemeral streaming preview text for in-progress utterances, keyed by
    *  source ("mic" | "system"). Rendered as a subordinate overlay below all
@@ -78,10 +84,55 @@ function cleanStopWords(text: string): string {
   return cleanedText.replace(/\s+/g, " ").trim();
 }
 
+// Little play/stop control next to a segment's speaker label, so the user can
+// listen to that slice of the recording and verify the attribution. Renders
+// nothing unless a SegmentAudioProvider is mounted (i.e. the meeting-details
+// view, not live recording).
+const SegmentPlayButton = memo(function SegmentPlayButton({
+  segmentKey,
+  meetingId,
+  startSecs,
+  endSecs,
+}: {
+  segmentKey: string;
+  meetingId: string;
+  startSecs: number;
+  endSecs: number;
+}) {
+  const audio = useSegmentAudio();
+  if (!audio) return null;
+
+  const isPlaying = audio.playingKey === segmentKey;
+  const isLoading = audio.loadingKey === segmentKey;
+
+  return (
+    <button
+      type="button"
+      onClick={() => audio.toggle(segmentKey, meetingId, startSecs, endSecs)}
+      aria-label={isPlaying ? "Stop playback" : "Play this segment"}
+      title={isPlaying ? "Stop" : "Play this segment"}
+      className="
+        mr-2 mb-1 inline-flex size-5 shrink-0 items-center justify-center
+        rounded-full align-middle text-muted-foreground transition-colors
+        hover:bg-muted hover:text-foreground
+      "
+    >
+      {isLoading ? (
+        <Loader2 className="size-3.5 animate-spin" />
+      ) : isPlaying ? (
+        <Square className="size-3 fill-current" />
+      ) : (
+        <Play className="size-3.5 fill-current" />
+      )}
+    </button>
+  );
+});
+
 // Memoized transcript segment component
 const TranscriptSegment = memo(function TranscriptSegment({
   id,
   timestamp,
+  endTime,
   text,
   confidence,
   speaker,
@@ -89,10 +140,12 @@ const TranscriptSegment = memo(function TranscriptSegment({
   meetingId,
   isStreaming,
   showConfidence,
+  enablePlayback,
   onSpeakerSaved,
 }: {
   id: string;
   timestamp: number;
+  endTime?: number;
   text: string;
   confidence?: number;
   speaker?: string;
@@ -100,10 +153,15 @@ const TranscriptSegment = memo(function TranscriptSegment({
   meetingId?: string;
   isStreaming: boolean;
   showConfidence: boolean;
+  enablePlayback?: boolean;
   onSpeakerSaved?: () => void;
 }) {
   const displayText =
     cleanStopWords(text) || (text.trim() === "" ? "[Silence]" : text);
+
+  // Playback needs a meeting to read audio from and a bounded [start, end].
+  const canPlay =
+    enablePlayback && !!meetingId && endTime != null && endTime > timestamp;
 
   return (
     <div id={`segment-${id}`} className="mb-3">
@@ -126,6 +184,14 @@ const TranscriptSegment = memo(function TranscriptSegment({
           </TooltipContent>
         </Tooltip>
         <div className="flex-1">
+          {canPlay && (
+            <SegmentPlayButton
+              segmentKey={id}
+              meetingId={meetingId!}
+              startSecs={timestamp}
+              endSecs={endTime!}
+            />
+          )}
           {speaker && (
             <EditableSpeakerChip
               speaker={speaker}
@@ -205,6 +271,7 @@ export const VirtualizedTranscriptView: React.FC<
   onLoadMore,
   meetingId,
   onSpeakerProfileChanged,
+  enableSegmentPlayback,
   partials,
 }) => {
   // Create scroll ref first - shared between virtualizer and auto-scroll hook
@@ -405,6 +472,7 @@ export const VirtualizedTranscriptView: React.FC<
                     <TranscriptSegment
                       id={segment.id}
                       timestamp={segment.timestamp}
+                      endTime={segment.endTime}
                       text={getDisplayText(segment)}
                       confidence={segment.confidence}
                       speaker={segment.speaker}
@@ -412,6 +480,7 @@ export const VirtualizedTranscriptView: React.FC<
                       meetingId={meetingId}
                       isStreaming={isStreaming}
                       showConfidence={showConfidence}
+                      enablePlayback={enableSegmentPlayback}
                       onSpeakerSaved={onSpeakerProfileChanged}
                     />
                   </div>
@@ -478,6 +547,7 @@ export const VirtualizedTranscriptView: React.FC<
                     <TranscriptSegment
                       id={segment.id}
                       timestamp={segment.timestamp}
+                      endTime={segment.endTime}
                       text={getDisplayText(segment)}
                       confidence={segment.confidence}
                       speaker={segment.speaker}
@@ -485,6 +555,7 @@ export const VirtualizedTranscriptView: React.FC<
                       meetingId={meetingId}
                       isStreaming={isStreaming}
                       showConfidence={showConfidence}
+                      enablePlayback={enableSegmentPlayback}
                       onSpeakerSaved={onSpeakerProfileChanged}
                     />
                   </motion.div>
