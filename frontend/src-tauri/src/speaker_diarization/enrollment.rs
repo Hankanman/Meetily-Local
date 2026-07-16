@@ -287,6 +287,7 @@ pub async fn cancel_self_voice_enrollment() -> Result<(), String> {
 #[command]
 pub async fn finish_self_voice_enrollment<R: Runtime>(
     app: AppHandle<R>,
+    name: Option<String>,
 ) -> Result<SelfVoiceStatus, String> {
     GENERATION.fetch_add(1, Ordering::SeqCst);
 
@@ -316,9 +317,10 @@ pub async fn finish_self_voice_enrollment<R: Runtime>(
         .ok_or_else(|| "AppState unavailable".to_string())?;
     let pool = state.db_manager.pool();
 
+    let label = self_label_or_default(name.as_deref());
     let profile_id = VoiceProfilesRepository::upsert_self(
         pool,
-        SELF_SPEAKER_LABEL,
+        &label,
         &centroid,
         window_count as i64,
     )
@@ -335,6 +337,50 @@ pub async fn finish_self_voice_enrollment<R: Runtime>(
     // The profile matcher is built once per recording session, so an enrollment
     // done while a diarizer is loaded takes effect on the next recording. That
     // is fine — enrollment is blocked during recording anyway.
+    self_voice_status(app.clone()).await
+}
+
+/// The label the user's own voice shows up as. Trims the supplied name and
+/// falls back to [`SELF_SPEAKER_LABEL`] ("Me") when it's blank, so there is
+/// always a sensible label. Capped so a pathological name can't bloat every
+/// transcript line.
+fn self_label_or_default(name: Option<&str>) -> String {
+    let trimmed = name.map(str::trim).unwrap_or("");
+    if trimmed.is_empty() {
+        SELF_SPEAKER_LABEL.to_string()
+    } else {
+        trimmed.chars().take(60).collect()
+    }
+}
+
+/// Rename the enrolled self profile without re-recording. A blank name resets
+/// the label to [`SELF_SPEAKER_LABEL`] ("Me"). Returns the updated status.
+#[command]
+pub async fn rename_self_voice_profile<R: Runtime>(
+    app: AppHandle<R>,
+    name: String,
+) -> Result<SelfVoiceStatus, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "AppState unavailable".to_string())?;
+    let pool = state.db_manager.pool();
+
+    let profile = VoiceProfilesRepository::get_self(pool)
+        .await
+        .map_err(|e| format!("Failed to load your voice profile: {}", e))?
+        .ok_or_else(|| "You haven't enrolled your voice yet".to_string())?;
+
+    let label = self_label_or_default(Some(&name));
+    VoiceProfilesRepository::update_profile(pool, &profile.id, &label, profile.email.as_deref())
+        .await
+        .map_err(|e| format!("Failed to rename your voice profile: {}", e))?;
+
+    log::info!(
+        "Voice enrollment: renamed self profile {} to '{}'",
+        profile.id,
+        label
+    );
+
     self_voice_status(app.clone()).await
 }
 
@@ -570,6 +616,20 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("at least"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn self_label_falls_back_to_me_when_blank() {
+        assert_eq!(self_label_or_default(None), SELF_SPEAKER_LABEL);
+        assert_eq!(self_label_or_default(Some("")), SELF_SPEAKER_LABEL);
+        assert_eq!(self_label_or_default(Some("   ")), SELF_SPEAKER_LABEL);
+    }
+
+    #[test]
+    fn self_label_trims_and_caps() {
+        assert_eq!(self_label_or_default(Some("  Seb  ")), "Seb");
+        let long: String = "a".repeat(100);
+        assert_eq!(self_label_or_default(Some(&long)).chars().count(), 60);
     }
 
     #[test]

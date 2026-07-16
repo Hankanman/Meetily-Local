@@ -10,7 +10,8 @@ import { invoke } from "@tauri-apps/api/core";
 export interface SelfVoiceStatus {
   enrolled: boolean;
   profile_id: string | null;
-  /** Display name of the stored profile — "Me". */
+  /** Display name of the stored profile — the label shown in transcripts for
+   *  the user's own voice. Defaults to "Me" but is user-editable. */
   name: string | null;
   /** Number of embedding windows behind the stored centroid. */
   sample_count: number | null;
@@ -49,10 +50,21 @@ export async function cancelSelfVoiceEnrollment(): Promise<void> {
 }
 
 /** Stops capture and turns the recording into the self profile, replacing any
- *  previous one. Rejects with a user-facing message if the audio was too
- *  short, too quiet, or had too little speech in it. */
-export async function finishSelfVoiceEnrollment(): Promise<SelfVoiceStatus> {
-  return invoke<SelfVoiceStatus>("finish_self_voice_enrollment");
+ *  previous one. `name` is the label shown in transcripts (blank → "Me").
+ *  Rejects with a user-facing message if the audio was too short, too quiet,
+ *  or had too little speech in it. */
+export async function finishSelfVoiceEnrollment(
+  name?: string,
+): Promise<SelfVoiceStatus> {
+  return invoke<SelfVoiceStatus>("finish_self_voice_enrollment", { name });
+}
+
+/** Rename the enrolled self profile without re-recording. Blank resets to
+ *  "Me". Returns the updated status. */
+export async function renameSelfVoiceProfile(
+  name: string,
+): Promise<SelfVoiceStatus> {
+  return invoke<SelfVoiceStatus>("rename_self_voice_profile", { name });
 }
 
 export async function deleteSelfVoiceProfile(): Promise<boolean> {

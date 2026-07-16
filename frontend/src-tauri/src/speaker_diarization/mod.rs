@@ -67,11 +67,14 @@ use anyhow::Result;
 /// single speaker into multiple "Speaker N" labels.
 pub const DEFAULT_CLUSTER_THRESHOLD: f32 = 0.55;
 
-/// Display label for the local user's own voice, and therefore the `name`
-/// stored on their enrolled voice profile (`is_self = 1`). Matches the
+/// Default display label for the local user's own voice. Used as the initial
+/// `name` on their enrolled voice profile (`is_self = 1`) and as the fallback
+/// when they clear the custom label — enrollment lets the user rename it to
+/// e.g. their own name (see `enrollment::self_label_or_default`). Also the
 /// no-diarizer mic placeholder in
-/// `audio::transcription::worker::default_speaker_for_source`, so a transcript
-/// reads the same whether or not a speaker model is loaded.
+/// `audio::transcription::worker::default_speaker_for_source`; that placeholder
+/// only applies with no speaker model loaded, which is exactly when no
+/// enrollment (and so no custom label) can exist, so the two never disagree.
 pub const SELF_SPEAKER_LABEL: &str = "Me";
 
 /// Result of diarizing a single speech segment.

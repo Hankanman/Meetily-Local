@@ -698,6 +698,7 @@ pub fn run() {
             speaker_diarization::enrollment::start_self_voice_enrollment,
             speaker_diarization::enrollment::cancel_self_voice_enrollment,
             speaker_diarization::enrollment::finish_self_voice_enrollment,
+            speaker_diarization::enrollment::rename_self_voice_profile,
             speaker_diarization::enrollment::self_voice_status,
             speaker_diarization::enrollment::delete_self_voice_profile,
             get_audio_devices,

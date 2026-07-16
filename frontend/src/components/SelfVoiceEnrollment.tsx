@@ -6,12 +6,14 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Check, Mic, Trash2 } from "lucide-react";
 
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
 import { AudioLevelMeter } from "./AudioLevelMeter";
 import {
   cancelSelfVoiceEnrollment,
   deleteSelfVoiceProfile,
   finishSelfVoiceEnrollment,
   getSelfVoiceStatus,
+  renameSelfVoiceProfile,
   SELF_VOICE_PROGRESS_EVENT,
   startSelfVoiceEnrollment,
   type SelfVoiceProgress,
@@ -53,11 +55,20 @@ export function SelfVoiceEnrollment({ onChange }: SelfVoiceEnrollmentProps) {
   const [mode, setMode] = useState<Mode>("idle");
   const [progress, setProgress] = useState<SelfVoiceProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The label the user's voice is shown as. Defaults to "Me"; used at
+  // enrollment time and editable afterwards.
+  const [name, setName] = useState<string>("Me");
 
   // Held in refs, not state: the progress listener fires ~10x/second and must
   // read the current values without re-subscribing on every tick.
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const finishingRef = useRef(false);
+  // Mirror `name` so the auto-save fired from the progress listener reads the
+  // latest value without the listener re-subscribing on every keystroke.
+  const nameRef = useRef(name);
+  useEffect(() => {
+    nameRef.current = name;
+  }, [name]);
 
   const detach = useCallback(() => {
     unlistenRef.current?.();
@@ -67,6 +78,10 @@ export function SelfVoiceEnrollment({ onChange }: SelfVoiceEnrollmentProps) {
   const applyStatus = useCallback(
     (next: SelfVoiceStatus) => {
       setStatus(next);
+      // Keep the name field in sync with the stored label (on load, after
+      // enrolling, renaming, or deleting). This only fires on those events,
+      // never mid-typing, so it can't clobber what the user is entering.
+      setName(next.name ?? "Me");
       onChange?.(next);
     },
     [onChange],
@@ -98,7 +113,7 @@ export function SelfVoiceEnrollment({ onChange }: SelfVoiceEnrollmentProps) {
     detach();
     setMode("saving");
     try {
-      applyStatus(await finishSelfVoiceEnrollment());
+      applyStatus(await finishSelfVoiceEnrollment(nameRef.current));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -108,6 +123,16 @@ export function SelfVoiceEnrollment({ onChange }: SelfVoiceEnrollmentProps) {
       setMode("idle");
     }
   }, [applyStatus, detach]);
+
+  // Rename the enrolled profile without re-recording.
+  const saveName = useCallback(async () => {
+    try {
+      applyStatus(await renameSelfVoiceProfile(nameRef.current));
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [applyStatus]);
 
   async function record() {
     setError(null);
@@ -178,13 +203,22 @@ export function SelfVoiceEnrollment({ onChange }: SelfVoiceEnrollmentProps) {
     ? Math.max(0, Math.ceil(progress.target_secs - progress.captured_secs))
     : null;
 
+  // Show a "Save" button next to the name only once enrolled and the field
+  // differs from the stored label (before enrolling, the name is applied when
+  // the recording is saved, so there's nothing to save separately).
+  const trimmedName = name.trim();
+  const nameChanged =
+    !!status?.enrolled &&
+    trimmedName.length > 0 &&
+    trimmedName !== (status.name ?? "");
+
   return (
     <div className="space-y-3">
       <div>
         <h3 className="text-sm font-medium">Your voice</h3>
         <p className="text-xs text-muted-foreground">
-          Record a short sample of yourself speaking and we&apos;ll label you as
-          &quot;Me&quot; in meetings instead of grouping you in with everyone
+          Record a short sample of yourself speaking so meetings can label your
+          voice with the name below, instead of grouping you in with everyone
           else the microphone picks up. Optional — skip it and nothing changes.
         </p>
       </div>
@@ -233,7 +267,41 @@ export function SelfVoiceEnrollment({ onChange }: SelfVoiceEnrollmentProps) {
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-between gap-4">
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label
+                htmlFor="self-voice-name"
+                className="text-sm font-medium"
+              >
+                Name
+              </label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="self-voice-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && nameChanged) {
+                      e.preventDefault();
+                      void saveName();
+                    }
+                  }}
+                  placeholder="Me"
+                  maxLength={60}
+                  className="max-w-xs"
+                />
+                {nameChanged && (
+                  <Button size="sm" onClick={saveName}>
+                    Save
+                  </Button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Shown in transcripts wherever your voice is recognised.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
               {status?.enrolled ? (
                 <>
@@ -285,6 +353,7 @@ export function SelfVoiceEnrollment({ onChange }: SelfVoiceEnrollmentProps) {
                   <Trash2 className="size-4 text-destructive" />
                 </Button>
               )}
+              </div>
             </div>
           </div>
         )}
