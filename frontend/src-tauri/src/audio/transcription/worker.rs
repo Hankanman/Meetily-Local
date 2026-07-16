@@ -96,6 +96,43 @@ pub fn default_speaker_for_source(source: DeviceType) -> (&'static str, &'static
     }
 }
 
+/// Split a VAD segment into speaker-turn sub-chunks so back-to-back speakers
+/// (with no silence gap for VAD to cut on) get separate segments and labels.
+///
+/// Only the system stream is split — it carries the remote participants who
+/// trade turns; the mic is echo-cancelled down to the single local user, so
+/// splitting it would only add cost. Short segments, and the no-diarizer case,
+/// pass through unchanged. The embedding runs off the async runtime (CPU-bound
+/// ONNX), matching how the main diarization step is scheduled.
+async fn split_chunk_by_speaker(chunk: AudioChunk) -> Vec<AudioChunk> {
+    let diarizer = match crate::speaker_diarization::current_diarizer() {
+        Some(d) if chunk.device_type == DeviceType::System => d,
+        _ => return vec![chunk],
+    };
+
+    let samples = chunk.data.clone();
+    let turns = match tokio::task::spawn_blocking(move || diarizer.speaker_turns(&samples)).await {
+        Ok(turns) => turns,
+        Err(_) => return vec![chunk],
+    };
+    if turns.len() <= 1 {
+        return vec![chunk];
+    }
+
+    let sample_rate = chunk.sample_rate as f64;
+    turns
+        .into_iter()
+        .map(|(start, end)| AudioChunk {
+            data: chunk.data[start..end].to_vec(),
+            sample_rate: chunk.sample_rate,
+            // Offset the recording-relative timestamp into the segment.
+            timestamp: chunk.timestamp + start as f64 / sample_rate,
+            chunk_id: chunk.chunk_id,
+            device_type: chunk.device_type,
+        })
+        .collect()
+}
+
 // NOTE: get_transcript_history and get_recording_meeting_name functions
 // have been moved to recording_commands.rs where they have access to RECORDING_MANAGER
 
@@ -188,11 +225,33 @@ pub fn start_transcription_task<R: Runtime>(
                 // per-worker-loop, i.e. per recording session.
                 let mut echo_dedup = EchoDedup::new();
 
+                // Sub-chunks produced by speaker-turn splitting, drained before
+                // pulling the next VAD segment off the channel. Splitting a
+                // multi-speaker segment here (rather than in the delicate
+                // per-chunk code below) lets every turn flow through the normal
+                // transcribe -> diarize -> emit path with its own sequence id.
+                let mut pending: std::collections::VecDeque<AudioChunk> =
+                    std::collections::VecDeque::new();
+
                 loop {
-                    // Try to get a chunk to process
-                    let chunk = {
-                        let mut receiver = work_receiver_clone.lock().await;
-                        receiver.recv().await
+                    // Prefer a queued speaker-turn sub-chunk; otherwise pull the
+                    // next VAD segment and split it into turns (off-thread).
+                    let chunk = if let Some(sub) = pending.pop_front() {
+                        Some(sub)
+                    } else {
+                        let received = {
+                            let mut receiver = work_receiver_clone.lock().await;
+                            receiver.recv().await
+                        };
+                        match received {
+                            Some(segment) => {
+                                for sub in split_chunk_by_speaker(segment).await {
+                                    pending.push_back(sub);
+                                }
+                                pending.pop_front()
+                            }
+                            None => None,
+                        }
                     };
 
                     match chunk {

@@ -181,6 +181,48 @@ impl Diarizer {
         })
     }
 
+    /// Detect speaker-turn boundaries within a single VAD segment and return
+    /// the contiguous sub-ranges `[start, end)` (in samples) that each belong
+    /// to one speaker. Returns a single whole-segment range when the audio is
+    /// too short to split reliably or holds one speaker throughout.
+    ///
+    /// Works by embedding consecutive ~1s windows and cutting where adjacent
+    /// voice embeddings diverge — this catches speakers who talk back-to-back
+    /// with no silence gap, which VAD (silence-based) can't separate. The
+    /// caller transcribes and labels each returned range independently.
+    pub fn speaker_turns(&self, samples_16k: &[f32]) -> Vec<(usize, usize)> {
+        /// 1s analysis window at 16 kHz — CAM++'s reliable minimum.
+        const WIN: usize = 16_000;
+        /// Don't attempt a split below 2s (can't hold two speakers reliably).
+        const MIN_TOTAL: usize = 2 * WIN;
+        /// Cosine similarity below this between adjacent windows => new speaker.
+        const CHANGE_SIM: f32 = 0.5;
+
+        let n = samples_16k.len();
+        if n < MIN_TOTAL {
+            return vec![(0, n)];
+        }
+
+        let bounds = window_bounds(n, WIN);
+        if bounds.len() < 2 {
+            return vec![(0, n)];
+        }
+
+        // Embedding is stateless per call; safe to run here. Windows that are
+        // too short/quiet to embed come back None and never force a cut.
+        let embeddings: Vec<Option<Vec<f32>>> = bounds
+            .iter()
+            .map(|&(a, b)| {
+                self.embedder.embed(&samples_16k[a..b]).ok().map(|mut e| {
+                    normalize(&mut e);
+                    e
+                })
+            })
+            .collect();
+
+        turns_from_embeddings(&bounds, &embeddings, CHANGE_SIM)
+    }
+
     /// Snapshot of all embeddings produced this session.
     pub fn export_history(&self) -> Vec<EmbeddingRecord> {
         self.history
@@ -201,6 +243,122 @@ impl Diarizer {
                     .collect()
             })
             .unwrap_or_default()
+    }
+}
+
+/// Consecutive analysis-window `[start, end)` bounds over `n` samples. A short
+/// trailing remainder (< half a window) is folded into the previous window so
+/// we never embed a tiny, unreliable stub.
+fn window_bounds(n: usize, win: usize) -> Vec<(usize, usize)> {
+    let mut bounds: Vec<(usize, usize)> = Vec::new();
+    let mut s = 0;
+    while s < n {
+        let e = (s + win).min(n);
+        if e - s < win / 2 {
+            match bounds.last_mut() {
+                Some(last) => last.1 = n,
+                None => bounds.push((s, n)),
+            }
+            break;
+        }
+        bounds.push((s, e));
+        s = e;
+    }
+    bounds
+}
+
+/// Group windows into speaker-turn ranges, cutting where adjacent (already
+/// L2-normalized) embeddings fall below `min_similarity`. Windows that failed
+/// to embed (`None`) never introduce a cut. The result always covers
+/// `[bounds[0].0, bounds.last().1)` contiguously with no gaps.
+fn turns_from_embeddings(
+    bounds: &[(usize, usize)],
+    embeddings: &[Option<Vec<f32>>],
+    min_similarity: f32,
+) -> Vec<(usize, usize)> {
+    if bounds.is_empty() {
+        return Vec::new();
+    }
+    let mut turns = Vec::new();
+    let mut start = 0usize;
+    for i in 1..bounds.len() {
+        let changed = match (&embeddings[i - 1], &embeddings[i]) {
+            (Some(a), Some(b)) => cosine_normalized(a, b) < min_similarity,
+            _ => false, // a window we couldn't embed can't establish a boundary
+        };
+        if changed {
+            turns.push((bounds[start].0, bounds[i - 1].1));
+            start = i;
+        }
+    }
+    turns.push((bounds[start].0, bounds[bounds.len() - 1].1));
+    turns
+}
+
+fn normalize(v: &mut [f32]) {
+    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 1e-8 {
+        let inv = 1.0 / norm;
+        for x in v.iter_mut() {
+            *x *= inv;
+        }
+    }
+}
+
+/// Cosine similarity of two already-normalized vectors (i.e. their dot product).
+fn cosine_normalized(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+#[cfg(test)]
+mod turn_tests {
+    use super::*;
+
+    #[test]
+    fn window_bounds_folds_short_trailer() {
+        // 2.4s @ 16k: two full 1s windows, 0.4s trailer folded into the second.
+        let b = window_bounds(38_400, 16_000);
+        assert_eq!(b, vec![(0, 16_000), (16_000, 38_400)]);
+    }
+
+    #[test]
+    fn window_bounds_exact_multiple() {
+        let b = window_bounds(32_000, 16_000);
+        assert_eq!(b, vec![(0, 16_000), (16_000, 32_000)]);
+    }
+
+    #[test]
+    fn single_speaker_stays_one_turn() {
+        let bounds = vec![(0, 16_000), (16_000, 32_000), (32_000, 48_000)];
+        let a = Some(vec![1.0, 0.0]);
+        let embs = vec![a.clone(), a.clone(), a];
+        assert_eq!(
+            turns_from_embeddings(&bounds, &embs, 0.5),
+            vec![(0, 48_000)]
+        );
+    }
+
+    #[test]
+    fn speaker_change_splits_and_covers_contiguously() {
+        let bounds = vec![(0, 16_000), (16_000, 32_000), (32_000, 48_000)];
+        // window 0,1 = speaker A; window 2 = speaker B (orthogonal => sim 0).
+        let embs = vec![
+            Some(vec![1.0, 0.0]),
+            Some(vec![1.0, 0.0]),
+            Some(vec![0.0, 1.0]),
+        ];
+        let turns = turns_from_embeddings(&bounds, &embs, 0.5);
+        assert_eq!(turns, vec![(0, 32_000), (32_000, 48_000)]);
+    }
+
+    #[test]
+    fn failed_embedding_does_not_cut() {
+        let bounds = vec![(0, 16_000), (16_000, 32_000)];
+        let embs = vec![Some(vec![1.0, 0.0]), None];
+        assert_eq!(
+            turns_from_embeddings(&bounds, &embs, 0.5),
+            vec![(0, 32_000)]
+        );
     }
 }
 
