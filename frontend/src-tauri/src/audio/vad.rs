@@ -78,10 +78,11 @@ impl ContinuousVadProcessor {
         redemption_time_ms: u32,
         source: DeviceType,
     ) -> Result<Self> {
-        // Force-cut after 20s. Real meeting utterances rarely exceed this;
-        // longer segments hurt diarization (multiple speakers get embedded as
-        // one) and Whisper accuracy.
-        Self::new_configured(input_sample_rate, redemption_time_ms, source, 20.0, 30.0)
+        // Force-cut after 12s. Real meeting utterances rarely run this long
+        // unbroken, and longer segments hurt diarization (multiple speakers get
+        // embedded as one label) and Whisper accuracy. Over-cutting is cheap:
+        // extra pieces of one speaker just re-cluster to the same "Speaker N".
+        Self::new_configured(input_sample_rate, redemption_time_ms, source, 12.0, 18.0)
     }
 
     /// A processor tuned for long, single-speaker capture (voice enrollment)

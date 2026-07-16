@@ -733,16 +733,23 @@ impl AudioPipeline {
             system_device_kind,
         );
 
-        // Create VAD processor with balanced redemption time for speech accumulation
-        // The VAD processor now handles 48kHz->16kHz resampling internally
-        // This bridges natural pauses without excessive fragmentation
-        let redemption_time = 400;
+        // Redemption time = the trailing-silence gap that ends a segment.
+        // Per-source, because the two streams have different needs:
+        //  - Mic (AEC-cleaned, usually just the local user): a looser 400ms gap
+        //    bridges natural pauses so one person's speech isn't fragmented.
+        //  - System (all the remote participants): a tighter gap so back-to-back
+        //    remote speakers split into separate segments instead of merging
+        //    into one — otherwise the whole turn gets a single speaker label.
+        // Over-splitting is safe (extra pieces re-cluster to the same speaker);
+        // merging two speakers into one segment is the error we're avoiding.
+        let mic_redemption_time = 400;
+        let system_redemption_time = 250;
 
         // Dual VAD: separate processors per source so segments arrive at the
         // transcription stage tagged with origin (Mic vs System).
         let mic_vad_processor = match ContinuousVadProcessor::new_with_source(
             sample_rate,
-            redemption_time,
+            mic_redemption_time,
             DeviceType::Microphone,
         ) {
             Ok(processor) => {
@@ -757,7 +764,7 @@ impl AudioPipeline {
 
         let system_vad_processor = match ContinuousVadProcessor::new_with_source(
             sample_rate,
-            redemption_time,
+            system_redemption_time,
             DeviceType::System,
         ) {
             Ok(processor) => {
