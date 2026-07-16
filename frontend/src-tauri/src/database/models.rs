@@ -37,6 +37,10 @@ pub struct Transcript {
     /// Foreign key to `voice_profiles.id` when this transcript matched a
     /// stored profile; null otherwise.
     pub voice_profile_id: Option<String>,
+    /// Audio-stream this segment came from: "mic" or "system". Null for older
+    /// rows and imports; used to play the matching channel of the stereo
+    /// recording (mic = left, system = right).
+    pub source: Option<String>,
 }
 
 /// Stored speaker voice profile used to recognize returning speakers across meetings.

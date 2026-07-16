@@ -18,11 +18,13 @@ struct AudioData {
 /// to minimize memory usage and enable crash recovery
 pub struct IncrementalAudioSaver {
     checkpoint_buffer: Vec<AudioData>,
-    checkpoint_interval_samples: usize, // 30s at 48kHz = 1,440,000 samples
+    checkpoint_interval_samples: usize, // 30s of interleaved samples
     checkpoint_count: u32,
     checkpoints_dir: PathBuf,
     meeting_folder: PathBuf,
     sample_rate: u32,
+    /// Interleaved channel count of the incoming chunks (2 = stereo mic/system).
+    channels: u16,
 }
 
 impl IncrementalAudioSaver {
@@ -31,7 +33,9 @@ impl IncrementalAudioSaver {
     /// # Arguments
     /// * `meeting_folder` - Path to the meeting folder (contains .checkpoints/)
     /// * `sample_rate` - Sample rate of audio (typically 48000)
-    pub fn new(meeting_folder: PathBuf, sample_rate: u32) -> Result<Self> {
+    /// * `channels` - Interleaved channel count of the chunks (2 for the
+    ///   stereo mic-left/system-right recording; 1 for legacy mono callers)
+    pub fn new(meeting_folder: PathBuf, sample_rate: u32, channels: u16) -> Result<Self> {
         let checkpoints_dir = meeting_folder.join(".checkpoints");
 
         // Verify checkpoints directory exists
@@ -44,11 +48,13 @@ impl IncrementalAudioSaver {
 
         Ok(Self {
             checkpoint_buffer: Vec::new(),
-            checkpoint_interval_samples: sample_rate as usize * 30, // 30 seconds
+            // Interleaved samples for 30s = sample_rate * 30 * channels.
+            checkpoint_interval_samples: sample_rate as usize * 30 * channels as usize,
             checkpoint_count: 0,
             checkpoints_dir,
             meeting_folder,
             sample_rate,
+            channels,
         })
     }
 
@@ -98,11 +104,14 @@ impl IncrementalAudioSaver {
         encode_single_audio(
             bytemuck::cast_slice(&audio_data),
             self.sample_rate,
-            1, // mono
+            self.channels,
             &checkpoint_path,
         )?;
 
-        let duration_seconds = audio_data.len() as f32 / self.sample_rate as f32;
+        // `audio_data` is interleaved, so divide out the channel count to get
+        // per-frame duration.
+        let duration_seconds =
+            audio_data.len() as f32 / (self.sample_rate as f32 * self.channels as f32);
         self.checkpoint_count += 1;
 
         info!(
@@ -450,7 +459,7 @@ mod tests {
         std::fs::create_dir_all(&meeting_folder).unwrap();
         std::fs::create_dir_all(meeting_folder.join(".checkpoints")).unwrap();
 
-        let mut saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000).unwrap();
+        let mut saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000, 1).unwrap();
 
         // Add 60 seconds worth of audio (should create 2 checkpoints)
         for i in 0..120 {
@@ -483,7 +492,7 @@ mod tests {
         std::fs::create_dir_all(&meeting_folder).unwrap();
         std::fs::create_dir_all(meeting_folder.join(".checkpoints")).unwrap();
 
-        let mut saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000).unwrap();
+        let mut saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000, 1).unwrap();
 
         // Try to finalize without adding any chunks
         let result = saver.finalize().await;

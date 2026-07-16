@@ -15,6 +15,8 @@ export interface Transcript {
   // links to the stored profile when matched.
   speaker?: string;
   voice_profile_id?: string;
+  /** Audio stream ("mic" | "system") this segment came from. */
+  source?: string;
 }
 
 export interface TranscriptUpdate {
@@ -124,4 +126,7 @@ export interface TranscriptSegmentData {
   speaker?: string;
   /** FK to a stored voice profile when matched. */
   voice_profile_id?: string;
+  /** Audio stream ("mic" | "system") this segment came from. Selects the
+   *  matching channel of the stereo recording for source-aware playback. */
+  source?: string;
 }

@@ -250,6 +250,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     sequence_id: Some(update.sequence_id),
                     speaker: update.speaker.clone(),
                     voice_profile_id: update.voice_profile_id.clone(),
+                    source: Some(update.source.clone()),
                 };
 
                 // Save to recording manager
@@ -443,6 +444,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                     sequence_id: Some(update.sequence_id),
                     speaker: update.speaker.clone(),
                     voice_profile_id: update.voice_profile_id.clone(),
+                    source: Some(update.source.clone()),
                 };
 
                 // Save to recording manager
@@ -505,25 +507,30 @@ pub async fn stop_recording<R: Runtime>(
         }),
     );
 
-    // Step 1: Stop audio capture immediately (no more new chunks) with proper error handling
-    let manager_for_cleanup = {
+    // Step 1: Stop audio capture immediately (no more new chunks). Take the
+    // manager out just long enough to force-flush the pipeline, then put it
+    // BACK in the global slot so the transcript-update listener can still reach
+    // it while the worker drains the flushed tail below. `force_flush` calls
+    // `state.cleanup()`, so `is_recording()` already reads false here even with
+    // the manager present. It's taken out again for the final save after the
+    // drain (Step 4).
+    let manager = {
         let mut global_manager = RECORDING_MANAGER.lock().unwrap();
         global_manager.take()
     };
 
-    let stop_result = if let Some(mut manager) = manager_for_cleanup {
+    let stop_result = if let Some(mut manager) = manager {
         // Use FORCE FLUSH to immediately process all accumulated audio - eliminates 30s delay!
         info!("🚀 Using FORCE FLUSH to eliminate pipeline accumulation delays");
         let result = manager.stop_streams_and_force_flush().await;
-        // Store manager back for later cleanup
-        let manager_for_cleanup = Some(manager);
-        (result, manager_for_cleanup)
+        // Return the manager to the global slot for the drain window so the
+        // listener can persist the tail segments transcribed below.
+        *RECORDING_MANAGER.lock().unwrap() = Some(manager);
+        result
     } else {
         warn!("No recording manager found to stop");
-        (Ok(()), None)
+        Ok(())
     };
-
-    let (stop_result, manager_for_cleanup) = stop_result;
 
     match stop_result {
         Ok(_) => {
@@ -535,18 +542,14 @@ pub async fn stop_recording<R: Runtime>(
         }
     }
 
-    // Step 1.5: Clean up transcript listener to release microphone
-    // Unlisten transcript-update event to prevent lingering references
-    {
-        use tauri::Listener;
-        if let Some(listener_id) = TRANSCRIPT_LISTENER_ID.lock().unwrap().take() {
-            app.unlisten(listener_id);
-            info!("✅ Transcript-update listener removed");
-        }
-    }
-
-    // Drop the speaker diarizer so a fresh session starts with empty cluster IDs.
-    crate::speaker_diarization::commands::shutdown_for_recording();
+    // NOTE: the transcript-update listener and the speaker diarizer are torn
+    // down *after* the transcription drain below — not here. The force-flush
+    // above only *queues* the tail segments; they're transcribed during the
+    // drain and their `transcript-update` events must still reach the listener
+    // (which persists them) and the diarizer (which attributes them). Removing
+    // either now drops the final utterance(s) — and for a short recording whose
+    // entire content is one un-closed utterance, that means zero saved
+    // segments even though the live partials looked perfect.
 
     // Step 2: Signal transcription workers to finish processing ALL queued chunks
     let _ = app.emit(
@@ -615,6 +618,27 @@ pub async fn stop_recording<R: Runtime>(
     } else {
         info!("ℹ️ No transcription task found to wait for");
     }
+
+    // The worker has drained: the flushed tail segments are transcribed and
+    // their `transcript-update` events emitted. Let the event loop deliver
+    // those final events to the listener (which persists them) before we remove
+    // it. Doing this earlier loses the last utterance(s) — see the note above.
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+    {
+        use tauri::Listener;
+        if let Some(listener_id) = TRANSCRIPT_LISTENER_ID.lock().unwrap().take() {
+            app.unlisten(listener_id);
+            info!("✅ Transcript-update listener removed (after transcription drain)");
+        }
+    }
+
+    // Drop the speaker diarizer now (not before the drain) so a fresh session
+    // starts with empty cluster IDs — the tail segments needed it above.
+    crate::speaker_diarization::commands::shutdown_for_recording();
+
+    // Take the manager back out of the global slot now the tail is persisted;
+    // it's needed (owned) for the final save in Step 4.
+    let manager_for_cleanup = { RECORDING_MANAGER.lock().unwrap().take() };
 
     // Step 3: Now safely unload Whisper model after ALL chunks are processed
     let _ = app.emit(

@@ -158,52 +158,6 @@ impl AudioMixerRingBuffer {
     }
 }
 
-/// Simple audio mixer without aggressive ducking
-/// Combines mic + system audio with basic clipping prevention
-struct ProfessionalAudioMixer;
-
-impl ProfessionalAudioMixer {
-    fn new(_sample_rate: u32) -> Self {
-        Self
-    }
-
-    fn mix_window(&mut self, mic_window: &[f32], sys_window: &[f32]) -> Vec<f32> {
-        // Handle different lengths (already padded by extract_window, but defensive)
-        let max_len = mic_window.len().max(sys_window.len());
-        let mut mixed = Vec::with_capacity(max_len);
-
-        // Professional mixing with soft scaling to prevent distortion
-        // Uses proportional scaling instead of hard clamping to avoid artifacts
-        for i in 0..max_len {
-            let mic = mic_window.get(i).copied().unwrap_or(0.0);
-            let sys = sys_window.get(i).copied().unwrap_or(0.0);
-
-            // Pre-scale system audio to 70% to leave headroom
-            // This prevents constant soft scaling which can cause pumping artifacts
-            // Mic is normalized to -23 LUFS (already optimal), system needs reduction
-            let sys_scaled = sys * 0.7;
-
-            // Sum without ducking - mic stays at full volume, system slightly reduced
-            let sum = mic + sys_scaled;
-
-            // CRITICAL FIX: Soft scaling prevents distortion artifacts
-            // If the sum would exceed ±1.0, scale down PROPORTIONALLY
-            // This avoids hard clipping distortion that sounds like "radio breaks"
-            let sum_abs = sum.abs();
-            let mixed_sample = if sum_abs > 1.0 {
-                // Scale down to fit within ±1.0
-                sum / sum_abs
-            } else {
-                sum
-            };
-
-            mixed.push(mixed_sample);
-        }
-
-        mixed
-    }
-}
-
 /// Simplified audio capture without broadcast channels
 #[derive(Clone)]
 pub struct AudioCapture {
@@ -711,10 +665,13 @@ pub struct AudioPipeline {
     processed_chunks: u64,
     // Smart batching for audio metrics
     metrics_batcher: Option<AudioMetricsBatcher>,
-    // PROFESSIONAL AUDIO MIXING: Ring buffer + RMS-based mixer
+    // Aligns the async mic + system streams into equal-length windows.
     ring_buffer: AudioMixerRingBuffer,
-    mixer: ProfessionalAudioMixer,
-    // Recording sender for pre-mixed audio
+    // Acoustic echo canceller: removes the system audio the mic picks up from
+    // the speakers, using the aligned system window as the far-end reference.
+    // `None` when AEC couldn't initialize — recording continues without it.
+    echo_canceller: Option<super::aec::MicEchoCanceller>,
+    // Sender for the interleaved stereo recording chunks (mic L, system R).
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
     // Streaming partials: snapshots of in-progress utterances sent to the
     // partial-decode task. None when streaming partials are disabled.
@@ -813,9 +770,11 @@ impl AudioPipeline {
             }
         };
 
-        // Initialize professional audio mixing components
+        // Ring buffer aligns the asynchronously-arriving mic and system
+        // streams into equal-length windows for interleaving.
         let ring_buffer = AudioMixerRingBuffer::new(sample_rate);
-        let mixer = ProfessionalAudioMixer::new(sample_rate);
+        // Echo canceller for the mic (uses the system window as reference).
+        let echo_canceller = super::aec::MicEchoCanceller::new(sample_rate);
 
         // Note: target_chunk_duration_ms is ignored - VAD controls segmentation now
         let _ = target_chunk_duration_ms;
@@ -832,9 +791,9 @@ impl AudioPipeline {
             processed_chunks: 0,
             // Initialize metrics batcher for smart batching
             metrics_batcher: Some(AudioMetricsBatcher::new()),
-            // Initialize professional audio mixing
+            // Ring buffer for aligning mic + system into interleaved windows
             ring_buffer,
-            mixer,
+            echo_canceller,
             recording_sender_for_mixed: None, // Will be set by manager
             partial_sender: None,             // Will be set by manager if enabled
             mic_partial: PartialEmitState::default(),
@@ -915,24 +874,46 @@ impl AudioPipeline {
                     // Each window yields un-mixed mic + system slices used for source-tagged
                     // VAD, plus a mixed slice used only for the recording WAV.
                     while self.ring_buffer.can_mix() {
-                        if let Some((mic_window, sys_window)) = self.ring_buffer.extract_window() {
+                        if let Some((mut mic_window, sys_window)) = self.ring_buffer.extract_window()
+                        {
+                            // STEP 2.5: Acoustic echo cancellation. Subtract the
+                            // system audio (played through the user's speakers)
+                            // from the mic, using the aligned system window as
+                            // the far-end reference. Runs before VAD and the
+                            // recording split, so the cleaned mic flows to both
+                            // transcription and the mic recording channel — a
+                            // remote speaker no longer bleeds in as a duplicate
+                            // "Me", and mic-side playback loses its echo.
+                            if let Some(ref mut aec) = self.echo_canceller {
+                                aec.cancel(&mut mic_window, &sys_window);
+                            }
+
                             // STEP 3: Source-tagged VAD on each stream independently
                             self.run_vad_for_source(&mic_window, DeviceType::Microphone);
                             self.run_vad_for_source(&sys_window, DeviceType::System);
 
-                            // STEP 4: Mix for the recording WAV (unchanged behavior)
-                            let mixed_clean = self.mixer.mix_window(&mic_window, &sys_window);
-                            // No post-gain: mic is already EBU R128 -23 LUFS normalized.
-                            let mixed_for_recording = mixed_clean;
+                            // STEP 4: Interleave the two sources into a stereo
+                            // frame for the recording — mic = left, system =
+                            // right — so playback and downstream processing can
+                            // keep them apart (source-aware per-segment
+                            // playback, echo cancellation, …). The mono downmix
+                            // is derived on demand (the decoder averages
+                            // channels) rather than stored.
+                            let frames = mic_window.len().max(sys_window.len());
+                            let mut stereo = Vec::with_capacity(frames * 2);
+                            for i in 0..frames {
+                                stereo.push(mic_window.get(i).copied().unwrap_or(0.0)); // L: mic
+                                stereo.push(sys_window.get(i).copied().unwrap_or(0.0)); // R: system
+                            }
 
                             if let Some(ref sender) = self.recording_sender_for_mixed {
                                 let recording_chunk = AudioChunk {
-                                    data: mixed_for_recording,
+                                    data: stereo,
                                     sample_rate: self.sample_rate,
                                     timestamp: chunk.timestamp,
                                     chunk_id: self.chunk_id_counter,
-                                    // device_type on the recording-side chunk is unused
-                                    // by the saver; left as Microphone for legacy reasons.
+                                    // device_type is unused by the saver for the
+                                    // stereo recording chunk; left as Microphone.
                                     device_type: DeviceType::Microphone,
                                 };
                                 let _ = sender.send(recording_chunk);

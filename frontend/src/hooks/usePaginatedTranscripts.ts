@@ -46,6 +46,7 @@ function convertTranscriptsToSegments(
     confidence: t.confidence,
     speaker: t.speaker,
     voice_profile_id: t.voice_profile_id,
+    source: t.source,
   }));
 }
 

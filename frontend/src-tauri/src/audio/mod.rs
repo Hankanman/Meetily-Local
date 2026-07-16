@@ -1,5 +1,6 @@
 // src/audio/mod.rs
 pub mod audio_processing;
+pub mod aec;
 pub mod clip;
 pub mod decoder;
 pub mod playback;

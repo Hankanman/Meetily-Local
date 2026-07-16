@@ -90,6 +90,12 @@ pub struct TranscriptSegment {
     /// Foreign key into `voice_profiles` when matched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice_profile_id: Option<String>,
+    /// Audio-stream this segment came from: "mic" or "system". Set by the
+    /// live-recording path (which knows the capture source); left `None` by
+    /// batch/import paths that read the mixed-down audio. Drives source-aware
+    /// per-segment playback (mic = left channel, system = right).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// Create transcript segments from a batch transcription result.
@@ -115,6 +121,9 @@ pub(crate) fn create_transcript_segments(
                 sequence_id: None,
                 speaker: t.speaker.clone(),
                 voice_profile_id: t.voice_profile_id.clone(),
+                // Batch/retranscription reads the mixed-down audio, so there's
+                // no meaningful per-stream source to attribute here.
+                source: None,
             }
         })
         .collect()

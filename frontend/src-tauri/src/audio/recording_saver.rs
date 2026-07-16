@@ -128,6 +128,7 @@ impl RecordingSaver {
             sequence_id: Some(0),
             speaker: None,
             voice_profile_id: None,
+            source: None,
         };
         self.add_transcript_segment(segment);
     }
@@ -239,7 +240,11 @@ impl RecordingSaver {
 
         // Only initialize incremental saver if checkpoints are needed (auto_save is true)
         if create_checkpoints {
-            let incremental_saver = IncrementalAudioSaver::new(meeting_folder.clone(), 48000)?;
+            // Stereo: mic on the left channel, system on the right (the
+            // pipeline interleaves them). Keeps the two sources separable for
+            // source-aware playback instead of pre-mixing to mono.
+            let incremental_saver =
+                IncrementalAudioSaver::new(meeting_folder.clone(), 48000, 2)?;
             self.incremental_saver = Some(Arc::new(AsyncMutex::new(incremental_saver)));
             info!(
                 "✅ Incremental audio saver initialized for meeting: {}",

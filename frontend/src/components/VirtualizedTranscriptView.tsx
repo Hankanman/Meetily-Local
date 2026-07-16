@@ -93,11 +93,13 @@ const SegmentPlayButton = memo(function SegmentPlayButton({
   meetingId,
   startSecs,
   endSecs,
+  source,
 }: {
   segmentKey: string;
   meetingId: string;
   startSecs: number;
   endSecs: number;
+  source?: string;
 }) {
   const audio = useSegmentAudio();
   if (!audio) return null;
@@ -108,7 +110,9 @@ const SegmentPlayButton = memo(function SegmentPlayButton({
   return (
     <button
       type="button"
-      onClick={() => audio.toggle(segmentKey, meetingId, startSecs, endSecs)}
+      onClick={() =>
+        audio.toggle(segmentKey, meetingId, startSecs, endSecs, source)
+      }
       aria-label={isPlaying ? "Stop playback" : "Play this segment"}
       title={isPlaying ? "Stop" : "Play this segment"}
       className="
@@ -137,6 +141,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
   confidence,
   speaker,
   voiceProfileId,
+  source,
   meetingId,
   isStreaming,
   showConfidence,
@@ -150,6 +155,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
   confidence?: number;
   speaker?: string;
   voiceProfileId?: string;
+  source?: string;
   meetingId?: string;
   isStreaming: boolean;
   showConfidence: boolean;
@@ -190,6 +196,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
               meetingId={meetingId!}
               startSecs={timestamp}
               endSecs={endTime!}
+              source={source}
             />
           )}
           {speaker && (
@@ -477,6 +484,7 @@ export const VirtualizedTranscriptView: React.FC<
                       confidence={segment.confidence}
                       speaker={segment.speaker}
                       voiceProfileId={segment.voice_profile_id}
+                      source={segment.source}
                       meetingId={meetingId}
                       isStreaming={isStreaming}
                       showConfidence={showConfidence}
@@ -552,6 +560,7 @@ export const VirtualizedTranscriptView: React.FC<
                       confidence={segment.confidence}
                       speaker={segment.speaker}
                       voiceProfileId={segment.voice_profile_id}
+                      source={segment.source}
                       meetingId={meetingId}
                       isStreaming={isStreaming}
                       showConfidence={showConfidence}

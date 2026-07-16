@@ -1069,6 +1069,7 @@ mod tests {
                 sequence_id: None,
                 speaker: None,
                 voice_profile_id: None,
+                source: None,
             },
             TranscriptSegment {
                 id: "t-2".to_string(),
@@ -1082,6 +1083,7 @@ mod tests {
                 sequence_id: None,
                 speaker: None,
                 voice_profile_id: None,
+                source: None,
             },
         ];
 

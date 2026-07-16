@@ -62,6 +62,10 @@ base64 = "0.22"
 # in the webview fails ("element appsink not found"); we play clips natively
 # instead. `default-features = false` keeps only cpal output (no decoders).
 rodio = { version = "0.19", default-features = false }
+# Acoustic echo cancellation (WebRTC AEC3) for the microphone: subtracts the
+# system audio the mic picks up from the speakers. Links the system
+# webrtc-audio-processing lib (build needs webrtc-audio-processing-devel).
+webrtc-audio-processing = "2.1"
 once_cell = "1.17.1"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 

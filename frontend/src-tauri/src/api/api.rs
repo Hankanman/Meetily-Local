@@ -117,6 +117,10 @@ pub struct MeetingTranscript {
     pub speaker: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice_profile_id: Option<String>,
+    /// Audio stream ("mic" | "system") this segment came from, for source-aware
+    /// per-segment playback. Null for older rows / imports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// Meeting metadata without transcripts (for pagination)
@@ -629,6 +633,7 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                     duration: t.duration,
                     speaker: t.speaker,
                     voice_profile_id: t.voice_profile_id,
+                    source: t.source,
                 })
                 .collect::<Vec<_>>();
 

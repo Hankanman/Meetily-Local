@@ -52,8 +52,8 @@ impl TranscriptsRepository {
         for segment in transcripts {
             let transcript_id = format!("transcript-{}", Uuid::new_v4());
             let result = sqlx::query(
-                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, voice_profile_id, sequence_id)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, voice_profile_id, sequence_id, source)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             )
             .bind(&transcript_id)
             .bind(&meeting_id)
@@ -70,6 +70,7 @@ impl TranscriptsRepository {
             .bind(&segment.speaker)
             .bind(&segment.voice_profile_id)
             .bind(segment.sequence_id.map(|s| s as i64))
+            .bind(&segment.source)
             .execute(&mut *transaction)
             .await;
 
