@@ -28,6 +28,8 @@ import { SettingsModals } from "./_components/SettingsModal";
 import { TranscriptPanel } from "./_components/TranscriptPanel";
 import { RecordingHero } from "./_components/recording-page/RecordingHero";
 import { RecordingTopBar } from "./_components/recording-page/RecordingTopBar";
+import { LiveActionItemsBar } from "./_components/recording-page/LiveActionItemsBar";
+import { useLiveActionItems } from "@/hooks/useLiveActionItems";
 
 export default function Home() {
   const router = useRouter();
@@ -44,6 +46,10 @@ export default function Home() {
   // updates after a successful Tauri response" semantic that several
   // call-sites depend on).
   const [isRecording, setIsRecordingState] = useState(false);
+
+  // Provisional in-meeting action items (beta). No-op unless the Beta feature
+  // is enabled; drives the backend live extractor as recording toggles.
+  const { items: liveActionItems } = useLiveActionItems(isRecording);
   const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
 
@@ -259,6 +265,7 @@ export default function Home() {
                   onStopInitiated={() => setIsStopping(true)}
                 />
               )}
+              {isRecording && <LiveActionItemsBar items={liveActionItems} />}
               <TranscriptPanel
                 isProcessingStop={isProcessingStop}
                 isStopping={isStopping}

@@ -37,11 +37,38 @@ const QUOTE_HALLUCINATION_MAX: f32 = 0.2;
 const MAX_ITEMS: usize = 50;
 
 /// A transcript segment reduced to what extraction needs.
-struct Segment {
+pub(crate) struct Segment {
     text: String,
     start: Option<f64>,
     end: Option<f64>,
     speaker: String,
+}
+
+impl Segment {
+    /// Build from a live-recording in-memory segment (used by the live driver).
+    pub(crate) fn from_common(t: &crate::audio::common::TranscriptSegment) -> Self {
+        Segment {
+            text: t.text.trim().to_string(),
+            start: t.audio_start_time,
+            end: t.audio_end_time,
+            speaker: t
+                .speaker
+                .clone()
+                .unwrap_or_else(|| "Speaker".to_string()),
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    pub(crate) fn end_secs(&self) -> Option<f64> {
+        self.end
+    }
+
+    pub(crate) fn start_secs(&self) -> Option<f64> {
+        self.start
+    }
 }
 
 /// Extract action items from `meeting_id`'s stored transcript segments and
@@ -91,47 +118,9 @@ pub async fn extract_from_transcript<R: Runtime>(
 
     let mut collected: Vec<NewActionItem> = Vec::new();
     for window in &windows {
-        let user_prompt = format!("Transcript:\n\n{}", render_window(window));
-        let response = match generate_summary(
-            &client,
-            &creds.provider,
-            model_name,
-            &creds.api_key,
-            SYSTEM_PROMPT,
-            &user_prompt,
-            creds.ollama_endpoint.as_deref(),
-            creds.custom_openai_endpoint.as_deref(),
-            None,
-            None,
-            None,
-            app_data_dir.as_ref(),
-            None,
-        )
-        .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("Transcript extraction window failed: {e}");
-                continue;
-            }
-        };
-
-        let Some(items) = parse_action_items(&response) else {
-            continue;
-        };
-        for mut item in items {
-            match ground(&item, window) {
-                Grounding::Anchored { start, end } => {
-                    item.source_start_secs = start;
-                    item.source_end_secs = end;
-                    collected.push(item);
-                }
-                Grounding::Kept => collected.push(item),
-                Grounding::Hallucinated => {
-                    debug_drop(&item);
-                }
-            }
-        }
+        collected.extend(
+            extract_window(&client, &creds, model_name, app_data_dir.as_ref(), window).await,
+        );
     }
 
     let deduped = dedupe(collected);
@@ -161,6 +150,61 @@ pub fn spawn_transcript_extraction<R: Runtime>(
             Err(e) => warn!("Transcript action-item extraction failed for {meeting_id}: {e}"),
         }
     });
+}
+
+/// Run one extraction pass over a single window: render the segments, call the
+/// model, parse, and ground each item's quote to a segment's timestamp.
+/// Returns grounded items — the caller dedupes across windows. Shared by the
+/// post-meeting pass and the live driver.
+pub(crate) async fn extract_window(
+    client: &reqwest::Client,
+    creds: &LlmCredentials,
+    model_name: &str,
+    app_data_dir: Option<&std::path::PathBuf>,
+    window: &[Segment],
+) -> Vec<NewActionItem> {
+    let user_prompt = format!("Transcript:\n\n{}", render_window(window));
+    let response = match generate_summary(
+        client,
+        &creds.provider,
+        model_name,
+        &creds.api_key,
+        SYSTEM_PROMPT,
+        &user_prompt,
+        creds.ollama_endpoint.as_deref(),
+        creds.custom_openai_endpoint.as_deref(),
+        None,
+        None,
+        None,
+        app_data_dir,
+        None,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Action-item extraction window failed: {e}");
+            return Vec::new();
+        }
+    };
+
+    let Some(items) = parse_action_items(&response) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for mut item in items {
+        match ground(&item, window) {
+            Grounding::Anchored { start, end } => {
+                item.source_start_secs = start;
+                item.source_end_secs = end;
+                out.push(item);
+            }
+            Grounding::Kept => out.push(item),
+            Grounding::Hallucinated => debug_drop(&item),
+        }
+    }
+    out
 }
 
 const SYSTEM_PROMPT: &str = r#"You extract action items from a meeting transcript.

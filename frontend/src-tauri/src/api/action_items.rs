@@ -201,6 +201,30 @@ pub async fn extract_action_items<R: Runtime>(
     }
 }
 
+/// Start live (in-meeting) action-item extraction for the current recording.
+/// Gated by the frontend on the Beta feature flag; runs the summary model
+/// periodically over the in-memory transcript and emits provisional items.
+#[tauri::command]
+pub async fn start_live_action_extraction<R: Runtime>(
+    app: AppHandle<R>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let pool = state.db_manager.pool();
+    let config = SettingsRepository::get_model_config(pool)
+        .await
+        .map_err(|e| format!("Failed to read model config: {e}"))?
+        .ok_or_else(|| "No summary model configured. Set one in settings first.".to_string())?;
+
+    crate::summary::live_action_items::start(app, pool.clone(), config.provider, config.model);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_live_action_extraction() -> Result<(), String> {
+    crate::summary::live_action_items::stop();
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn add_meeting_note<R: Runtime>(
     _app: AppHandle<R>,

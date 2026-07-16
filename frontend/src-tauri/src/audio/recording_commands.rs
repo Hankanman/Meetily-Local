@@ -27,6 +27,18 @@ pub use super::transcription::TranscriptUpdate;
 static RECORDING_MANAGER: Mutex<Option<RecordingManager>> = Mutex::new(None);
 static TRANSCRIPTION_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
+/// Snapshot the transcript segments accumulated so far in the current recording
+/// session — in memory, before they're persisted on stop. Empty when nothing is
+/// recording. Used by the live action-item extractor, which has no `meeting_id`
+/// or DB rows to read during a recording.
+pub fn snapshot_segments() -> Vec<crate::audio::common::TranscriptSegment> {
+    RECORDING_MANAGER
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|m| m.get_transcript_segments()))
+        .unwrap_or_default()
+}
+
 // Listener ID for proper cleanup - prevents microphone from staying active after recording stops
 static TRANSCRIPT_LISTENER_ID: Mutex<Option<tauri::EventId>> = Mutex::new(None);
 

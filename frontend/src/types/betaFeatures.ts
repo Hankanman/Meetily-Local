@@ -22,10 +22,17 @@ export interface BetaFeatures {
    * @since v0.3.0
    */
   importAndRetranscribe: boolean;
+  /**
+   * Surface provisional action items live during a recording (runs the summary
+   * model periodically alongside transcription).
+   * @since v0.4.0
+   */
+  liveActionItems: boolean;
 }
 
 const DEFAULT_BETA_FEATURES: BetaFeatures = {
   importAndRetranscribe: true, // Default: enabled
+  liveActionItems: false, // Default: off — runs the LLM during recording
 };
 
 /**
@@ -33,6 +40,7 @@ const DEFAULT_BETA_FEATURES: BetaFeatures = {
  */
 export const BETA_FEATURE_NAMES: Record<keyof BetaFeatures, string> = {
   importAndRetranscribe: "Import Audio & Retranscribe",
+  liveActionItems: "Live Action Items",
 };
 
 /**
@@ -41,6 +49,8 @@ export const BETA_FEATURE_NAMES: Record<keyof BetaFeatures, string> = {
 export const BETA_FEATURE_DESCRIPTIONS: Record<keyof BetaFeatures, string> = {
   importAndRetranscribe:
     "Import audio files to transcribe or retranscribe existing meetings with different language settings.",
+  liveActionItems:
+    "Show action items as they come up during a recording. Runs the summary model periodically alongside transcription, so it uses extra GPU — the authoritative list is still produced from the full transcript when you generate the summary.",
 };
 
 /**
