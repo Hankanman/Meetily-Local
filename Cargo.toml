@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "frontend/src-tauri",
     "llama-helper",
+    "llama-protocol",
     "meetily-mcp"
 ]
 

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -120,6 +120,22 @@ impl SummaryService {
 
         let token_threshold = config.token_threshold().await;
 
+        // Forward the final pass's streamed tokens to the UI so the summary
+        // renders progressively instead of appearing all at once. Providers
+        // that don't stream (everything except built-in AI today) simply
+        // never invoke the sink and the UI keeps its spinner.
+        let stream_app = app.clone();
+        let stream_meeting_id = meeting_id.clone();
+        let stream_sink = move |delta: &str| {
+            let _ = stream_app.emit(
+                "summary-stream",
+                serde_json::json!({
+                    "meeting_id": stream_meeting_id,
+                    "delta": delta,
+                }),
+            );
+        };
+
         let result = generate_meeting_summary(
             &config,
             &text,
@@ -127,6 +143,7 @@ impl SummaryService {
             &template_id,
             token_threshold,
             Some(&cancellation_token),
+            Some(&stream_sink),
         )
         .await;
 
