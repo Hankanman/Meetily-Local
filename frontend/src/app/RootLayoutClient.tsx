@@ -1,5 +1,10 @@
 "use client";
 
+// MUST be the first import: installs the dev-only `__TAURI_INTERNALS__` mock
+// (a no-op in production and inside the real Tauri runtime) before any provider
+// module below runs its mount-time Tauri calls. See src/lib/dev/tauri-mock.ts.
+import "@/lib/dev/tauri-mock";
+
 import { Toaster } from "sonner";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
