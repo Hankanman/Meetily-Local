@@ -34,7 +34,10 @@ export async function deleteVoiceProfile(profileId: string): Promise<boolean> {
 }
 
 export interface PromoteSpeakerArgs {
-  cluster_id: number;
+  /** The displayed label being promoted (e.g. "Speaker 2"). The backend
+   *  resolves embeddings by label — post-recording refinement renumbers
+   *  labels, so labels (not internal cluster ids) are the stable handle. */
+  speaker_label: string;
   name: string;
   email?: string | null;
   /** Meeting whose transcripts should be relabelled. Required because cluster
@@ -74,7 +77,9 @@ export async function mergeVoiceProfiles(
 
 export interface MergeClusterArgs {
   meeting_id: string;
-  cluster_id: number;
+  /** The displayed label being merged (e.g. "Speaker 2"); see
+   *  {@link PromoteSpeakerArgs.speaker_label}. */
+  speaker_label: string;
   profile_id: string;
 }
 
@@ -85,14 +90,9 @@ export async function mergeClusterIntoProfile(
 }
 
 /**
- * Parse a "Speaker N" label into a 0-indexed cluster_id, or `null` if the
- * label isn't an unnamed-cluster placeholder. The diarizer assigns
- * "Speaker 1", "Speaker 2", ... in 1-indexed form; cluster_id = N - 1.
+ * Whether a label is an unnamed-cluster placeholder ("Speaker N") — the only
+ * chips that offer the promote / merge-into-profile flow.
  */
-export function clusterIdFromSpeakerLabel(label: string): number | null {
-  const match = /^Speaker\s+(\d+)$/.exec(label.trim());
-  if (!match) return null;
-  const n = parseInt(match[1], 10);
-  if (!Number.isFinite(n) || n < 1) return null;
-  return n - 1;
+export function isUnnamedSpeakerLabel(label: string): boolean {
+  return /^Speaker\s+\d+$/.test(label.trim());
 }

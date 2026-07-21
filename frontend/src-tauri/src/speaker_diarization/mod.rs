@@ -35,17 +35,19 @@
 //!   built and stored in [`DIARIZER`]. It lives for the duration of the
 //!   recording session and is dropped on stop, resetting cluster IDs.
 //! - The transcription worker reads [`DIARIZER`] via [`current_diarizer`] and
-//!   calls [`Diarizer::process`] for each system-source chunk.
-//!
-//! Phase 3 will swap the in-memory clusterer for one that consults stored
-//! `voice_profiles` first (named-speaker recognition) and adds a 2-pass
-//! refinement step when recording ends.
+//!   calls [`Diarizer::process`] for each chunk.
+//! - When recording stops, [`Diarizer::refine`] re-clusters the whole
+//!   session offline and [`Diarizer::apply_refinement`] writes the improved
+//!   labels back into the history, keeping it consistent with what the DB
+//!   and UI show (promote/merge look embeddings up *by label*).
 
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 pub(crate) mod clusterer;
 mod embedder;
+pub(crate) mod embedding_math;
 pub mod enrollment;
 pub mod model;
 mod profile_matcher;
@@ -56,16 +58,53 @@ pub mod commands;
 pub use clusterer::OnlineSpeakerClusterer;
 pub use embedder::SpeakerEmbedder;
 pub use model::{default_model_path, model_download_url, model_filename, models_dir};
-pub use profile_matcher::{ProfileMatch, SpeakerProfileMatcher, PROFILE_MATCH_THRESHOLD};
-pub use refinement::{refine as refine_assignments, RefinedAssignment};
+pub use profile_matcher::{ProfileMatch, SpeakerProfileMatcher};
+pub use refinement::RefinedAssignment;
 
 use anyhow::Result;
 
-/// Default cosine-similarity threshold above which an incoming embedding is
-/// merged into an existing cluster. Tuned for 3D-Speaker CAM++; values lower
-/// than this risk merging different speakers, higher risk fragmenting a
-/// single speaker into multiple "Speaker N" labels.
+// ──────────────────────────────────────────────────────────────────────────
+// Similarity thresholds
+//
+// All three compare CAM++ embeddings by cosine similarity, and their
+// ordering is load-bearing:
+//
+//   TURN_SPLIT_SIMILARITY (0.50) < DEFAULT_CLUSTER_THRESHOLD (0.55)
+//                                < PROFILE_MATCH_THRESHOLD (0.60)
+//
+// - Turn splitting compares single ~1s windows — the noisiest embeddings in
+//   the system — so it uses the most forgiving cutoff: only a clear drop in
+//   similarity between adjacent windows is treated as a speaker change.
+// - In-session clustering compares a full-segment embedding against running
+//   centroids. A wrong merge here shows two people under one "Speaker N";
+//   a wrong split just fragments one person across two labels (annoying but
+//   repairable by refinement).
+// - Profile matching is the strictest because its false positives are the
+//   worst outcome: transcripts get labelled with the *wrong person's name*.
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Cosine-similarity threshold above which an incoming embedding is merged
+/// into an existing in-session cluster. Tuned for 3D-Speaker CAM++; lower
+/// risks merging different speakers, higher risks fragmenting one speaker
+/// into multiple "Speaker N" labels.
 pub const DEFAULT_CLUSTER_THRESHOLD: f32 = 0.55;
+
+/// Cosine-similarity threshold for "this is John" against a stored voice
+/// profile. Stricter than clustering because a false positive mislabels
+/// transcripts with someone else's name.
+pub const PROFILE_MATCH_THRESHOLD: f32 = 0.60;
+
+/// Cosine similarity *below* which two adjacent ~1s analysis windows inside
+/// one VAD segment are treated as a speaker change (see
+/// [`Diarizer::speaker_turns`]).
+pub const TURN_SPLIT_SIMILARITY: f32 = 0.50;
+
+/// Merge cutoff for the post-recording offline re-clustering (HAC in
+/// [`refinement`]). Kept equal to [`DEFAULT_CLUSTER_THRESHOLD`] today, but
+/// named separately because the regimes differ — average-linkage over the
+/// full session vs greedy matching against a running centroid — and may
+/// deserve independent tuning.
+pub const REFINE_CLUSTER_THRESHOLD: f32 = DEFAULT_CLUSTER_THRESHOLD;
 
 /// Default display label for the local user's own voice. Used as the initial
 /// `name` on their enrolled voice profile (`is_self = 1`) and as the fallback
@@ -89,6 +128,18 @@ pub struct DiarizationResult {
     pub voice_profile_id: Option<String>,
 }
 
+/// One speaker-turn sub-range `[start, end)` (in samples) of a VAD segment,
+/// as detected by [`Diarizer::speaker_turns`]. Carries the L2-normalized
+/// average of the range's analysis-window embeddings when at least one
+/// window embedded successfully, so callers can diarize the sub-range
+/// without re-running the embedder over the same audio.
+#[derive(Debug, Clone)]
+pub struct SpeakerTurn {
+    pub start: usize,
+    pub end: usize,
+    pub embedding: Option<Vec<f32>>,
+}
+
 /// Per-recording diarizer state. Holds the (shared, immutable) embedder, a
 /// matcher that consults stored voice profiles, an in-session clusterer for
 /// fallback labels, and a full embedding history used by 2-pass refinement
@@ -100,17 +151,17 @@ pub struct Diarizer {
     history: Mutex<Vec<EmbeddingRecord>>,
 }
 
+/// One diarized segment in the session history. `label`/`voice_profile_id`
+/// track what the segment is *currently* called: they start as the live
+/// pass's assignment and are rewritten by [`Diarizer::apply_refinement`]
+/// when the offline pass relabels the session, so lookups by label
+/// ([`Diarizer::embeddings_for_label`]) always agree with what the DB and
+/// UI show.
 #[derive(Debug, Clone)]
 pub struct EmbeddingRecord {
     pub sequence_id: u64,
+    /// L2-normalized embedding.
     pub embedding: Vec<f32>,
-    /// Cluster id assigned by the in-session clusterer. Always populated,
-    /// even when a profile match also fired (so refinement still has the
-    /// cluster topology to work with).
-    pub cluster_id: usize,
-    /// Profile match (if any) — id and label captured at the time of
-    /// processing so refinement and "promote to profile" can replay history
-    /// without rerunning matching.
     pub voice_profile_id: Option<String>,
     pub label: String,
 }
@@ -129,21 +180,41 @@ impl Diarizer {
         }
     }
 
-    /// Embed `samples_16k`, try to match a stored profile, fall back to
-    /// in-session clustering. Always records to history so Phase 3.5
-    /// refinement (and "promote to profile") can replay it.
-    pub fn process(&self, sequence_id: u64, samples_16k: &[f32]) -> Result<DiarizationResult> {
-        let embedding = self.embedder.embed(samples_16k)?;
+    /// Diarize one speech segment: try to match a stored profile, fall back
+    /// to in-session clustering. Always records to history so refinement and
+    /// "promote to profile" can replay it.
+    ///
+    /// `precomputed` short-circuits the embedder — [`speaker_turns`] already
+    /// embedded the segment's analysis windows, and the normalized average of
+    /// those is passed back in here so the same audio isn't embedded twice.
+    /// When `None` (segment too short for turn analysis, or a batch caller),
+    /// `samples_16k` is embedded directly.
+    ///
+    /// [`speaker_turns`]: Diarizer::speaker_turns
+    pub fn process(
+        &self,
+        sequence_id: u64,
+        samples_16k: &[f32],
+        precomputed: Option<Vec<f32>>,
+    ) -> Result<DiarizationResult> {
+        let mut embedding = match precomputed {
+            Some(e) => e,
+            None => self.embedder.embed(samples_16k)?,
+        };
+        // Normalize once here so every consumer — clusterer centroids,
+        // profile matching, history averages — sees unit-length vectors and
+        // no path is magnitude-weighted differently from another.
+        embedding_math::l2_normalize(&mut embedding);
 
-        // Always run the cluster step — we need the cluster_id in history
-        // even when a profile match fires, so the user can later "promote
-        // Speaker 2 to John" using the cluster's grouped embeddings.
-        let cluster_id = {
+        // Always run the cluster step — the "Speaker N" fallback label has to
+        // come from somewhere even when a profile match fires later segments.
+        let cluster_label = {
             let mut clusterer = self
                 .clusterer
                 .lock()
                 .map_err(|_| anyhow::anyhow!("speaker clusterer mutex poisoned"))?;
-            clusterer.assign(embedding.clone())
+            let cluster_id = clusterer.assign(embedding.clone());
+            clusterer.label_for(cluster_id)
         };
 
         // A stored-profile match takes precedence over the cluster label.
@@ -156,20 +227,13 @@ impl Diarizer {
 
         let (label, voice_profile_id) = match profile_match {
             Some(m) => (m.name, Some(m.profile_id)),
-            None => {
-                let clusterer = self
-                    .clusterer
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("speaker clusterer mutex poisoned"))?;
-                (clusterer.label_for(cluster_id), None)
-            }
+            None => (cluster_label, None),
         };
 
         if let Ok(mut h) = self.history.lock() {
             h.push(EmbeddingRecord {
                 sequence_id,
                 embedding,
-                cluster_id,
                 voice_profile_id: voice_profile_id.clone(),
                 label: label.clone(),
             });
@@ -182,30 +246,39 @@ impl Diarizer {
     }
 
     /// Detect speaker-turn boundaries within a single VAD segment and return
-    /// the contiguous sub-ranges `[start, end)` (in samples) that each belong
-    /// to one speaker. Returns a single whole-segment range when the audio is
-    /// too short to split reliably or holds one speaker throughout.
+    /// the contiguous sub-ranges that each belong to one speaker. Returns a
+    /// single whole-segment range when the audio is too short to split
+    /// reliably or holds one speaker throughout.
     ///
     /// Works by embedding consecutive ~1s windows and cutting where adjacent
     /// voice embeddings diverge — this catches speakers who talk back-to-back
     /// with no silence gap, which VAD (silence-based) can't separate. The
-    /// caller transcribes and labels each returned range independently.
-    pub fn speaker_turns(&self, samples_16k: &[f32]) -> Vec<(usize, usize)> {
+    /// caller transcribes and labels each returned range independently,
+    /// passing the range's precomputed embedding back into [`process`].
+    ///
+    /// [`process`]: Diarizer::process
+    pub fn speaker_turns(&self, samples_16k: &[f32]) -> Vec<SpeakerTurn> {
         /// 1s analysis window at 16 kHz — CAM++'s reliable minimum.
         const WIN: usize = 16_000;
         /// Don't attempt a split below 2s (can't hold two speakers reliably).
         const MIN_TOTAL: usize = 2 * WIN;
-        /// Cosine similarity below this between adjacent windows => new speaker.
-        const CHANGE_SIM: f32 = 0.5;
 
         let n = samples_16k.len();
         if n < MIN_TOTAL {
-            return vec![(0, n)];
+            return vec![SpeakerTurn {
+                start: 0,
+                end: n,
+                embedding: None,
+            }];
         }
 
         let bounds = window_bounds(n, WIN);
         if bounds.len() < 2 {
-            return vec![(0, n)];
+            return vec![SpeakerTurn {
+                start: 0,
+                end: n,
+                embedding: None,
+            }];
         }
 
         // Embedding is stateless per call; safe to run here. Windows that are
@@ -214,13 +287,13 @@ impl Diarizer {
             .iter()
             .map(|&(a, b)| {
                 self.embedder.embed(&samples_16k[a..b]).ok().map(|mut e| {
-                    normalize(&mut e);
+                    embedding_math::l2_normalize(&mut e);
                     e
                 })
             })
             .collect();
 
-        turns_from_embeddings(&bounds, &embeddings, CHANGE_SIM)
+        turns_from_embeddings(&bounds, &embeddings, TURN_SPLIT_SIMILARITY)
     }
 
     /// Snapshot of all embeddings produced this session.
@@ -231,18 +304,55 @@ impl Diarizer {
             .unwrap_or_default()
     }
 
-    /// Embeddings that landed in `cluster_id` this session. Used by
-    /// `promote_speaker_to_profile` to compute a centroid.
-    pub fn embeddings_for_cluster(&self, cluster_id: usize) -> Vec<Vec<f32>> {
+    /// Embeddings of every history record whose *current* label is `label`.
+    ///
+    /// Used by promote/merge when the user names a "Speaker N" chip. Lookup
+    /// is by label — not by clusterer id — because post-recording refinement
+    /// renumbers labels independently of the live clusterer's ids; the label
+    /// the user clicked is the only identifier guaranteed to mean the same
+    /// thing in the UI, the DB, and (after [`apply_refinement`]) here.
+    ///
+    /// [`apply_refinement`]: Diarizer::apply_refinement
+    pub fn embeddings_for_label(&self, label: &str) -> Vec<Vec<f32>> {
         self.history
             .lock()
             .map(|h| {
                 h.iter()
-                    .filter(|r| r.cluster_id == cluster_id)
+                    .filter(|r| r.label == label)
                     .map(|r| r.embedding.clone())
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// Re-cluster the whole session offline (see [`refinement`]), consulting
+    /// stored voice profiles so near-threshold segments of an enrolled voice
+    /// fold into the profile instead of surfacing as a parallel "Speaker N".
+    pub fn refine(&self) -> Vec<RefinedAssignment> {
+        let history = self.export_history();
+        refinement::refine(
+            &history,
+            REFINE_CLUSTER_THRESHOLD,
+            self.profile_matcher.as_deref(),
+        )
+    }
+
+    /// Write refined labels back into the session history so subsequent
+    /// label-based lookups ([`embeddings_for_label`]) agree with the labels
+    /// the refinement pass persisted to the DB.
+    ///
+    /// [`embeddings_for_label`]: Diarizer::embeddings_for_label
+    pub fn apply_refinement(&self, assignments: &[RefinedAssignment]) {
+        let by_sequence: HashMap<u64, &RefinedAssignment> =
+            assignments.iter().map(|a| (a.sequence_id, a)).collect();
+        if let Ok(mut history) = self.history.lock() {
+            for record in history.iter_mut() {
+                if let Some(a) = by_sequence.get(&record.sequence_id) {
+                    record.label = a.speaker.clone();
+                    record.voice_profile_id = a.voice_profile_id.clone();
+                }
+            }
+        }
     }
 }
 
@@ -270,49 +380,55 @@ fn window_bounds(n: usize, win: usize) -> Vec<(usize, usize)> {
 /// Group windows into speaker-turn ranges, cutting where adjacent (already
 /// L2-normalized) embeddings fall below `min_similarity`. Windows that failed
 /// to embed (`None`) never introduce a cut. The result always covers
-/// `[bounds[0].0, bounds.last().1)` contiguously with no gaps.
+/// `[bounds[0].0, bounds.last().1)` contiguously with no gaps. Each turn
+/// carries the normalized average of its successfully-embedded windows.
 fn turns_from_embeddings(
     bounds: &[(usize, usize)],
     embeddings: &[Option<Vec<f32>>],
     min_similarity: f32,
-) -> Vec<(usize, usize)> {
+) -> Vec<SpeakerTurn> {
     if bounds.is_empty() {
         return Vec::new();
     }
+    let make_turn = |from: usize, to: usize| {
+        let windows: Vec<Vec<f32>> = embeddings[from..=to]
+            .iter()
+            .filter_map(|e| e.clone())
+            .collect();
+        SpeakerTurn {
+            start: bounds[from].0,
+            end: bounds[to].1,
+            embedding: if windows.is_empty() {
+                None
+            } else {
+                Some(embedding_math::average_and_normalize(&windows))
+            },
+        }
+    };
+
     let mut turns = Vec::new();
     let mut start = 0usize;
     for i in 1..bounds.len() {
         let changed = match (&embeddings[i - 1], &embeddings[i]) {
-            (Some(a), Some(b)) => cosine_normalized(a, b) < min_similarity,
+            (Some(a), Some(b)) => embedding_math::dot(a, b) < min_similarity,
             _ => false, // a window we couldn't embed can't establish a boundary
         };
         if changed {
-            turns.push((bounds[start].0, bounds[i - 1].1));
+            turns.push(make_turn(start, i - 1));
             start = i;
         }
     }
-    turns.push((bounds[start].0, bounds[bounds.len() - 1].1));
+    turns.push(make_turn(start, bounds.len() - 1));
     turns
-}
-
-fn normalize(v: &mut [f32]) {
-    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 1e-8 {
-        let inv = 1.0 / norm;
-        for x in v.iter_mut() {
-            *x *= inv;
-        }
-    }
-}
-
-/// Cosine similarity of two already-normalized vectors (i.e. their dot product).
-fn cosine_normalized(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
 #[cfg(test)]
 mod turn_tests {
     use super::*;
+
+    fn ranges(turns: &[SpeakerTurn]) -> Vec<(usize, usize)> {
+        turns.iter().map(|t| (t.start, t.end)).collect()
+    }
 
     #[test]
     fn window_bounds_folds_short_trailer() {
@@ -332,10 +448,10 @@ mod turn_tests {
         let bounds = vec![(0, 16_000), (16_000, 32_000), (32_000, 48_000)];
         let a = Some(vec![1.0, 0.0]);
         let embs = vec![a.clone(), a.clone(), a];
-        assert_eq!(
-            turns_from_embeddings(&bounds, &embs, 0.5),
-            vec![(0, 48_000)]
-        );
+        let turns = turns_from_embeddings(&bounds, &embs, 0.5);
+        assert_eq!(ranges(&turns), vec![(0, 48_000)]);
+        // The turn carries the average of its window embeddings.
+        assert_eq!(turns[0].embedding.as_deref(), Some(&[1.0, 0.0][..]));
     }
 
     #[test]
@@ -348,24 +464,35 @@ mod turn_tests {
             Some(vec![0.0, 1.0]),
         ];
         let turns = turns_from_embeddings(&bounds, &embs, 0.5);
-        assert_eq!(turns, vec![(0, 32_000), (32_000, 48_000)]);
+        assert_eq!(ranges(&turns), vec![(0, 32_000), (32_000, 48_000)]);
+        assert_eq!(turns[0].embedding.as_deref(), Some(&[1.0, 0.0][..]));
+        assert_eq!(turns[1].embedding.as_deref(), Some(&[0.0, 1.0][..]));
     }
 
     #[test]
     fn failed_embedding_does_not_cut() {
         let bounds = vec![(0, 16_000), (16_000, 32_000)];
         let embs = vec![Some(vec![1.0, 0.0]), None];
-        assert_eq!(
-            turns_from_embeddings(&bounds, &embs, 0.5),
-            vec![(0, 32_000)]
-        );
+        let turns = turns_from_embeddings(&bounds, &embs, 0.5);
+        assert_eq!(ranges(&turns), vec![(0, 32_000)]);
+        // Average over the one window that did embed.
+        assert_eq!(turns[0].embedding.as_deref(), Some(&[1.0, 0.0][..]));
+    }
+
+    #[test]
+    fn all_windows_failed_yields_no_embedding() {
+        let bounds = vec![(0, 16_000), (16_000, 32_000)];
+        let embs: Vec<Option<Vec<f32>>> = vec![None, None];
+        let turns = turns_from_embeddings(&bounds, &embs, 0.5);
+        assert_eq!(ranges(&turns), vec![(0, 32_000)]);
+        assert!(turns[0].embedding.is_none());
     }
 }
 
 /// Process-wide diarizer slot. Set by `start_recording` (when the model is
 /// ready), cleared by `stop_recording`. The transcription worker reads this
-/// to decide whether system-source chunks get clustered or fall back to the
-/// "Speaker" placeholder.
+/// to decide whether chunks get clustered or fall back to the source
+/// placeholder labels.
 static DIARIZER: Lazy<Mutex<Option<Arc<Diarizer>>>> = Lazy::new(|| Mutex::new(None));
 
 pub fn set_current_diarizer(diarizer: Option<Arc<Diarizer>>) {

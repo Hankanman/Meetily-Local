@@ -55,6 +55,7 @@ use crate::audio::recording_state::DeviceType;
 use crate::audio::stream::capture_target_for;
 use crate::audio::vad::extract_enrollment_speech_16k;
 use crate::database::repositories::voice_profile::VoiceProfilesRepository;
+use crate::speaker_diarization::embedding_math::average_and_normalize;
 use crate::speaker_diarization::{
     default_model_path, model::model_is_ready, SpeakerEmbedder, SELF_SPEAKER_LABEL,
 };
@@ -550,62 +551,9 @@ fn build_centroid(
     Ok((average_and_normalize(&embeddings), count))
 }
 
-/// Average a set of embeddings and L2-normalize the result.
-///
-/// Mirrors the identical helper in `commands.rs` (private there) and the
-/// online clusterer's centroid update — every centroid in the system must be
-/// built the same way or cosine matching against them drifts.
-fn average_and_normalize(embeddings: &[Vec<f32>]) -> Vec<f32> {
-    if embeddings.is_empty() {
-        return Vec::new();
-    }
-    let dim = embeddings[0].len();
-    let mut acc = vec![0.0f32; dim];
-    for e in embeddings {
-        debug_assert_eq!(e.len(), dim);
-        for (i, v) in e.iter().enumerate() {
-            acc[i] += v;
-        }
-    }
-    let n = embeddings.len() as f32;
-    for v in acc.iter_mut() {
-        *v /= n;
-    }
-    let norm = acc.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 1e-8 {
-        let inv = 1.0 / norm;
-        for v in acc.iter_mut() {
-            *v *= inv;
-        }
-    }
-    acc
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn centroid_is_unit_length() {
-        let embeddings = vec![vec![3.0f32, 0.0, 0.0], vec![0.0, 4.0, 0.0]];
-        let c = average_and_normalize(&embeddings);
-        let norm = c.iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!((norm - 1.0).abs() < 1e-5, "norm was {}", norm);
-    }
-
-    #[test]
-    fn centroid_of_identical_embeddings_is_that_embedding() {
-        let e = vec![0.6f32, 0.8, 0.0]; // already unit length
-        let c = average_and_normalize(&[e.clone(), e.clone(), e.clone()]);
-        for (a, b) in e.iter().zip(&c) {
-            assert!((a - b).abs() < 1e-5);
-        }
-    }
-
-    #[test]
-    fn empty_embeddings_produce_empty_centroid() {
-        assert!(average_and_normalize(&[]).is_empty());
-    }
 
     #[test]
     fn short_recording_is_rejected_before_model_load() {

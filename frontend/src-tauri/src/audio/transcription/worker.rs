@@ -1,6 +1,13 @@
 // audio/transcription/worker.rs
 //
-// Parallel transcription worker pool and chunk processing logic.
+// The transcription task: consumes VAD speech segments, splits them at
+// speaker-turn boundaries, transcribes, diarizes, and emits transcript
+// updates.
+//
+// Processing is deliberately SERIAL — one segment at a time, in arrival
+// order. Ordered emission is what keeps the live transcript chronological,
+// and the cross-source echo dedup (echo_dedup.rs) depends on segments being
+// checked one at a time against previously-accepted ones.
 
 use super::echo_dedup::{EchoDecision, EchoDedup};
 use super::engine::TranscriptionEngine;
@@ -8,14 +15,11 @@ use crate::audio::recording_state::DeviceType;
 use crate::audio::AudioChunk;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Runtime};
 
 /// Granular error types for transcription operations.
-///
-/// (Formerly shared with a remote-provider abstraction that was removed as
-/// dead code; now used solely by the Whisper transcription path below.)
 #[derive(Debug, Clone)]
 pub enum TranscriptionError {
     ModelNotLoaded,
@@ -52,10 +56,6 @@ static SPEECH_DETECTED_EMITTED: AtomicBool = AtomicBool::new(false);
 /// Reset the speech detected flag for a new recording session
 pub fn reset_speech_detected_flag() {
     SPEECH_DETECTED_EMITTED.store(false, Ordering::SeqCst);
-    info!(
-        "🔍 SPEECH_DETECTED_EMITTED reset to: {}",
-        SPEECH_DETECTED_EMITTED.load(Ordering::SeqCst)
-    );
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -73,13 +73,13 @@ pub struct TranscriptUpdate {
     pub audio_start_time: f64, // Seconds from recording start (e.g., 125.3)
     pub audio_end_time: f64,   // Seconds from recording start (e.g., 128.6)
     pub duration: f64,         // Segment duration in seconds (e.g., 3.3)
-    /// Speaker label shown in the UI. Mic-source segments are auto-tagged
-    /// "Me"; system-source segments get a clustered "Speaker N" or a stored
-    /// profile name when the embedding matches.
+    /// Speaker label shown in the UI: a stored profile name or clustered
+    /// "Speaker N" when a diarizer is loaded, else the source placeholder
+    /// ("Me" for mic, "Speaker" for system).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
     /// Foreign key to a stored voice profile when the embedding matched one.
-    /// `None` for mic, in-session-only clusters, or unmatched system audio.
+    /// `None` for in-session-only clusters or unmatched audio.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voice_profile_id: Option<String>,
 }
@@ -96,57 +96,78 @@ pub fn default_speaker_for_source(source: DeviceType) -> (&'static str, &'static
     }
 }
 
+/// A speaker-turn sub-chunk queued for transcription, carrying the speaker
+/// embedding the turn-splitter already computed for its samples (when it
+/// did) so diarization doesn't embed the same audio twice.
+struct PendingChunk {
+    chunk: AudioChunk,
+    embedding: Option<Vec<f32>>,
+}
+
 /// Split a VAD segment into speaker-turn sub-chunks so back-to-back speakers
 /// (with no silence gap for VAD to cut on) get separate segments and labels.
 ///
-/// Only the system stream is split — it carries the remote participants who
-/// trade turns; the mic is echo-cancelled down to the single local user, so
-/// splitting it would only add cost. Short segments, and the no-diarizer case,
-/// pass through unchanged. The embedding runs off the async runtime (CPU-bound
-/// ONNX), matching how the main diarization step is scheduled.
-async fn split_chunk_by_speaker(chunk: AudioChunk) -> Vec<AudioChunk> {
-    let diarizer = match crate::speaker_diarization::current_diarizer() {
-        Some(d) if chunk.device_type == DeviceType::System => d,
-        _ => return vec![chunk],
+/// Both streams are split: the system stream carries the remote participants
+/// trading turns, and the mic stream carries every voice in the room in a
+/// speakers-not-headphones setup — the same reason both streams are
+/// diarized at all. Short segments, and the no-diarizer case, pass through
+/// unchanged. The embedding runs off the async runtime (CPU-bound ONNX),
+/// matching how the main diarization step is scheduled.
+async fn split_chunk_by_speaker(chunk: AudioChunk) -> Vec<PendingChunk> {
+    let Some(diarizer) = crate::speaker_diarization::current_diarizer() else {
+        return vec![PendingChunk {
+            chunk,
+            embedding: None,
+        }];
     };
 
     let samples = chunk.data.clone();
     let turns = match tokio::task::spawn_blocking(move || diarizer.speaker_turns(&samples)).await {
         Ok(turns) => turns,
-        Err(_) => return vec![chunk],
+        Err(_) => {
+            return vec![PendingChunk {
+                chunk,
+                embedding: None,
+            }]
+        }
     };
     if turns.len() <= 1 {
-        return vec![chunk];
+        // Single speaker throughout (or too short to analyze) — keep the
+        // original chunk, but reuse the whole-segment embedding if the
+        // analysis produced one.
+        let embedding = turns.into_iter().next().and_then(|t| t.embedding);
+        return vec![PendingChunk { chunk, embedding }];
     }
 
     let sample_rate = chunk.sample_rate as f64;
     turns
         .into_iter()
-        .map(|(start, end)| AudioChunk {
-            data: chunk.data[start..end].to_vec(),
-            sample_rate: chunk.sample_rate,
-            // Offset the recording-relative timestamp into the segment.
-            timestamp: chunk.timestamp + start as f64 / sample_rate,
-            chunk_id: chunk.chunk_id,
-            device_type: chunk.device_type,
+        .map(|turn| PendingChunk {
+            chunk: AudioChunk {
+                data: chunk.data[turn.start..turn.end].to_vec(),
+                sample_rate: chunk.sample_rate,
+                // Offset the recording-relative timestamp into the segment.
+                timestamp: chunk.timestamp + turn.start as f64 / sample_rate,
+                chunk_id: chunk.chunk_id,
+                device_type: chunk.device_type,
+            },
+            embedding: turn.embedding,
         })
         .collect()
 }
 
-// NOTE: get_transcript_history and get_recording_meeting_name functions
-// have been moved to recording_commands.rs where they have access to RECORDING_MANAGER
-
-/// Optimized parallel transcription task ensuring ZERO chunk loss
+/// Serial transcription task: drains the pipeline's segment channel until it
+/// closes, processing every chunk in order. The channel-closed return of
+/// `recv()` doubles as the completion signal — by then every queued chunk
+/// has been pulled and processed, so nothing is ever lost.
 pub fn start_transcription_task<R: Runtime>(
     app: AppHandle<R>,
-    transcription_receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
+    mut receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        info!("🚀 Starting optimized parallel transcription task - guaranteeing zero chunk loss");
+        info!("🚀 Starting transcription task (serial, ordered emission)");
 
-        // Initialize transcription engine (Whisper, or a remote provider via the trait).
-        let transcription_engine = match super::engine::get_or_init_transcription_engine(&app).await
-        {
+        let engine = match super::engine::get_or_init_transcription_engine(&app).await {
             Ok(engine) => engine,
             Err(e) => {
                 error!("Failed to initialize transcription engine: {}", e);
@@ -159,542 +180,283 @@ pub fn start_transcription_task<R: Runtime>(
             }
         };
 
-        // Create parallel workers for faster processing while preserving ALL chunks
-        const NUM_WORKERS: usize = 1; // Serial processing ensures transcripts emit in chronological order
-        let (work_sender, work_receiver) = tokio::sync::mpsc::unbounded_channel::<AudioChunk>();
-        let work_receiver = Arc::new(tokio::sync::Mutex::new(work_receiver));
-
-        // Track completion: AtomicU64 for chunks queued, AtomicU64 for chunks completed
-        let chunks_queued = Arc::new(AtomicU64::new(0));
-        let chunks_completed = Arc::new(AtomicU64::new(0));
-        let input_finished = Arc::new(AtomicBool::new(false));
-
-        info!(
-            "📊 Starting {} transcription worker{} (serial mode for ordered emission)",
-            NUM_WORKERS,
-            if NUM_WORKERS == 1 { "" } else { "s" }
-        );
-
-        // Spawn worker tasks
-        let mut worker_handles = Vec::new();
-        for worker_id in 0..NUM_WORKERS {
-            let engine_clone = match &transcription_engine {
-                TranscriptionEngine::Whisper(e) => TranscriptionEngine::Whisper(e.clone()),
-            };
-            let app_clone = app.clone();
-            let work_receiver_clone = work_receiver.clone();
-            let chunks_completed_clone = chunks_completed.clone();
-            let input_finished_clone = input_finished.clone();
-            let chunks_queued_clone = chunks_queued.clone();
-
-            let worker_handle = tokio::spawn(async move {
-                info!("👷 Worker {} started", worker_id);
-
-                // PRE-VALIDATE model state to avoid repeated async calls per chunk
-                let initial_model_loaded = engine_clone.is_model_loaded().await;
-                let current_model = engine_clone
-                    .get_current_model()
-                    .await
-                    .unwrap_or_else(|| "unknown".to_string());
-
-                let engine_name = engine_clone.provider_name();
-
-                if initial_model_loaded {
-                    info!(
-                        "✅ Worker {} pre-validation: {} model '{}' is loaded and ready",
-                        worker_id, engine_name, current_model
-                    );
-                } else {
-                    warn!(
-                        "⚠️ Worker {} pre-validation: {} model not loaded - chunks may be skipped",
-                        worker_id, engine_name
-                    );
-                }
-
-                // NOTE: we deliberately do NOT feed a rolling transcript tail
-                // to whisper as an initial prompt on the live path. Live VAD
-                // chunks are short, and whisper.cpp readily regurgitates a
-                // growing prompt back into its output on short audio —
-                // producing duplicated, ever-lengthening lines littered with
-                // "..." continuation markers (it thinks it's mid-sentence).
-                // Each chunk is transcribed independently instead.
-
-                // Cross-source echo dedup state (mic bleed of system audio,
-                // or vice versa, in speaker-not-headphones setups). See
-                // echo_dedup.rs for the full rationale and policy. Lives
-                // per-worker-loop, i.e. per recording session.
-                let mut echo_dedup = EchoDedup::new();
-
-                // Sub-chunks produced by speaker-turn splitting, drained before
-                // pulling the next VAD segment off the channel. Splitting a
-                // multi-speaker segment here (rather than in the delicate
-                // per-chunk code below) lets every turn flow through the normal
-                // transcribe -> diarize -> emit path with its own sequence id.
-                let mut pending: std::collections::VecDeque<AudioChunk> =
-                    std::collections::VecDeque::new();
-
-                loop {
-                    // Prefer a queued speaker-turn sub-chunk; otherwise pull the
-                    // next VAD segment and split it into turns (off-thread).
-                    let chunk = if let Some(sub) = pending.pop_front() {
-                        Some(sub)
-                    } else {
-                        let received = {
-                            let mut receiver = work_receiver_clone.lock().await;
-                            receiver.recv().await
-                        };
-                        match received {
-                            Some(segment) => {
-                                for sub in split_chunk_by_speaker(segment).await {
-                                    pending.push_back(sub);
-                                }
-                                pending.pop_front()
-                            }
-                            None => None,
-                        }
-                    };
-
-                    match chunk {
-                        Some(chunk) => {
-                            // PERFORMANCE OPTIMIZATION: Reduce logging in hot path
-                            // Only log every 10th chunk per worker to reduce I/O overhead
-                            let should_log_this_chunk = chunk.chunk_id % 10 == 0;
-
-                            if should_log_this_chunk {
-                                info!(
-                                    "👷 Worker {} processing chunk {} with {} samples",
-                                    worker_id,
-                                    chunk.chunk_id,
-                                    chunk.data.len()
-                                );
-                            }
-
-                            // Check if model is still loaded before processing
-                            if !engine_clone.is_model_loaded().await {
-                                warn!("⚠️ Worker {}: Model unloaded, but continuing to preserve chunk {}", worker_id, chunk.chunk_id);
-                                // Still count as completed even if we can't process
-                                chunks_completed_clone.fetch_add(1, Ordering::SeqCst);
-                                continue;
-                            }
-
-                            let chunk_timestamp = chunk.timestamp;
-                            let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
-                            // Capture source identity before chunk is moved into the transcription call.
-                            let chunk_source = chunk.device_type;
-                            // Snapshot the samples for the diarizer to embed after
-                            // transcription completes. Routed for *both* mic and
-                            // system sources because in any setup where the user
-                            // is on speakers (instead of headphones), the mic
-                            // captures everyone in the room — call participants
-                            // included — and the asymmetric "mic = Me always"
-                            // placeholder mis-attributes them all to the local
-                            // user. Letting the diarizer cluster the mic stream
-                            // splits those voices correctly.
-                            //
-                            // The "Me" fallback in `default_speaker_for_source`
-                            // still applies for users who haven't downloaded the
-                            // speaker model yet (no diarizer loaded → mic chunks
-                            // get the static "Me" label).
-                            let chunk_audio_for_diarization =
-                                if crate::speaker_diarization::current_diarizer().is_some() {
-                                    Some(chunk.data.clone())
-                                } else {
-                                    None
-                                };
-
-                            // Transcribe each chunk independently — no rolling
-                            // prompt (see the note at the top of the loop for
-                            // why conditioning on prior text corrupts the live
-                            // output).
-                            let prompt: Option<String> = None;
-                            match transcribe_chunk_with_provider(
-                                &engine_clone,
-                                chunk,
-                                &app_clone,
-                                prompt,
-                            )
-                            .await
-                            {
-                                Ok((transcript, confidence_opt, is_partial)) => {
-                                    // Provider-aware confidence threshold
-                                    let confidence_threshold = match &engine_clone {
-                                        TranscriptionEngine::Whisper(_) => 0.3,
-                                    };
-
-                                    let confidence_str = match confidence_opt {
-                                        Some(c) => format!("{:.2}", c),
-                                        None => "N/A".to_string(),
-                                    };
-
-                                    info!("🔍 Worker {} transcription result: text='{}', confidence={}, partial={}, threshold={:.2}",
-                                          worker_id, transcript, confidence_str, is_partial, confidence_threshold);
-
-                                    // Check confidence threshold (or accept if no confidence provided)
-                                    let meets_threshold =
-                                        confidence_opt.map_or(true, |c| c >= confidence_threshold);
-
-                                    // Whisper's classic hallucinations on
-                                    // marginal audio: stock phrases and
-                                    // bracketed sound markers with mediocre
-                                    // decoder confidence.
-                                    let hallucinated = is_likely_hallucination(
-                                        &transcript,
-                                        confidence_opt.unwrap_or(1.0),
-                                    );
-                                    if hallucinated {
-                                        info!(
-                                            "Worker {} dropping likely hallucination: '{}' (confidence: {})",
-                                            worker_id, transcript, confidence_str
-                                        );
-                                    }
-
-                                    // Recording-relative timestamps, computed
-                                    // early so both the echo-dedup check below
-                                    // and the emitted TranscriptUpdate further
-                                    // down share a single source of truth.
-                                    let audio_start_time = chunk_timestamp;
-                                    let audio_end_time = chunk_timestamp + chunk_duration;
-
-                                    // Cross-source echo suppression: only worth
-                                    // running for segments that would otherwise
-                                    // be accepted. Empty/low-confidence/
-                                    // hallucinated text is already headed for
-                                    // the drop path below regardless, so skip
-                                    // both the wasted check and polluting the
-                                    // dedup buffer with it.
-                                    let is_echo = !transcript.trim().is_empty()
-                                        && meets_threshold
-                                        && !hallucinated
-                                        && echo_dedup.check(
-                                            chunk_source,
-                                            &transcript,
-                                            audio_start_time,
-                                            audio_end_time,
-                                        ) == EchoDecision::DropAsMicEcho;
-
-                                    if !transcript.trim().is_empty()
-                                        && meets_threshold
-                                        && !hallucinated
-                                        && !is_echo
-                                    {
-                                        // PERFORMANCE: Only log transcription results, not every processing step
-                                        info!("✅ Worker {} transcribed: {} (confidence: {}, partial: {})",
-                                              worker_id, transcript, confidence_str, is_partial);
-
-                                        // Emit speech-detected event for frontend UX (only on first detection per session)
-                                        // This is lightweight and provides better user feedback
-                                        let current_flag =
-                                            SPEECH_DETECTED_EMITTED.load(Ordering::SeqCst);
-                                        info!("🔍 Checking speech-detected flag: current={}, will_emit={}", current_flag, !current_flag);
-
-                                        if !current_flag {
-                                            SPEECH_DETECTED_EMITTED.store(true, Ordering::SeqCst);
-                                            match app_clone.emit("speech-detected", serde_json::json!({
-                                                "message": "Speech activity detected"
-                                            })) {
-                                                Ok(_) => info!("🎤 ✅ First speech detected - successfully emitted speech-detected event"),
-                                                Err(e) => error!("🎤 ❌ Failed to emit speech-detected event: {}", e),
-                                            }
-                                        } else {
-                                            info!("🔍 Speech already detected in this session, not re-emitting");
-                                        }
-
-                                        // Generate sequence ID (audio_start_time/audio_end_time
-                                        // were already computed above, ahead of the echo check)
-                                        let sequence_id =
-                                            SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
-
-                                        // Save structured transcript segment to recording manager (only final results)
-                                        // Save ALL segments (partial and final) to ensure complete JSON
-                                        // Create structured segment with full timestamp data
-                                        // NOTE: This is now handled via the transcript-update event emission below
-                                        // The recording_commands module listens to these events and saves them
-                                        // This decouples the transcription worker from direct RECORDING_MANAGER access
-
-                                        // Emit transcript update with source-tagged speaker identity.
-                                        // Both mic and system chunks pass through the diarizer
-                                        // when one is loaded — the result is either a stored
-                                        // profile name (when an embedding matches a saved voice
-                                        // profile above threshold) or "Speaker N" from in-session
-                                        // clustering. When no model is loaded, falls back to the
-                                        // source-specific placeholder ("Me" for mic, "Speaker"
-                                        // for system).
-                                        //
-                                        // The local user reads as "Me" here too, without a branch:
-                                        // if they've enrolled their voice in settings, their
-                                        // profile is named "Me" and matches like any other stored
-                                        // speaker. If they haven't, they cluster as "Speaker N"
-                                        // like anyone else in the room. See
-                                        // `speaker_diarization::enrollment`.
-                                        let (source_tag, default_speaker) =
-                                            default_speaker_for_source(chunk_source);
-                                        // Speaker embedding is CPU-bound ONNX
-                                        // inference; run it off the async
-                                        // runtime so it can't stall other tasks
-                                        // (same reasoning as whisper inference).
-                                        let diarization_result = match (
-                                            chunk_audio_for_diarization,
-                                            crate::speaker_diarization::current_diarizer(),
-                                        ) {
-                                            (Some(samples), Some(diarizer)) => {
-                                                tokio::task::spawn_blocking(move || {
-                                                    diarizer.process(sequence_id, &samples)
-                                                })
-                                                .await
-                                                .ok()
-                                                .and_then(|res| match res {
-                                                    Ok(result) => Some(result),
-                                                    Err(e) => {
-                                                        log::debug!(
-                                                            "Diarization fallback for chunk {}: {}",
-                                                            sequence_id,
-                                                            e
-                                                        );
-                                                        None
-                                                    }
-                                                })
-                                            }
-                                            _ => None,
-                                        };
-                                        let diarized = diarization_result.is_some();
-                                        let (speaker_label, voice_profile_id) =
-                                            match diarization_result {
-                                                Some(r) => (r.label, r.voice_profile_id),
-                                                None => (default_speaker.to_string(), None),
-                                            };
-                                        // Per-segment attribution trace. Debug-level so it's
-                                        // silent by default; enable with
-                                        // RUST_LOG=app_lib::audio::transcription::worker=debug
-                                        // to see whether live labels come from the diarizer
-                                        // (matched profile / "Speaker N") or the source
-                                        // fallback ("Me" / "Speaker").
-                                        log::debug!(
-                                            "Worker {} attribution: source={:?} speaker='{}' profile={:?} diarized={}",
-                                            worker_id,
-                                            chunk_source,
-                                            speaker_label,
-                                            voice_profile_id,
-                                            diarized
-                                        );
-
-                                        let update = TranscriptUpdate {
-                                            text: transcript,
-                                            timestamp: format_current_timestamp(), // Wall-clock for reference
-                                            source: source_tag.to_string(),
-                                            sequence_id,
-                                            chunk_start_time: chunk_timestamp, // Legacy compatibility
-                                            is_partial,
-                                            confidence: confidence_opt.unwrap_or(0.85), // Default for providers without confidence
-                                            audio_start_time,
-                                            audio_end_time,
-                                            duration: chunk_duration,
-                                            speaker: Some(speaker_label),
-                                            voice_profile_id,
-                                        };
-
-                                        // Record for future cross-source echo checks. Only
-                                        // accepted (emitted) segments are recorded — a
-                                        // suppressed echo should never itself become a match
-                                        // target.
-                                        echo_dedup.record(
-                                            chunk_source,
-                                            &update.text,
-                                            audio_start_time,
-                                            audio_end_time,
-                                        );
-
-                                        if let Err(e) = app_clone.emit("transcript-update", &update)
-                                        {
-                                            error!(
-                                                "Worker {}: Failed to emit transcript update: {}",
-                                                worker_id, e
-                                            );
-                                        }
-                                        // PERFORMANCE: Removed verbose logging of every emission
-                                    } else if is_echo {
-                                        // Already logged inside echo_dedup.check() above;
-                                        // nothing further to do.
-                                    } else if !transcript.trim().is_empty() && should_log_this_chunk
-                                    {
-                                        // PERFORMANCE: Only log low-confidence results occasionally
-                                        if let Some(c) = confidence_opt {
-                                            info!("Worker {} low-confidence transcription (confidence: {:.2}), skipping", worker_id, c);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    // Improved error handling with specific cases
-                                    match e {
-                                        TranscriptionError::AudioTooShort { .. } => {
-                                            // Skip silently, this is expected for very short chunks
-                                            info!("Worker {}: {}", worker_id, e);
-                                            chunks_completed_clone.fetch_add(1, Ordering::SeqCst);
-                                            continue;
-                                        }
-                                        TranscriptionError::ModelNotLoaded => {
-                                            warn!(
-                                                "Worker {}: Model unloaded during transcription",
-                                                worker_id
-                                            );
-                                            chunks_completed_clone.fetch_add(1, Ordering::SeqCst);
-                                            continue;
-                                        }
-                                        _ => {
-                                            warn!(
-                                                "Worker {}: Transcription failed: {}",
-                                                worker_id, e
-                                            );
-                                            let _ = app_clone
-                                                .emit("transcription-warning", e.to_string());
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Mark chunk as completed
-                            let completed =
-                                chunks_completed_clone.fetch_add(1, Ordering::SeqCst) + 1;
-                            let queued = chunks_queued_clone.load(Ordering::SeqCst);
-
-                            // PERFORMANCE: Only log progress every 5th chunk to reduce I/O overhead
-                            if completed % 5 == 0 || should_log_this_chunk {
-                                info!(
-                                    "Worker {}: Progress {}/{} chunks ({:.1}%)",
-                                    worker_id,
-                                    completed,
-                                    queued,
-                                    (completed as f64 / queued.max(1) as f64 * 100.0)
-                                );
-                            }
-
-                            // Emit progress event for frontend
-                            let progress_percentage = if queued > 0 {
-                                (completed as f64 / queued as f64 * 100.0) as u32
-                            } else {
-                                100
-                            };
-
-                            let _ = app_clone.emit("transcription-progress", serde_json::json!({
-                                "worker_id": worker_id,
-                                "chunks_completed": completed,
-                                "chunks_queued": queued,
-                                "progress_percentage": progress_percentage,
-                                "message": format!("Worker {} processing... ({}/{})", worker_id, completed, queued)
-                            }));
-                        }
-                        None => {
-                            // No more chunks available
-                            if input_finished_clone.load(Ordering::SeqCst) {
-                                // Double-check that all queued chunks are actually completed
-                                let final_queued = chunks_queued_clone.load(Ordering::SeqCst);
-                                let final_completed = chunks_completed_clone.load(Ordering::SeqCst);
-
-                                if final_completed >= final_queued {
-                                    info!(
-                                        "👷 Worker {} finishing - all {}/{} chunks processed",
-                                        worker_id, final_completed, final_queued
-                                    );
-                                    break;
-                                } else {
-                                    warn!("👷 Worker {} detected potential chunk loss: {}/{} completed, waiting...", worker_id, final_completed, final_queued);
-                                    // AGGRESSIVE POLLING: Reduced from 50ms to 5ms for faster chunk detection during shutdown
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
-                                }
-                            } else {
-                                // AGGRESSIVE POLLING: Reduced from 10ms to 1ms for faster response during shutdown
-                                tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
-                            }
-                        }
-                    }
-                }
-
-                info!("👷 Worker {} completed", worker_id);
-            });
-
-            worker_handles.push(worker_handle);
-        }
-
-        // Main dispatcher: receive chunks and distribute to workers
-        let mut receiver = transcription_receiver;
-        while let Some(chunk) = receiver.recv().await {
-            let queued = chunks_queued.fetch_add(1, Ordering::SeqCst) + 1;
+        if engine.is_model_loaded().await {
+            let model = engine
+                .get_current_model()
+                .await
+                .unwrap_or_else(|| "unknown".to_string());
             info!(
-                "📥 Dispatching chunk {} to workers (total queued: {})",
-                chunk.chunk_id, queued
+                "✅ Transcription task: {} model '{}' is loaded and ready",
+                engine.provider_name(),
+                model
             );
-
-            if let Err(_) = work_sender.send(chunk) {
-                error!("❌ Failed to send chunk to workers - this should not happen!");
-                break;
-            }
+        } else {
+            warn!(
+                "⚠️ Transcription task: {} model not loaded - chunks may be skipped",
+                engine.provider_name()
+            );
         }
 
-        // Signal that input is finished
-        input_finished.store(true, Ordering::SeqCst);
-        drop(work_sender); // Close the channel to signal workers
+        // NOTE: we deliberately do NOT feed a rolling transcript tail to
+        // whisper as an initial prompt on the live path. Live VAD chunks are
+        // short, and whisper.cpp readily regurgitates a growing prompt back
+        // into its output on short audio — producing duplicated,
+        // ever-lengthening lines littered with "..." continuation markers
+        // (it thinks it's mid-sentence). Each chunk is transcribed
+        // independently instead.
 
-        let total_chunks_queued = chunks_queued.load(Ordering::SeqCst);
-        info!("📭 Input finished with {} total chunks queued. Waiting for all {} workers to complete...",
-              total_chunks_queued, NUM_WORKERS);
+        // Cross-source echo dedup state (mic bleed of system audio, or vice
+        // versa, in speaker-not-headphones setups). See echo_dedup.rs for
+        // the full rationale and policy. Lives per recording session.
+        let mut echo_dedup = EchoDedup::new();
 
-        // Emit final chunk count to frontend
-        let _ = app.emit("transcription-queue-complete", serde_json::json!({
-            "total_chunks": total_chunks_queued,
-            "message": format!("{} chunks queued for processing - waiting for completion", total_chunks_queued)
-        }));
-
-        // Wait for all workers to complete
-        for (worker_id, handle) in worker_handles.into_iter().enumerate() {
-            if let Err(e) = handle.await {
-                error!("❌ Worker {} panicked: {:?}", worker_id, e);
-            } else {
-                info!("✅ Worker {} completed successfully", worker_id);
-            }
-        }
-
-        // Final verification with retry logic to catch any stragglers
-        let mut verification_attempts = 0;
-        const MAX_VERIFICATION_ATTEMPTS: u32 = 10;
+        // Speaker-turn sub-chunks of the segment currently being processed,
+        // drained before pulling the next VAD segment off the channel.
+        // Splitting here (rather than inside process_chunk) lets every turn
+        // flow through the normal transcribe -> diarize -> emit path with
+        // its own sequence id.
+        let mut pending: VecDeque<PendingChunk> = VecDeque::new();
+        let mut processed: u64 = 0;
 
         loop {
-            let final_queued = chunks_queued.load(Ordering::SeqCst);
-            let final_completed = chunks_completed.load(Ordering::SeqCst);
+            let item = match pending.pop_front() {
+                Some(item) => item,
+                None => match receiver.recv().await {
+                    Some(segment) => {
+                        pending.extend(split_chunk_by_speaker(segment).await);
+                        match pending.pop_front() {
+                            Some(item) => item,
+                            None => continue,
+                        }
+                    }
+                    // Channel closed and fully drained: the pipeline dropped
+                    // its sender after flushing, and every queued chunk has
+                    // been processed.
+                    None => break,
+                },
+            };
 
-            if final_queued == final_completed {
-                info!(
-                    "🎉 ALL {} chunks processed successfully - ZERO chunks lost!",
-                    final_completed
-                );
-                break;
-            } else if verification_attempts < MAX_VERIFICATION_ATTEMPTS {
-                verification_attempts += 1;
-                warn!("⚠️ Chunk count mismatch (attempt {}): {} queued, {} completed - waiting for stragglers...",
-                     verification_attempts, final_queued, final_completed);
-
-                // Wait a bit for any remaining chunks to be processed
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            } else {
-                error!(
-                    "❌ CRITICAL: After {} attempts, chunk loss detected: {} queued, {} completed",
-                    MAX_VERIFICATION_ATTEMPTS, final_queued, final_completed
-                );
-
-                // Emit critical error event
-                let _ = app.emit(
-                    "transcript-chunk-loss-detected",
-                    serde_json::json!({
-                        "chunks_queued": final_queued,
-                        "chunks_completed": final_completed,
-                        "chunks_lost": final_queued - final_completed,
-                        "message": "Some transcript chunks may have been lost during shutdown"
-                    }),
-                );
-                break;
-            }
+            process_chunk(&engine, item, &app, &mut echo_dedup).await;
+            processed += 1;
         }
 
-        info!("✅ Parallel transcription task completed - all workers finished, ready for model unload");
+        info!(
+            "✅ Transcription task completed - all {} chunks processed, ready for model unload",
+            processed
+        );
     })
+}
+
+/// Transcribe, filter, diarize, and emit a single (sub-)chunk.
+async fn process_chunk<R: Runtime>(
+    engine: &TranscriptionEngine,
+    item: PendingChunk,
+    app: &AppHandle<R>,
+    echo_dedup: &mut EchoDedup,
+) {
+    let PendingChunk { chunk, embedding } = item;
+
+    // Reduce logging in the hot path: only log every 10th chunk.
+    let should_log_this_chunk = chunk.chunk_id % 10 == 0;
+    if should_log_this_chunk {
+        info!(
+            "👷 Processing chunk {} with {} samples",
+            chunk.chunk_id,
+            chunk.data.len()
+        );
+    }
+
+    if !engine.is_model_loaded().await {
+        warn!(
+            "⚠️ Model unloaded, skipping chunk {}",
+            chunk.chunk_id
+        );
+        return;
+    }
+
+    let chunk_timestamp = chunk.timestamp;
+    let chunk_duration = chunk.data.len() as f64 / chunk.sample_rate as f64;
+    // Capture source identity before chunk is moved into the transcription call.
+    let chunk_source = chunk.device_type;
+    // Samples for the diarizer to embed after transcription completes — only
+    // needed when the turn-splitter didn't already hand us an embedding for
+    // exactly these samples. Routed for *both* mic and system sources: in
+    // any setup where the user is on speakers (instead of headphones), the
+    // mic captures everyone in the room, and an asymmetric "mic = Me always"
+    // placeholder would mis-attribute them all to the local user.
+    //
+    // The "Me" fallback in `default_speaker_for_source` still applies for
+    // users who haven't downloaded the speaker model (no diarizer loaded).
+    let diarization_samples = if embedding.is_none()
+        && crate::speaker_diarization::current_diarizer().is_some()
+    {
+        Some(chunk.data.clone())
+    } else {
+        None
+    };
+
+    let (transcript, confidence_opt, is_partial) =
+        match transcribe_chunk_with_provider(engine, chunk, app, None).await {
+            Ok(result) => result,
+            Err(e) => {
+                match e {
+                    TranscriptionError::AudioTooShort { .. } => {
+                        // Expected for very short chunks; skip silently.
+                        info!("{}", e);
+                    }
+                    TranscriptionError::ModelNotLoaded => {
+                        warn!("Model unloaded during transcription");
+                    }
+                    _ => {
+                        warn!("Transcription failed: {}", e);
+                        let _ = app.emit("transcription-warning", e.to_string());
+                    }
+                }
+                return;
+            }
+        };
+
+    // Provider-aware confidence threshold
+    let confidence_threshold = match engine {
+        TranscriptionEngine::Whisper(_) => 0.3,
+    };
+    let confidence_str = match confidence_opt {
+        Some(c) => format!("{:.2}", c),
+        None => "N/A".to_string(),
+    };
+
+    // Check confidence threshold (or accept if no confidence provided)
+    let meets_threshold = confidence_opt.map_or(true, |c| c >= confidence_threshold);
+
+    // Whisper's classic hallucinations on marginal audio: stock phrases and
+    // bracketed sound markers with mediocre decoder confidence.
+    let hallucinated = is_likely_hallucination(&transcript, confidence_opt.unwrap_or(1.0));
+    if hallucinated {
+        info!(
+            "Dropping likely hallucination: '{}' (confidence: {})",
+            transcript, confidence_str
+        );
+    }
+
+    // Recording-relative timestamps, shared by the echo-dedup check and the
+    // emitted TranscriptUpdate.
+    let audio_start_time = chunk_timestamp;
+    let audio_end_time = chunk_timestamp + chunk_duration;
+
+    // Cross-source echo suppression: only worth running for segments that
+    // would otherwise be accepted — everything else is already headed for
+    // the drop path, so skip the wasted check and don't pollute the dedup
+    // buffer with it.
+    let is_echo = !transcript.trim().is_empty()
+        && meets_threshold
+        && !hallucinated
+        && echo_dedup.check(chunk_source, &transcript, audio_start_time, audio_end_time)
+            == EchoDecision::DropAsMicEcho;
+
+    if transcript.trim().is_empty() || !meets_threshold || hallucinated || is_echo {
+        // Echo drops are already logged inside echo_dedup.check().
+        if !is_echo && !transcript.trim().is_empty() && should_log_this_chunk {
+            if let Some(c) = confidence_opt {
+                info!(
+                    "Low-confidence transcription (confidence: {:.2}), skipping",
+                    c
+                );
+            }
+        }
+        return;
+    }
+
+    info!(
+        "✅ Transcribed: {} (confidence: {}, partial: {})",
+        transcript, confidence_str, is_partial
+    );
+
+    // Emit speech-detected once per session for frontend UX.
+    if !SPEECH_DETECTED_EMITTED.swap(true, Ordering::SeqCst) {
+        match app.emit(
+            "speech-detected",
+            serde_json::json!({ "message": "Speech activity detected" }),
+        ) {
+            Ok(_) => info!("🎤 First speech detected - emitted speech-detected event"),
+            Err(e) => error!("🎤 Failed to emit speech-detected event: {}", e),
+        }
+    }
+
+    let sequence_id = SEQUENCE_COUNTER.fetch_add(1, Ordering::SeqCst);
+
+    // Diarize: either replay the turn-splitter's precomputed embedding or
+    // embed the snapshot. The result is a stored profile name (embedding
+    // matched a saved voice profile above threshold) or "Speaker N" from
+    // in-session clustering. When no diarizer is loaded, fall back to the
+    // source placeholder ("Me" for mic, "Speaker" for system).
+    //
+    // The local user reads as "Me" here too, without a branch: if they've
+    // enrolled their voice in settings, their profile is named "Me" and
+    // matches like any other stored speaker. See
+    // `speaker_diarization::enrollment`.
+    let (source_tag, default_speaker) = default_speaker_for_source(chunk_source);
+    let diarization_result = match (
+        crate::speaker_diarization::current_diarizer(),
+        embedding.is_some() || diarization_samples.is_some(),
+    ) {
+        (Some(diarizer), true) => {
+            // Speaker embedding is CPU-bound ONNX inference; run it off the
+            // async runtime so it can't stall other tasks (same reasoning
+            // as whisper inference).
+            let samples = diarization_samples.unwrap_or_default();
+            tokio::task::spawn_blocking(move || diarizer.process(sequence_id, &samples, embedding))
+                .await
+                .ok()
+                .and_then(|res| match res {
+                    Ok(result) => Some(result),
+                    Err(e) => {
+                        log::debug!("Diarization fallback for chunk {}: {}", sequence_id, e);
+                        None
+                    }
+                })
+        }
+        _ => None,
+    };
+    let diarized = diarization_result.is_some();
+    let (speaker_label, voice_profile_id) = match diarization_result {
+        Some(r) => (r.label, r.voice_profile_id),
+        None => (default_speaker.to_string(), None),
+    };
+    // Per-segment attribution trace. Debug-level so it's silent by default;
+    // enable with RUST_LOG=app_lib::audio::transcription::worker=debug to
+    // see whether live labels come from the diarizer (matched profile /
+    // "Speaker N") or the source fallback ("Me" / "Speaker").
+    log::debug!(
+        "Attribution: source={:?} speaker='{}' profile={:?} diarized={}",
+        chunk_source,
+        speaker_label,
+        voice_profile_id,
+        diarized
+    );
+
+    let update = TranscriptUpdate {
+        text: transcript,
+        timestamp: format_current_timestamp(), // Wall-clock for reference
+        source: source_tag.to_string(),
+        sequence_id,
+        chunk_start_time: chunk_timestamp, // Legacy compatibility
+        is_partial,
+        confidence: confidence_opt.unwrap_or(0.85), // Default for providers without confidence
+        audio_start_time,
+        audio_end_time,
+        duration: chunk_duration,
+        speaker: Some(speaker_label),
+        voice_profile_id,
+    };
+
+    // Record for future cross-source echo checks. Only accepted (emitted)
+    // segments are recorded — a suppressed echo should never itself become
+    // a match target.
+    echo_dedup.record(chunk_source, &update.text, audio_start_time, audio_end_time);
+
+    if let Err(e) = app.emit("transcript-update", &update) {
+        error!("Failed to emit transcript update: {}", e);
+    }
 }
 
 /// Stock phrases whisper reliably hallucinates on marginal/near-silent
@@ -750,7 +512,7 @@ pub fn is_likely_hallucination(text: &str, confidence: f32) -> bool {
     STOCK_PHRASES.contains(&normalized.as_str())
 }
 
-/// Transcribe audio chunk using the configured engine (Whisper or trait-based provider).
+/// Transcribe audio chunk using the configured engine.
 /// Returns: (text, confidence Option, is_partial)
 async fn transcribe_chunk_with_provider<R: Runtime>(
     engine: &TranscriptionEngine,
@@ -867,16 +629,6 @@ fn format_current_timestamp() -> String {
     let seconds = now.as_secs() % 60;
 
     format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
-}
-
-/// Format recording-relative time as [MM:SS]
-#[allow(dead_code)]
-fn format_recording_time(seconds: f64) -> String {
-    let total_seconds = seconds.floor() as u64;
-    let minutes = total_seconds / 60;
-    let secs = total_seconds % 60;
-
-    format!("[{:02}:{:02}]", minutes, secs)
 }
 
 #[cfg(test)]

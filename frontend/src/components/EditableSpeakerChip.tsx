@@ -14,7 +14,7 @@ import {
 } from "./ui/select";
 import { speakerChipClass } from "@/lib/speaker-chip";
 import {
-  clusterIdFromSpeakerLabel,
+  isUnnamedSpeakerLabel,
   listVoiceProfiles,
   mergeClusterIntoProfile,
   promoteSpeakerToProfile,
@@ -75,16 +75,12 @@ export function EditableSpeakerChip({
   const [attendees, setAttendees] = useState<AttendeeSuggestion[]>([]);
 
   const isMe = speaker === ME_LABEL;
-  const parsedClusterId = voiceProfileId
-    ? null
-    : clusterIdFromSpeakerLabel(speaker);
-  // Promoting an unnamed cluster needs both a parsed cluster id AND a
+  // Promoting an unnamed cluster needs both a "Speaker N" label AND a
   // meetingId scope. Without the latter the backend rejects the call (the
   // rename of "Speaker N" → name has to be scoped per-meeting), so we fall
   // back to a static chip.
-  const canPromoteCluster = parsedClusterId !== null && !!meetingId;
-  const clusterId = canPromoteCluster ? parsedClusterId : null;
-  const isUnnamedCluster = clusterId !== null;
+  const isUnnamedCluster =
+    !voiceProfileId && isUnnamedSpeakerLabel(speaker) && !!meetingId;
   const isNamedProfile = !!voiceProfileId;
   const mergeTarget =
     mergeTargetId !== MERGE_NEW_VALUE
@@ -182,18 +178,18 @@ export function EditableSpeakerChip({
     const emailOrNull = trimmedEmail.length > 0 ? trimmedEmail : null;
 
     try {
-      if (mergeTarget && clusterId !== null && meetingId) {
+      if (mergeTarget && isUnnamedCluster && meetingId) {
         // Merge unnamed cluster into an existing stored profile.
         await mergeClusterIntoProfile({
           meeting_id: meetingId,
-          cluster_id: clusterId,
+          speaker_label: speaker,
           profile_id: mergeTarget.id,
         });
       } else if (isNamedProfile && voiceProfileId) {
         await updateVoiceProfile(voiceProfileId, trimmedName, emailOrNull);
-      } else if (clusterId !== null && meetingId) {
+      } else if (isUnnamedCluster && meetingId) {
         await promoteSpeakerToProfile({
-          cluster_id: clusterId,
+          speaker_label: speaker,
           name: trimmedName,
           email: emailOrNull,
           meeting_id: meetingId,

@@ -150,7 +150,10 @@ impl TranscriptsRepository {
 
     /// Apply post-meeting speaker refinement to `meeting_id`'s transcripts.
     ///
-    /// `updates` is `(sequence_id, expected_current_speaker, new_speaker)`.
+    /// `updates` is `(sequence_id, expected_current_speaker, new_speaker,
+    /// new_voice_profile_id)` — the profile id is `Some` when refinement
+    /// folded the row's cluster into a stored voice profile, linking the row
+    /// so its chip routes through profile editing from then on.
     /// Returns the number of rows actually rewritten.
     ///
     /// Three guards keep this from ever damaging a deliberate label, since
@@ -164,9 +167,9 @@ impl TranscriptsRepository {
     ///    unless the row still carries the exact label the live pass gave it,
     ///    so a rename that landed between save and refinement wins, and a
     ///    re-run of refinement changes nothing.
-    /// 3. `sequence_id = ?` — only ever matches rows the live path wrote a
-    ///    sequence for; NULL-sequence rows (pre-migration, or from the batch
-    ///    import/retranscription paths) are silently left alone.
+    /// 3. `sequence_id = ?` — only ever matches rows that carry a sequence;
+    ///    NULL-sequence rows (from data predating sequence tracking) are
+    ///    silently left alone.
     ///
     /// All updates share one transaction: refinement is a single logical
     /// re-labelling of the meeting, so a failure partway through must not
@@ -174,7 +177,7 @@ impl TranscriptsRepository {
     pub async fn update_speakers_by_sequence(
         pool: &SqlitePool,
         meeting_id: &str,
-        updates: &[(u64, String, String)],
+        updates: &[(u64, String, String, Option<String>)],
     ) -> Result<u64, SqlxError> {
         if updates.is_empty() {
             return Ok(0);
@@ -184,16 +187,17 @@ impl TranscriptsRepository {
         let mut transaction = conn.begin().await?;
 
         let mut changed = 0u64;
-        for (sequence_id, expected_speaker, new_speaker) in updates {
+        for (sequence_id, expected_speaker, new_speaker, new_profile_id) in updates {
             let result = sqlx::query(
                 "UPDATE transcripts
-                 SET speaker = ?
+                 SET speaker = ?, voice_profile_id = ?
                  WHERE meeting_id = ?
                    AND sequence_id = ?
                    AND speaker = ?
                    AND voice_profile_id IS NULL",
             )
             .bind(new_speaker)
+            .bind(new_profile_id)
             .bind(meeting_id)
             .bind(*sequence_id as i64)
             .bind(expected_speaker)

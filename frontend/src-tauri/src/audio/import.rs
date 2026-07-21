@@ -594,7 +594,19 @@ async fn run_import<R: Runtime>(
     // Install the batch diarizer as current so the user can name "Speaker N"
     // on the just-imported meeting and reach this batch's embeddings (see
     // matching note in retranscription.rs for the full rationale).
-    if let Some(d) = diarizer {
+    //
+    // Never while a live recording is running: that session owns the slot,
+    // and swapping it out from under the transcription worker would cluster
+    // the rest of the live meeting in this batch's history. Promote on the
+    // imported meeting then degrades to relabel-only, which is the lesser
+    // harm.
+    if crate::audio::recording_commands::is_recording().await {
+        warn!(
+            "Recording in progress — not installing import diarizer for meeting {} \
+             (promote will degrade to relabel-only)",
+            meeting_id
+        );
+    } else if let Some(d) = diarizer {
         crate::speaker_diarization::set_current_diarizer(Some(d));
         info!(
             "Installed import diarizer as current_diarizer for meeting {}",
@@ -877,6 +889,7 @@ mod tests {
             end_ms,
             speaker: None,
             voice_profile_id: None,
+            sequence_id: 0,
         }
     }
 

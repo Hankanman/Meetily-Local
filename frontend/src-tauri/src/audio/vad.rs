@@ -247,6 +247,13 @@ impl ContinuousVadProcessor {
 
     /// Resample `samples` from `self.sample_rate` to 16 kHz with a basic
     /// low-pass + linear interpolation. Adequate for VAD input quality.
+    ///
+    /// Deliberately NOT `audio_processing::resample_audio`: that builds a
+    /// one-shot 512-tap sinc resampler per call, sized to the whole input —
+    /// right for batch jobs resampling a full recording, but this runs on
+    /// every ~50ms pipeline window, where the construction cost and the
+    /// per-call windowing edge effects would dominate. VAD only needs
+    /// speech-band energy to survive, which this cheap filter preserves.
     fn resample_to_16k(&self, samples: &[f32]) -> Result<Vec<f32>> {
         if self.sample_rate == 16_000 {
             return Ok(samples.to_vec());

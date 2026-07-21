@@ -2,10 +2,11 @@
 
 use crate::database::repositories::transcript::TranscriptsRepository;
 use crate::database::repositories::voice_profile::{bytes_to_floats, VoiceProfilesRepository};
+use crate::speaker_diarization::embedding_math::{average_and_normalize, merge_centroids};
 use crate::speaker_diarization::{
     current_diarizer, default_model_path, model::model_is_ready, model_download_url,
-    model_filename, refine_assignments, set_current_diarizer, Diarizer, RefinedAssignment,
-    SpeakerEmbedder, SpeakerProfileMatcher, DEFAULT_CLUSTER_THRESHOLD, PROFILE_MATCH_THRESHOLD,
+    model_filename, set_current_diarizer, Diarizer, SpeakerEmbedder, SpeakerProfileMatcher,
+    DEFAULT_CLUSTER_THRESHOLD, PROFILE_MATCH_THRESHOLD,
 };
 use crate::state::AppState;
 use anyhow::{anyhow, Result};
@@ -238,9 +239,12 @@ pub struct VoiceProfileDto {
 
 #[derive(Debug, Deserialize)]
 pub struct PromoteSpeakerArgs {
-    /// Cluster id assigned during recording (0-indexed, "Speaker N" maps to
-    /// cluster_id = N - 1).
-    pub cluster_id: usize,
+    /// The displayed label being promoted (e.g. "Speaker 2"). Used both to
+    /// look up the diarizer's embeddings for that label and to rewrite the
+    /// meeting's transcript rows. The label — not any internal cluster id —
+    /// is the identifier, because post-recording refinement renumbers labels
+    /// independently of the live clusterer's ids.
+    pub speaker_label: String,
     pub name: String,
     /// Optional contact email — frontend may collect it in the same dialog
     /// that captures the name. `None` / empty string leaves it unset.
@@ -333,9 +337,9 @@ pub async fn update_voice_profile<R: Runtime>(
         .map_err(|e| format!("Failed to update voice profile: {}", e))
 }
 
-/// Take all embeddings the diarizer assigned to `cluster_id` during the most
-/// recent recording, average them into a centroid, and save as a new voice
-/// profile under `name`. Returns the new profile id.
+/// Take all embeddings currently carrying `speaker_label` in the diarizer's
+/// history for the most recent recording, average them into a centroid, and
+/// save as a new voice profile under `name`. Returns the new profile id.
 ///
 /// Typical UX: after a meeting the user sees "Speaker 2" said something —
 /// they click "name this" → enter "Bob" → this command runs. Future meetings
@@ -352,6 +356,10 @@ pub async fn promote_speaker_to_profile<R: Runtime>(
     if args.meeting_id.trim().is_empty() {
         return Err("meeting_id is required".into());
     }
+    let old_label = args.speaker_label.trim().to_string();
+    if old_label.is_empty() {
+        return Err("speaker_label is required".into());
+    }
     let normalised_email = args
         .email
         .as_deref()
@@ -363,14 +371,12 @@ pub async fn promote_speaker_to_profile<R: Runtime>(
         .ok_or_else(|| "AppState unavailable".to_string())?;
     let pool = state.db_manager.pool();
 
-    let old_label = format!("Speaker {}", args.cluster_id + 1);
-
     // Try to grab the embeddings. They're reachable only when the diarizer
     // that produced this meeting is still the in-memory singleton (a live
     // recording or its just-finished retranscription). Older meetings
     // degrade to rename-only.
     let embeddings = current_diarizer()
-        .map(|d| d.embeddings_for_cluster(args.cluster_id))
+        .map(|d| d.embeddings_for_label(&old_label))
         .unwrap_or_default();
 
     let profile_id = if embeddings.is_empty() {
@@ -549,8 +555,10 @@ pub struct MergeClusterArgs {
     /// Meeting whose "Speaker N" labels should be rewritten to the
     /// existing profile's name.
     pub meeting_id: String,
-    /// Cluster id assigned during the meeting (0-indexed).
-    pub cluster_id: usize,
+    /// The displayed label being merged (e.g. "Speaker 2"); see
+    /// [`PromoteSpeakerArgs::speaker_label`] for why the label is the
+    /// identifier.
+    pub speaker_label: String,
     /// Profile that gets credit for this cluster's samples.
     pub profile_id: String,
 }
@@ -576,6 +584,10 @@ pub async fn merge_cluster_into_profile<R: Runtime>(
     if args.profile_id.trim().is_empty() {
         return Err("profile_id is required".into());
     }
+    let old_label = args.speaker_label.trim().to_string();
+    if old_label.is_empty() {
+        return Err("speaker_label is required".into());
+    }
 
     let state = app
         .try_state::<AppState>()
@@ -587,11 +599,9 @@ pub async fn merge_cluster_into_profile<R: Runtime>(
         .map_err(|e| format!("Failed to load profile: {}", e))?
         .ok_or_else(|| format!("Profile not found: {}", args.profile_id))?;
 
-    let old_label = format!("Speaker {}", args.cluster_id + 1);
-
-    // Pull this cluster's embeddings if the diarizer is still reachable.
+    // Pull this label's embeddings if the diarizer is still reachable.
     let cluster_embeddings = current_diarizer()
-        .map(|d| d.embeddings_for_cluster(args.cluster_id))
+        .map(|d| d.embeddings_for_label(&old_label))
         .unwrap_or_default();
 
     let centroid_updated = if !cluster_embeddings.is_empty()
@@ -614,15 +624,15 @@ pub async fn merge_cluster_into_profile<R: Runtime>(
     } else {
         if !cluster_embeddings.is_empty() {
             log::warn!(
-                "Embedding-dim mismatch for cluster {} ({} vs profile {}) — skipping centroid update",
-                args.cluster_id,
+                "Embedding-dim mismatch for {} ({} vs profile {}) — skipping centroid update",
+                old_label,
                 cluster_embeddings[0].len(),
                 profile.embedding_dim,
             );
         } else {
             log::info!(
-                "No embeddings reachable for cluster {} in meeting {} — relabel only",
-                args.cluster_id,
+                "No embeddings reachable for {} in meeting {} — relabel only",
+                old_label,
                 args.meeting_id,
             );
         }
@@ -662,44 +672,6 @@ pub async fn merge_cluster_into_profile<R: Runtime>(
     })
 }
 
-/// Run the post-recording offline refinement and return refined speaker
-/// assignments, one per diarized segment (keyed by `sequence_id`).
-/// Frontend consumers update displayed transcripts whose `sequence_id`
-/// matches. Stored profile matches pass through unchanged.
-///
-/// Also emits `transcript-refinement-complete` (`{ refined_count, changed_count }`)
-/// so UI can show a brief "speakers refined" toast.
-///
-/// This is the *manual* entry point and does not touch the database — see
-/// [`refine_and_persist`] for the automatic post-meeting pass.
-#[command]
-pub async fn refine_speaker_assignments<R: Runtime>(
-    app: AppHandle<R>,
-) -> Result<Vec<RefinedAssignment>, String> {
-    let diarizer = current_diarizer()
-        .ok_or_else(|| "No diarizer available — record a meeting first".to_string())?;
-
-    let history = diarizer.export_history();
-    let refined = refine_assignments(&history, DEFAULT_CLUSTER_THRESHOLD);
-    let changed_count = refined.iter().filter(|r| r.changed).count();
-
-    log::info!(
-        "Speaker refinement: {} segments processed, {} relabeled",
-        refined.len(),
-        changed_count
-    );
-
-    let _ = app.emit(
-        "transcript-refinement-complete",
-        serde_json::json!({
-            "refined_count": refined.len(),
-            "changed_count": changed_count,
-        }),
-    );
-
-    Ok(refined)
-}
-
 /// Re-cluster the just-finished recording offline and write the improved
 /// speaker labels into `meeting_id`'s saved transcripts.
 ///
@@ -730,8 +702,16 @@ pub async fn refine_and_persist<R: Runtime>(app: &AppHandle<R>, meeting_id: &str
         return Ok(0);
     };
 
-    let history = diarizer.export_history();
-    if history.is_empty() {
+    // Clustering is pure CPU work over the whole session's embeddings; keep
+    // it off the async runtime so it can't stall other tasks (same reasoning
+    // as whisper/embedding inference elsewhere).
+    let refined = {
+        let diarizer = diarizer.clone();
+        tokio::task::spawn_blocking(move || diarizer.refine())
+            .await
+            .map_err(|e| anyhow!("Speaker refinement task panicked: {}", e))?
+    };
+    if refined.is_empty() {
         log::info!(
             "Diarizer history empty for meeting {} — nothing to refine",
             meeting_id
@@ -739,16 +719,7 @@ pub async fn refine_and_persist<R: Runtime>(app: &AppHandle<R>, meeting_id: &str
         return Ok(0);
     }
 
-    // Clustering is pure CPU work over the whole session's embeddings; keep
-    // it off the async runtime so it can't stall other tasks (same reasoning
-    // as whisper/embedding inference elsewhere).
-    let refined = tokio::task::spawn_blocking(move || {
-        refine_assignments(&history, DEFAULT_CLUSTER_THRESHOLD)
-    })
-    .await
-    .map_err(|e| anyhow!("Speaker refinement task panicked: {}", e))?;
-
-    let updates: Vec<(u64, String, String)> = refined
+    let updates: Vec<(u64, String, String, Option<String>)> = refined
         .iter()
         .filter(|r| r.changed)
         .map(|r| {
@@ -756,6 +727,7 @@ pub async fn refine_and_persist<R: Runtime>(app: &AppHandle<R>, meeting_id: &str
                 r.sequence_id,
                 r.previous_speaker.clone(),
                 r.speaker.clone(),
+                r.voice_profile_id.clone(),
             )
         })
         .collect();
@@ -779,6 +751,11 @@ pub async fn refine_and_persist<R: Runtime>(app: &AppHandle<R>, meeting_id: &str
             .await
             .map_err(|e| anyhow!("DB error applying speaker refinement: {}", e))?;
 
+    // Keep the in-memory history's labels in sync with what the DB (and so
+    // the UI) now shows, so a later promote/merge — which looks embeddings up
+    // *by label* — resolves the refined labels the user actually sees.
+    diarizer.apply_refinement(&refined);
+
     log::info!(
         "Speaker refinement for meeting {}: {} segments re-clustered, {} rows relabeled",
         meeting_id,
@@ -797,57 +774,3 @@ pub async fn refine_and_persist<R: Runtime>(app: &AppHandle<R>, meeting_id: &str
     Ok(changed_count as usize)
 }
 
-/// Combine two centroid+sample_count pairs into a single L2-normalized
-/// centroid representing the union of samples.
-///
-/// We only have the precomputed centroids (the raw embeddings aren't kept
-/// after the diarizer's history is dropped), so this is a sample-count-
-/// weighted average rather than a true mean over the raw vectors. For
-/// reasonably similar voices that's close enough; the renormalize keeps
-/// the result on the unit sphere where cosine-similarity matching expects
-/// it.
-fn merge_centroids(a: &[f32], a_n: usize, b: &[f32], b_n: usize) -> Vec<f32> {
-    debug_assert_eq!(a.len(), b.len());
-    let dim = a.len();
-    let total = (a_n + b_n) as f32;
-    let mut acc = vec![0.0f32; dim];
-    for i in 0..dim {
-        acc[i] = (a[i] * a_n as f32 + b[i] * b_n as f32) / total;
-    }
-    let norm = acc.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 1e-8 {
-        let inv = 1.0 / norm;
-        for v in acc.iter_mut() {
-            *v *= inv;
-        }
-    }
-    acc
-}
-
-/// Average a set of embeddings and L2-normalize the result. Mirrors the
-/// online clusterer's centroid update so behaviour stays consistent.
-fn average_and_normalize(embeddings: &[Vec<f32>]) -> Vec<f32> {
-    if embeddings.is_empty() {
-        return Vec::new();
-    }
-    let dim = embeddings[0].len();
-    let mut acc = vec![0.0f32; dim];
-    for e in embeddings {
-        debug_assert_eq!(e.len(), dim);
-        for (i, v) in e.iter().enumerate() {
-            acc[i] += v;
-        }
-    }
-    let n = embeddings.len() as f32;
-    for v in acc.iter_mut() {
-        *v /= n;
-    }
-    let norm = acc.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 1e-8 {
-        let inv = 1.0 / norm;
-        for v in acc.iter_mut() {
-            *v *= inv;
-        }
-    }
-    acc
-}

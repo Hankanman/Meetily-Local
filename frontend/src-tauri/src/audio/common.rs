@@ -40,6 +40,11 @@ pub(crate) struct BatchTranscript {
     pub end_ms: f64,
     pub speaker: Option<String>,
     pub voice_profile_id: Option<String>,
+    /// Position of this transcript in the batch output. Doubles as the
+    /// sequence id the diarizer history records for the segment, so a
+    /// saved row can always be matched back to the embedding that labelled
+    /// it (promote/refine rely on this being consistent).
+    pub sequence_id: u64,
 }
 
 /// Canonical transcript segment type, shared by the live-recording path, the
@@ -78,8 +83,11 @@ pub struct TranscriptSegment {
     /// Whisper confidence score. Set by the live-recording path only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
-    /// Monotonic per-recording sequence number the live-recording path uses to
-    /// upsert partial->final updates in place. Batch paths leave this `None`;
+    /// Sequence number linking a row back to the diarizer embedding that
+    /// labelled it. The live-recording path uses a monotonic per-session
+    /// counter (also used to upsert partial->final updates in place); batch
+    /// paths use the segment's position in the batch output. `None` only for
+    /// segments restored from data that predates sequence tracking;
     /// `write_transcripts_json` falls back to array position for those.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence_id: Option<u64>,
@@ -118,7 +126,7 @@ pub(crate) fn create_transcript_segments(
                 duration: Some(duration),
                 display_time: None,
                 confidence: None,
-                sequence_id: None,
+                sequence_id: Some(t.sequence_id),
                 speaker: t.speaker.clone(),
                 voice_profile_id: t.voice_profile_id.clone(),
                 // Batch/retranscription reads the mixed-down audio, so there's
@@ -455,8 +463,12 @@ pub(crate) async fn run_batch_transcription(
                 }
             );
 
+            // The transcript's position in the output is its sequence id —
+            // computed BEFORE the push so the diarizer history records the
+            // same id the saved row will carry.
+            let sequence_id = all_transcripts.len() as u64;
             let (speaker, voice_profile_id) = match diarizer.as_ref() {
-                Some(d) => match d.process(i as u64, &segment.samples) {
+                Some(d) => match d.process(sequence_id, &segment.samples, None) {
                     Ok(result) => (Some(result.label), result.voice_profile_id),
                     Err(e) => {
                         debug!("Diarization fallback for batch segment {}: {}", i, e);
@@ -472,6 +484,7 @@ pub(crate) async fn run_batch_transcription(
                 end_ms: segment.end_timestamp_ms,
                 speaker,
                 voice_profile_id,
+                sequence_id,
             });
             total_confidence += conf;
         } else {

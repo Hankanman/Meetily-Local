@@ -515,7 +515,18 @@ async fn run_retranscription<R: Runtime>(
     // names a "Speaker N" chip on the just-finished meeting. Without this,
     // the diarizer (and its history) would be dropped at function return,
     // forcing every promote to fall back to rename-only.
-    if let Some(d) = diarizer {
+    //
+    // Never while a live recording is running: that session owns the slot
+    // (this matters for background auto-refine of the *previous* meeting
+    // finishing after the *next* recording has started — swapping the slot
+    // would cluster the rest of the live meeting in this batch's history).
+    if crate::audio::recording_commands::is_recording().await {
+        warn!(
+            "Recording in progress — not installing retranscription diarizer for meeting {} \
+             (promote will degrade to relabel-only)",
+            meeting_id
+        );
+    } else if let Some(d) = diarizer {
         crate::speaker_diarization::set_current_diarizer(Some(d));
         info!(
             "Installed retranscription diarizer as current_diarizer for meeting {}",
@@ -906,6 +917,7 @@ mod tests {
             end_ms,
             speaker: None,
             voice_profile_id: None,
+            sequence_id: 0,
         }
     }
 
@@ -987,6 +999,7 @@ mod tests {
                 end_ms: 1000.0,
                 speaker: Some("Speaker 1".into()),
                 voice_profile_id: None,
+                sequence_id: 0,
             },
             BatchTranscript {
                 text: "Hi".into(),
@@ -994,6 +1007,7 @@ mod tests {
                 end_ms: 2000.0,
                 speaker: Some("Alice".into()),
                 voice_profile_id: Some("profile-abc".into()),
+                sequence_id: 1,
             },
         ];
         let segments = create_transcript_segments(&transcripts);

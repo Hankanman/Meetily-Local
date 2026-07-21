@@ -8,6 +8,8 @@
 //! Embeddings are L2-normalized on insertion so cosine similarity reduces
 //! to a dot product — important for hot-path performance.
 
+use super::embedding_math::{dot, l2_normalize};
+
 #[derive(Debug, Clone)]
 struct Centroid {
     /// Stable id used to derive the user-facing label.
@@ -73,21 +75,6 @@ impl OnlineSpeakerClusterer {
     /// User-facing label like "Speaker 1" (1-indexed).
     pub fn label_for(&self, cluster_id: usize) -> String {
         format!("Speaker {}", cluster_id + 1)
-    }
-}
-
-fn dot(a: &[f32], b: &[f32]) -> f32 {
-    debug_assert_eq!(a.len(), b.len());
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
-}
-
-fn l2_normalize(v: &mut [f32]) {
-    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 1e-8 {
-        let inv = 1.0 / norm;
-        for x in v.iter_mut() {
-            *x *= inv;
-        }
     }
 }
 

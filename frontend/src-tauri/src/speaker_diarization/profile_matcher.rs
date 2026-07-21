@@ -13,11 +13,6 @@ use anyhow::Result;
 use sherpa_onnx::SpeakerEmbeddingManager;
 use std::collections::HashMap;
 
-/// Cosine-similarity threshold for "this is John". Higher than the in-session
-/// clustering threshold (0.55) because false positives here are worse — they
-/// mislabel transcripts with someone else's name.
-pub const PROFILE_MATCH_THRESHOLD: f32 = 0.60;
-
 #[derive(Debug, Clone)]
 pub struct ProfileMatch {
     pub profile_id: String,
