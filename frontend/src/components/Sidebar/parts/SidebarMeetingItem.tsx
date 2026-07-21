@@ -52,7 +52,7 @@ export function SidebarMeetingItem({
       className={`
         group relative cursor-pointer rounded-md px-2 py-1.5 text-sm
         ${isActive
-          ? "bg-info/10 text-info"
+          ? "bg-brand-muted text-brand-strong"
           : "text-foreground hover:bg-muted"}
       `}
     >
@@ -92,7 +92,7 @@ export function SidebarMeetingItem({
           }}
           className="
             rounded-md p-1 text-muted-foreground
-            hover:bg-info/10 hover:text-info
+            hover:bg-brand-muted hover:text-brand-strong
           "
           aria-label={`Rename ${meeting.title}`}
         >

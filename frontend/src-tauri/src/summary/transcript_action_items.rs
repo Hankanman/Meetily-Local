@@ -194,6 +194,18 @@ pub(crate) async fn extract_window(
 
     let mut out = Vec::new();
     for mut item in items {
+        // Drop items where the model echoed the transcript sentence verbatim as
+        // the task instead of rewriting it into an imperative — a raw quote as a
+        // "task" is noise ("let's talk about the list", "I don't know what more
+        // I can do"). Only exact matches are dropped: a genuine rewrite reorders
+        // words, so it never equals its quote, while a verbatim slice ("Amanda
+        // updates this list") is a legitimate extraction and is kept.
+        if let Some(quote) = item.source_quote.as_deref() {
+            if is_echoed_quote(&item.text, quote) {
+                debug_drop_echo(&item);
+                continue;
+            }
+        }
         match ground(&item, window) {
             Grounding::Anchored { start, end } => {
                 item.source_start_secs = start;
@@ -207,22 +219,65 @@ pub(crate) async fn extract_window(
     out
 }
 
-const SYSTEM_PROMPT: &str = r#"You extract action items from a meeting transcript.
+/// True when `text` is the transcript sentence echoed back verbatim rather than
+/// rewritten into a task. Compared after normalization (lowercased, punctuation
+/// and spacing collapsed) so trivial formatting differences don't hide it.
+fn is_echoed_quote(text: &str, quote: &str) -> bool {
+    let normalized = normalize_phrase(text);
+    !normalized.is_empty() && normalized == normalize_phrase(quote)
+}
+
+/// Lowercase, collapse every run of non-alphanumeric characters to a single
+/// space, and trim — a punctuation-insensitive form for comparing two phrases.
+fn normalize_phrase(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut pending_space = false;
+    for c in text.chars() {
+        if c.is_alphanumeric() {
+            if pending_space && !out.is_empty() {
+                out.push(' ');
+            }
+            pending_space = false;
+            out.extend(c.to_lowercase());
+        } else {
+            pending_space = true;
+        }
+    }
+    out
+}
+
+const SYSTEM_PROMPT: &str = r#"You extract concrete action items from a raw meeting transcript.
+
+An action item is a specific task someone committed to doing after the meeting — something with a clear, doable outcome. Be strict: in casual discussion most sentences are NOT action items.
 
 Return ONLY a JSON array. No prose, no explanation, no markdown fences.
 
 Each element is an object with these keys:
-  "text":     (required) the task as a short imperative phrase. Do not include the owner's name or the deadline in this field.
-  "assignee": (optional) the person responsible, exactly as named. Omit if not stated.
-  "due_hint": (optional) the deadline exactly as phrased ("by Friday"). Do not convert it to a date. Omit if none.
-  "quote":    (required) copy, verbatim, the single transcript sentence that states this commitment.
+  "text":     (required) the task, rewritten as a short concrete imperative that starts with a verb (e.g. "Send the Q3 budget to Finance"). Rephrase it in your own words — NEVER copy a transcript sentence verbatim. Do not put the owner's name or the deadline in this field.
+  "assignee": (optional) the real name of the person who will do it, if the transcript clearly says who. Never use a role, a team, or a diarization label like "Speaker 1". Omit if it is not clearly stated.
+  "due_hint": (optional) the deadline exactly as spoken ("by Friday", "next sprint"). Do not convert it to a date. Omit if none.
+  "quote":    (required) copy, verbatim, the single transcript sentence the task comes from.
 
-Rules:
-- Only include commitments to do something in the future. Ignore decisions already made, background chit-chat, and work already completed.
-- One element per task. Do not merge two tasks or split one into steps.
-- The "quote" MUST be copied word-for-word from the transcript lines provided. Never paraphrase or invent it.
-- Never invent an assignee or a deadline; omit the key if the transcript does not state one.
-- If there are no action items, return exactly: []"#;
+INCLUDE only clear commitments to do a specific task in the future.
+
+EXCLUDE (never output these):
+- Opinions, feelings, and observations ("I don't know what more I can do", "I think this is hard").
+- Topics or agenda pointers ("let's talk about the Power 25 list", "let's discuss pricing").
+- Questions, hypotheticals, and vague aspirations ("we should grow the pipeline").
+- Decisions already made and work already done.
+- Anything with no concrete task or that just restates a sentence.
+
+Prefer precision over completeness: a short list of real tasks is far more useful than a long list padded with chatter. If the transcript has no clear tasks, return exactly: [].
+
+The "quote" MUST be copied word-for-word from the transcript lines provided; never invent it. Never invent an assignee or a deadline.
+
+Example transcript:
+[00:10] Speaker 1: Honestly, I don't know what more I can do to help here.
+[00:20] Speaker 2: Okay. I'll send the Q3 budget over to Finance by Friday.
+[00:31] Speaker 1: Sounds good. Let's talk about the offsite next time.
+
+Example output:
+[{"text":"Send the Q3 budget to Finance","due_hint":"by Friday","quote":"I'll send the Q3 budget over to Finance by Friday."}]"#;
 
 /// Group segments into overlapping, character-bounded windows.
 fn window_segments(segments: &[Segment]) -> Vec<&[Segment]> {
@@ -349,6 +404,13 @@ fn debug_drop(item: &NewActionItem) {
     );
 }
 
+fn debug_drop_echo(item: &NewActionItem) {
+    tracing::debug!(
+        "Dropping echoed action item (text is the verbatim quote): {}",
+        item.text
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,6 +474,33 @@ mod tests {
             .flat_map(|w| w.iter().map(|s| s.start.unwrap() as usize))
             .collect();
         assert_eq!(covered.len(), 10);
+    }
+
+    #[test]
+    fn detects_a_verbatim_echo_ignoring_punctuation_and_case() {
+        // The model copied the sentence into `text` instead of rewriting it.
+        assert!(is_echoed_quote(
+            "let's talk about Power 25 lists",
+            "Let's talk about Power 25 lists.",
+        ));
+        assert!(is_echoed_quote(
+            "I don't know what more I can do to help",
+            "I don't know what more I can do to help",
+        ));
+    }
+
+    #[test]
+    fn keeps_a_genuine_rewrite_and_a_verbatim_slice() {
+        // A real rewrite reorders words — never equals its (different) quote.
+        assert!(!is_echoed_quote(
+            "Broaden the opportunity for services with Tesco.",
+            "So what's happening? Have we managed to broaden Tesco?",
+        ));
+        // A clean verbatim slice of a longer quote is a legitimate extraction.
+        assert!(!is_echoed_quote(
+            "Amanda updates this list",
+            "I'm going to ask that only Amanda updates this list.",
+        ));
     }
 
     #[test]

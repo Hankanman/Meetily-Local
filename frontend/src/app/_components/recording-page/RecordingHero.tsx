@@ -8,6 +8,7 @@ import { DeviceSummary } from "./DeviceSummary";
 import { HeroStartButton } from "./HeroStartButton";
 import { MeetingNameInput } from "./MeetingNameInput";
 import { RecentMeetings } from "./RecentMeetings";
+import { OutstandingActionItems } from "./OutstandingActionItems";
 
 interface RecordingHeroProps {
   onStart: () => void;
@@ -76,8 +77,11 @@ export function RecordingHero({ onStart, isStarting }: RecordingHeroProps) {
 
       <MeetingNameInput />
 
-      <div className="mt-4">
+      {/* Meeting + task summaries — two columns on wide viewports, stacked on
+          narrow ones. Each half hides itself when it has nothing to show. */}
+      <div className="mt-4 grid w-full max-w-3xl grid-cols-1 items-start gap-5 sm:grid-cols-2">
         <RecentMeetings />
+        <OutstandingActionItems />
       </div>
 
       {!hasMicrophone && (

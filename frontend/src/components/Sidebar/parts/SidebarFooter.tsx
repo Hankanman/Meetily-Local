@@ -66,7 +66,7 @@ export function SidebarFooter({
         </DialogTrigger>
         <DialogContent>
           <VisuallyHidden>
-            <DialogTitle>About Meetily</DialogTitle>
+            <DialogTitle>About Parley</DialogTitle>
           </VisuallyHidden>
           <About />
         </DialogContent>

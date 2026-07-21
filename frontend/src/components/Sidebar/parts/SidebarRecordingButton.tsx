@@ -76,9 +76,9 @@ export function SidebarRecordingButton({
             : "Start recording"
         }
         className="
-          flex size-10 items-center justify-center rounded-full bg-destructive
+          flex size-10 items-center justify-center rounded-full bg-record
           text-white shadow-sm
-          hover:bg-destructive/90
+          hover:bg-record/90
         "
       >
         {isRecording ? (
@@ -101,13 +101,13 @@ export function SidebarRecordingButton({
       }
       className="
         flex w-full items-center justify-center gap-2 rounded-md
-        bg-destructive px-3 py-2.5 text-sm font-medium text-white shadow-sm
-        hover:bg-destructive/90
+        bg-record px-3 py-2.5 text-sm font-medium text-white shadow-sm
+        hover:bg-record/90
       "
     >
       {isRecording ? (
         <>
-          <span className="size-2 animate-pulse rounded-full bg-white" />
+          <span className="size-2 animate-parley-pulse rounded-full bg-white" />
           <span>Recording</span>
           <span className="font-mono tabular-nums opacity-90">
             {formatElapsed(elapsed)}

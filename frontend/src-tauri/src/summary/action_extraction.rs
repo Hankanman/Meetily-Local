@@ -268,7 +268,7 @@ fn normalize_elements(elements: Vec<RawElement>) -> Vec<NewActionItem> {
 
         out.push(NewActionItem {
             text,
-            assignee: clean_optional(assignee),
+            assignee: clean_assignee(assignee),
             due_hint: clean_optional(due_hint),
             source_quote: clean_optional(quote),
             source_start_secs: None,
@@ -295,6 +295,30 @@ fn clean_optional(value: Option<String>) -> Option<String> {
         return None;
     }
     Some(trimmed)
+}
+
+/// Like [`clean_optional`], but also drops diarization labels ("Speaker 1")
+/// that the transcript extractor's model copies from the speaker-tagged lines.
+/// They name a voice cluster, not a person, so surfacing one as the owner is
+/// worse than showing no owner at all.
+fn clean_assignee(value: Option<String>) -> Option<String> {
+    let cleaned = clean_optional(value)?;
+    if is_generic_speaker_label(&cleaned) {
+        return None;
+    }
+    Some(cleaned)
+}
+
+/// True for "Speaker", "Speaker 1", "speaker_2", "Speaker #3" — a generic voice
+/// label. A real name that merely starts with "Speaker" (e.g. "Speakerman", or
+/// "Speaker One and Two") has trailing non-digits and is kept.
+fn is_generic_speaker_label(s: &str) -> bool {
+    let lower = s.trim().to_lowercase();
+    let Some(rest) = lower.strip_prefix("speaker") else {
+        return false;
+    };
+    let rest = rest.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+    rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Everything the LLM call needs, resolved from settings for `provider`.
@@ -595,6 +619,30 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].text, "Send the notes.");
         assert_eq!(items[1].text, "Real task here");
+    }
+
+    #[test]
+    fn strips_generic_speaker_assignees_but_keeps_real_names() {
+        let items = parse_action_items(
+            r#"[
+              {"text":"Introduce the new sellers","assignee":"Speaker 1"},
+              {"text":"Update the account list","assignee":"speaker_2"},
+              {"text":"Fix the admin issues","assignee":"Amanda"}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(items.len(), 3);
+        assert!(items[0].assignee.is_none(), "Speaker 1 should be dropped");
+        assert!(items[1].assignee.is_none(), "speaker_2 should be dropped");
+        assert_eq!(items[2].assignee.as_deref(), Some("Amanda"));
+    }
+
+    #[test]
+    fn keeps_a_real_name_that_starts_with_speaker() {
+        assert!(!is_generic_speaker_label("Speakerman"));
+        assert!(is_generic_speaker_label("Speaker"));
+        assert!(is_generic_speaker_label("Speaker 3"));
+        assert!(is_generic_speaker_label("speaker_10"));
     }
 
     #[test]

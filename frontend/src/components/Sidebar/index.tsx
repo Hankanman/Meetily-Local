@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { invoke } from "@tauri-apps/api/core";
+import { ListChecks } from "lucide-react";
 import { toast } from "sonner";
 
 import { useRecordingState } from "@/contexts/RecordingStateContext";
@@ -189,6 +190,7 @@ const Sidebar: React.FC = () => {
           onStartRecording={handleRecordingToggle}
           onResumeRecordingView={() => router.push("/")}
           onMeetings={toggleCollapse}
+          onActionItems={() => router.push("/action-items")}
           onImport={() => openImportDialog()}
           onSettings={() => router.push("/settings")}
         />
@@ -205,6 +207,18 @@ const Sidebar: React.FC = () => {
               onChange={handleSearchChange}
               isSearching={isSearching}
             />
+            <button
+              type="button"
+              onClick={() => router.push("/action-items")}
+              className="
+                flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm
+                text-foreground transition-colors
+                hover:bg-muted
+              "
+            >
+              <ListChecks className="size-4 text-muted-foreground" />
+              <span>Action items</span>
+            </button>
           </div>
           <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-2 pb-3">
             <SidebarMeetingsList

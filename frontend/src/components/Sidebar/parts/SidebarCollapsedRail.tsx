@@ -2,6 +2,7 @@
 
 import {
   Home,
+  ListChecks,
   NotebookPen,
   Settings as SettingsIcon,
   Upload,
@@ -25,6 +26,7 @@ interface SidebarCollapsedRailProps {
    *  and navigated away mid-recording is stuck. */
   onResumeRecordingView: () => void;
   onMeetings: () => void;
+  onActionItems: () => void;
   onImport: () => void;
   onSettings: () => void;
 }
@@ -41,6 +43,7 @@ export function SidebarCollapsedRail({
   onStartRecording,
   onResumeRecordingView,
   onMeetings,
+  onActionItems,
   onImport,
   onSettings,
 }: SidebarCollapsedRailProps) {
@@ -97,6 +100,24 @@ export function SidebarCollapsedRail({
             </button>
           </TooltipTrigger>
           <TooltipContent side="right">Meetings</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onActionItems}
+              className="
+                flex size-9 items-center justify-center rounded-md
+                text-muted-foreground transition-colors
+                hover:bg-muted hover:text-foreground
+              "
+              aria-label="Action items"
+            >
+              <ListChecks className="size-5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">Action items</TooltipContent>
         </Tooltip>
 
         {showImport && (

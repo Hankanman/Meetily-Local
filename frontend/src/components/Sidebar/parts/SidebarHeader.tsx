@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 interface SidebarHeaderProps {
@@ -50,12 +51,17 @@ export function SidebarHeader({
           aria-label="Go to recording page"
           title="Go to recording page"
           className="
-            min-w-0 truncate rounded-md px-2 py-1 text-base font-semibold
-            text-foreground
-            hover:bg-muted
+            flex min-w-0 items-center rounded-md px-2 py-1 transition-opacity
+            hover:opacity-80
           "
         >
-          Meetily
+          <Image
+            src="/parley-logo-dark.svg"
+            alt="Parley"
+            width={92}
+            height={24}
+            priority
+          />
         </button>
       )}
     </div>

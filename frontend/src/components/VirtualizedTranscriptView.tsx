@@ -21,6 +21,7 @@ import { TranscriptSegmentData, PartialsBySource } from "@/types";
 import { formatRecordingTime } from "@/lib/utils";
 import { EditableSpeakerChip } from "./EditableSpeakerChip";
 import { Heading } from "./ui/typography";
+import { Timestamp } from "./ui/timestamp";
 import { Play, Square, Loader2 } from "lucide-react";
 import { useSegmentAudio } from "@/contexts/SegmentAudioContext";
 
@@ -174,11 +175,9 @@ const TranscriptSegment = memo(function TranscriptSegment({
       <div className="flex items-start gap-2">
         <Tooltip>
           <TooltipTrigger>
-            <span className="
-              mt-1 min-w-12.5 shrink-0 text-sm text-muted-foreground/70
-            ">
+            <Timestamp className="mt-1 block min-w-12.5 shrink-0 text-left">
               {formatRecordingTime(timestamp)}
-            </span>
+            </Timestamp>
           </TooltipTrigger>
           <TooltipContent>
             {confidence !== undefined && showConfidence && (
@@ -244,7 +243,7 @@ const PartialPreview = memo(function PartialPreview({
     <div className="mb-3 opacity-70">
       <div className="flex items-start gap-2">
         <span className="mt-1 flex min-w-12.5 shrink-0 justify-center">
-          <span className="size-2 animate-pulse rounded-full bg-info" />
+          <span className="size-2 animate-parley-pulse rounded-full bg-info" />
         </span>
         <div className="flex-1">
           <span className="mr-2 text-xs font-medium text-muted-foreground/80">
@@ -442,7 +441,7 @@ export const VirtualizedTranscriptView: React.FC<
               </>
             ) : (
               <>
-                <Heading level={2}>Welcome to meetily!</Heading>
+                <Heading level={2}>Welcome to Parley!</Heading>
                 <p className="mt-1 text-sm">
                   Start recording to see live transcription
                 </p>
