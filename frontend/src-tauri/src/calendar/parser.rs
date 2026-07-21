@@ -208,6 +208,24 @@ fn parse_iso_duration(raw: &str) -> Option<Duration> {
     Some(total * sign as i32)
 }
 
+/// Strip the ".ogcs" marker Outlook Google Calendar Sync appends to
+/// addresses it manages (e.g. "bob@example.com.ogcs" — OGCS's "don't send
+/// invites through Google" tag, not part of the real address). Applied to
+/// every email-ish value we ingest so downstream consumers (attendee
+/// suggestions, voice-profile emails) never see the synthetic suffix.
+fn strip_ogcs_suffix(value: &str) -> &str {
+    let trimmed = value.trim();
+    let len = trimmed.len();
+    if len >= 5
+        && trimmed.is_char_boundary(len - 5)
+        && trimmed[len - 5..].eq_ignore_ascii_case(".ogcs")
+    {
+        &trimmed[..len - 5]
+    } else {
+        trimmed
+    }
+}
+
 fn parse_organizer(ev: &IcalEvent) -> (Option<String>, Option<String>) {
     let Some(p) = prop(ev, "ORGANIZER") else {
         return (None, None);
@@ -216,12 +234,13 @@ fn parse_organizer(ev: &IcalEvent) -> (Option<String>, Option<String>) {
         .value
         .as_deref()
         .and_then(|v| v.strip_prefix("mailto:").or(Some(v)))
-        .map(|s| s.trim().to_string());
+        .map(|s| strip_ogcs_suffix(s).to_string());
     let name = p
         .params
         .as_ref()
         .and_then(|ps| ps.iter().find(|(k, _)| k.eq_ignore_ascii_case("CN")))
-        .and_then(|(_, v)| v.first().cloned());
+        .and_then(|(_, v)| v.first().cloned())
+        .map(|n| strip_ogcs_suffix(&n).to_string());
     (name, email)
 }
 
@@ -234,7 +253,7 @@ fn parse_attendees(ev: &IcalEvent) -> Vec<Attendee> {
                 .value
                 .as_deref()
                 .and_then(|v| v.strip_prefix("mailto:").or(Some(v)))
-                .map(|s| s.trim().to_string());
+                .map(|s| strip_ogcs_suffix(s).to_string());
             let mut name = None;
             let mut role = None;
             let mut status = None;
@@ -242,7 +261,9 @@ fn parse_attendees(ev: &IcalEvent) -> Vec<Attendee> {
                 for (k, vs) in ps {
                     let v = vs.first().cloned();
                     match k.to_ascii_uppercase().as_str() {
-                        "CN" => name = v,
+                        // CN is stripped too: when the calendar has no display
+                        // name, OGCS-synced feeds put the tagged address there.
+                        "CN" => name = v.map(|n| strip_ogcs_suffix(&n).to_string()),
                         "ROLE" => role = v,
                         "PARTSTAT" => status = v,
                         _ => {}
@@ -387,6 +408,49 @@ END:VCALENDAR\r\n";
         assert_eq!(e.attendees.len(), 2);
         assert!(!e.is_all_day);
         assert_eq!(e.rrule_block, None);
+    }
+
+    /// OGCS (Outlook Google Calendar Sync) tags the addresses it manages
+    /// with a trailing ".ogcs"; the parser must hand back real addresses.
+    #[test]
+    fn strips_ogcs_suffix_from_organizer_and_attendees() {
+        let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:ogcs-1@test\r\n\
+DTSTAMP:20260506T120000Z\r\n\
+DTSTART:20260506T143000Z\r\n\
+DTEND:20260506T153000Z\r\n\
+SUMMARY:Synced Meeting\r\n\
+ORGANIZER;CN=Alice Example:mailto:alice@example.com.OGCS\r\n\
+ATTENDEE;CN=bob@example.com.ogcs;ROLE=REQ-PARTICIPANT:mailto:bob@example.com.ogcs\r\n\
+ATTENDEE;CN=Carol:mailto:carol@example.com\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+        let events = parse_ics(ics).unwrap();
+        let e = &events[0];
+        assert_eq!(e.organizer_email.as_deref(), Some("alice@example.com"));
+        // Suffix stripped from the email AND from a CN that's just the
+        // tagged address; an untagged attendee passes through untouched.
+        assert_eq!(e.attendees[0].email.as_deref(), Some("bob@example.com"));
+        assert_eq!(e.attendees[0].name.as_deref(), Some("bob@example.com"));
+        assert_eq!(e.attendees[1].email.as_deref(), Some("carol@example.com"));
+        assert_eq!(e.attendees[1].name.as_deref(), Some("Carol"));
+    }
+
+    #[test]
+    fn strip_ogcs_suffix_is_case_insensitive_and_conservative() {
+        assert_eq!(strip_ogcs_suffix("bob@example.com.ogcs"), "bob@example.com");
+        assert_eq!(strip_ogcs_suffix("bob@example.com.OGCS"), "bob@example.com");
+        assert_eq!(strip_ogcs_suffix(" bob@example.com.ogcs "), "bob@example.com");
+        // Untagged values are only trimmed.
+        assert_eq!(strip_ogcs_suffix("bob@example.com"), "bob@example.com");
+        assert_eq!(strip_ogcs_suffix("Alice Example"), "Alice Example");
+        // Degenerate inputs don't panic or over-strip.
+        assert_eq!(strip_ogcs_suffix(".ogcs"), "");
+        assert_eq!(strip_ogcs_suffix("ogcs"), "ogcs");
+        assert_eq!(strip_ogcs_suffix(""), "");
     }
 
     #[test]
