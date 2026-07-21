@@ -11,38 +11,9 @@ use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
-use serde::{Deserialize, Serialize};
-
-// ============================================================================
-// Protocol Messages (JSON over stdin/stdout)
-// ============================================================================
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum Request {
-    Generate {
-        prompt: String,
-        max_tokens: Option<i32>,
-        context_size: Option<u32>,
-        model_path: Option<String>,
-        // Sampling parameters
-        temperature: Option<f32>,
-        top_k: Option<i32>,
-        top_p: Option<f32>,
-        stop_tokens: Option<Vec<String>>,
-    },
-    Ping,
-    Shutdown,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum Response {
-    Response { text: String, error: Option<String> },
-    Pong,
-    Goodbye,
-    Error { message: String },
-}
+// Protocol messages (JSON over stdin/stdout) are shared with the Tauri app
+// via the llama-protocol crate so the two ends can't drift apart.
+use llama_protocol::{Request, Response};
 
 // ============================================================================
 // VRAM Detection and GPU Layer Calculation
@@ -307,6 +278,14 @@ impl ModelState {
         // output's tail instead of rescanning the whole string every token.
         let max_stop_len = stop_tokens.iter().map(|s| s.len()).max().unwrap_or(0);
 
+        // Streaming: emit `chunk` lines as text accumulates, batched to
+        // STREAM_BATCH_BYTES so the pipe isn't hit once per token. The last
+        // `max_stop_len` bytes are always held back — they might turn out to
+        // be the start of a stop token, which must never reach the client.
+        // The terminal `response` line carries the full final text either way.
+        const STREAM_BATCH_BYTES: usize = 64;
+        let mut streamed_len = 0usize;
+
         loop {
             // Check if we've generated enough tokens
             if (n_cur - n_prompt_tokens) >= max_tokens {
@@ -369,6 +348,18 @@ impl ModelState {
             }
             if should_stop {
                 break;
+            }
+
+            // Stream the newly safe (can't-be-a-stop-token) prefix.
+            let mut safe_len = output.len().saturating_sub(max_stop_len);
+            while safe_len > 0 && !output.is_char_boundary(safe_len) {
+                safe_len -= 1;
+            }
+            if safe_len > streamed_len && safe_len - streamed_len >= STREAM_BATCH_BYTES {
+                send_response(&Response::Chunk {
+                    text: output[streamed_len..safe_len].to_string(),
+                })?;
+                streamed_len = safe_len;
             }
 
             batch.clear();

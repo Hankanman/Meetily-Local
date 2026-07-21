@@ -1,4 +1,4 @@
-use crate::summary::llm_client::{generate_summary, LlmConfig};
+use crate::summary::llm_client::{generate_summary, LlmConfig, StreamSink};
 use crate::summary::templates;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -411,6 +411,9 @@ pub struct SummaryOutput {
 /// * `template_id` - Template identifier (e.g., "daily_standup")
 /// * `token_threshold` - Token limit for single-pass processing
 /// * `cancellation_token` - Optional cancellation token to stop processing
+/// * `on_delta` - Optional sink receiving the FINAL report's streamed text
+///   (map/reduce intermediates are never streamed — they aren't the summary
+///   the user will see)
 pub async fn generate_meeting_summary(
     config: &LlmConfig,
     text: &str,
@@ -418,6 +421,7 @@ pub async fn generate_meeting_summary(
     template_id: &str,
     token_threshold: usize,
     cancellation_token: Option<&CancellationToken>,
+    on_delta: Option<StreamSink<'_>>,
 ) -> Result<SummaryOutput, String> {
     // Check cancellation at the start
     if let Some(token) = cancellation_token {
@@ -483,6 +487,7 @@ pub async fn generate_meeting_summary(
                 system_prompt_chunk,
                 &user_prompt_chunk,
                 cancellation_token,
+                None,
             )
             .await
             {
@@ -580,6 +585,7 @@ pub async fn generate_meeting_summary(
         &final_system_prompt,
         &final_user_prompt,
         cancellation_token,
+        on_delta,
     )
     .await?;
 
@@ -680,7 +686,8 @@ async fn reduce_summaries(
             let joined = batch.join(SEPARATOR);
             let user_prompt = USER_TEMPLATE.replace("{}", &joined);
             let combined =
-                generate_summary(config, SYSTEM_PROMPT, &user_prompt, cancellation_token).await?;
+                generate_summary(config, SYSTEM_PROMPT, &user_prompt, cancellation_token, None)
+                    .await?;
             next.push(combined);
         }
         summaries = next;

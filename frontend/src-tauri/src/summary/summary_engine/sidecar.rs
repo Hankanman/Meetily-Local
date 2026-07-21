@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
+use llama_protocol::{Request, Response};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{Mutex, RwLock};
@@ -350,8 +351,20 @@ impl SidecarManager {
         Ok(())
     }
 
-    /// Send a request to the sidecar and wait for response
-    pub async fn send_request(&self, request_json: String, timeout: Duration) -> Result<String> {
+    /// Send a request to the sidecar and wait for its terminal response.
+    ///
+    /// `Chunk` lines streamed before the terminal line are forwarded to
+    /// `on_chunk` (when provided) and never returned to the caller — the
+    /// terminal `Response` carries the complete final text. `timeout` bounds
+    /// the whole exchange, chunks included.
+    pub async fn send_request(
+        &self,
+        request: &Request,
+        timeout: Duration,
+        on_chunk: Option<&(dyn Fn(&str) + Send + Sync)>,
+    ) -> Result<Response> {
+        let request_json = serde_json::to_string(request)?;
+
         // Track active request
         let _guard = RequestGuard::new(self.active_request_count.clone());
 
@@ -379,20 +392,42 @@ impl SidecarManager {
             stdin.flush().await.context("Failed to flush stdin")?;
         }
 
-        // Read response from stdout with timeout
-        match tokio::time::timeout(timeout, self.read_response()).await {
-            Ok(Ok(response)) => {
-                self.update_activity().await;
-                Ok(response)
-            }
-            Ok(Err(e)) => Err(e),
-            Err(_) => {
-                // Timeout reached - shutdown sidecar to stop generation
-                log::error!("Request timeout after {:?}, shutting down sidecar", timeout);
-                if let Err(shutdown_err) = self.shutdown().await {
-                    log::error!("Failed to shutdown sidecar after timeout: {}", shutdown_err);
+        // Read lines until the terminal response, all within one deadline.
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let line = match tokio::time::timeout_at(deadline, self.read_response()).await {
+                Ok(Ok(line)) => line,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    // Timeout reached - shutdown sidecar to stop generation
+                    log::error!("Request timeout after {:?}, shutting down sidecar", timeout);
+                    if let Err(shutdown_err) = self.shutdown().await {
+                        log::error!(
+                            "Failed to shutdown sidecar after timeout: {}",
+                            shutdown_err
+                        );
+                    }
+                    return Err(anyhow!("Request timed out after {:?}", timeout));
                 }
-                Err(anyhow!("Request timed out after {:?}", timeout))
+            };
+
+            match serde_json::from_str::<Response>(&line) {
+                Ok(Response::Chunk { text }) => {
+                    if let Some(callback) = on_chunk {
+                        callback(&text);
+                    }
+                }
+                Ok(terminal) => {
+                    self.update_activity().await;
+                    return Ok(terminal);
+                }
+                Err(e) => {
+                    return Err(anyhow!(
+                        "Unparseable sidecar response: {} ({})",
+                        line,
+                        e
+                    ))
+                }
             }
         }
     }
@@ -435,7 +470,7 @@ impl SidecarManager {
             }
         };
 
-        let request = serde_json::json!({"type": "ping"}).to_string();
+        let request = serde_json::to_string(&Request::Ping)?;
         let timeout = Duration::from_secs(5);
 
         // Note: We don't use send_request here to avoid incrementing active_request_count
@@ -456,11 +491,9 @@ impl SidecarManager {
         // Read response
         let response = tokio::time::timeout(timeout, self.read_response()).await??;
 
-        let resp: serde_json::Value = serde_json::from_str(&response)?;
-        if resp.get("type").and_then(|t| t.as_str()) == Some("pong") {
-            Ok(())
-        } else {
-            Err(anyhow!("Unexpected ping response: {}", response))
+        match serde_json::from_str::<Response>(&response)? {
+            Response::Pong => Ok(()),
+            other => Err(anyhow!("Unexpected ping response: {:?}", other)),
         }
     }
 
@@ -506,8 +539,7 @@ impl SidecarManager {
 
         // Send shutdown command
         if self.is_healthy() {
-            let request = serde_json::json!({"type": "shutdown"}).to_string();
-            let _timeout = Duration::from_secs(5);
+            let request = serde_json::to_string(&Request::Shutdown)?;
 
             // Try to send shutdown command, but ignore errors
             // We don't use send_request to avoid incrementing counter

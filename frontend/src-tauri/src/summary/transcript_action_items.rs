@@ -155,7 +155,7 @@ pub fn spawn_transcript_extraction<R: Runtime>(
 /// post-meeting pass and the live driver.
 pub(crate) async fn extract_window(config: &LlmConfig, window: &[Segment]) -> Vec<NewActionItem> {
     let user_prompt = format!("Transcript:\n\n{}", render_window(window));
-    let response = match generate_summary(config, SYSTEM_PROMPT, &user_prompt, None).await {
+    let response = match generate_summary(config, SYSTEM_PROMPT, &user_prompt, None, None).await {
         Ok(r) => r,
         Err(e) => {
             warn!("Action-item extraction window failed: {e}");

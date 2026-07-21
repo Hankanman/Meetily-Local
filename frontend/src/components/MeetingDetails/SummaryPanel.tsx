@@ -17,7 +17,8 @@ import { ExportMenu } from "./ExportMenu";
 import { Heading } from "@/components/ui/typography";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { RefObject } from "react";
+import { useSummaryStream } from "@/hooks/meeting-details/useSummaryStream";
+import { RefObject, useEffect, useRef } from "react";
 
 interface SummaryPanelProps {
   meeting: {
@@ -116,6 +117,16 @@ export function SummaryPanel({
     summaryStatus === "processing" ||
     summaryStatus === "summarizing" ||
     summaryStatus === "regenerating";
+
+  // Live token stream of the in-flight generation (built-in AI streams;
+  // other providers leave this empty and the spinner shows instead).
+  const streamingText = useSummaryStream(meeting.id, isSummaryLoading);
+  const streamScrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // Keep the newest streamed text in view as it grows.
+    const el = streamScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [streamingText]);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
@@ -229,16 +240,39 @@ export function SummaryPanel({
               onOpenModelSettings={onOpenModelSettings}
             />
           </div>
-          {/* Loading spinner */}
-          <div className="flex flex-1 items-center justify-center">
-            <div className="text-center">
-              <div className="
-                mb-4 inline-block size-12 animate-spin rounded-full border-y-2
-                border-info
-              "></div>
-              <p className="text-muted-foreground">Generating AI Summary...</p>
+          {/* Live preview once tokens start streaming; spinner until then */}
+          {streamingText ? (
+            <div
+              ref={streamScrollRef}
+              className="min-h-0 flex-1 overflow-y-auto px-6 py-4"
+            >
+              <div className="mx-auto max-w-3xl">
+                <div className="
+                  mb-3 flex items-center gap-2 text-sm text-muted-foreground
+                ">
+                  <span className="size-2 animate-pulse rounded-full bg-info" />
+                  Generating AI Summary…
+                </div>
+                <pre className="
+                  font-sans text-sm whitespace-pre-wrap text-foreground
+                ">
+                  {streamingText}
+                </pre>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex flex-1 items-center justify-center">
+              <div className="text-center">
+                <div className="
+                  mb-4 inline-block size-12 animate-spin rounded-full border-y-2
+                  border-info
+                "></div>
+                <p className="text-muted-foreground">
+                  Generating AI Summary...
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       ) : !aiSummary ? (
         <div className="flex h-full flex-col">

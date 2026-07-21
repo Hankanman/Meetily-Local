@@ -273,6 +273,14 @@ struct AttemptError {
     retryable: bool,
 }
 
+/// Callback receiving incremental output text during generation.
+///
+/// Only providers that stream honor it — currently BuiltInAI, whose sidecar
+/// emits token chunks as it generates. HTTP providers ignore the sink and
+/// deliver everything at once; callers must treat the returned String as
+/// authoritative either way.
+pub type StreamSink<'a> = &'a (dyn Fn(&str) + Send + Sync);
+
 /// Generates one completion using the configured provider, retrying
 /// transient failures (connection errors, 429, 5xx) up to [`MAX_ATTEMPTS`]
 /// with backoff. Timeouts and other 4xx errors fail immediately.
@@ -284,6 +292,7 @@ pub async fn generate_summary(
     system_prompt: &str,
     user_prompt: &str,
     cancellation_token: Option<&CancellationToken>,
+    on_delta: Option<StreamSink<'_>>,
 ) -> Result<String, String> {
     if let Some(token) = cancellation_token {
         if token.is_cancelled() {
@@ -305,6 +314,7 @@ pub async fn generate_summary(
             system_prompt,
             user_prompt,
             cancellation_token,
+            on_delta,
         )
         .await
         .map_err(|e| e.to_string());

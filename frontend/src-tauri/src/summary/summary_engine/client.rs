@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
-use serde::{Deserialize, Serialize};
+use anyhow::{anyhow, Result};
+use llama_protocol::{Request, Response};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -39,32 +39,8 @@ fn pick_context_size(prompt_tokens: usize, max_tokens: i32, model_max_ctx: u32) 
     ctx.min(model_max_ctx)
 }
 
-// ============================================================================
-// Request/Response Types
-// ============================================================================
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum Request {
-    Generate {
-        prompt: String,
-        max_tokens: Option<i32>,
-        context_size: Option<u32>,
-        model_path: Option<String>,
-        // Sampling parameters
-        temperature: Option<f32>,
-        top_k: Option<i32>,
-        top_p: Option<f32>,
-        stop_tokens: Option<Vec<String>>,
-    },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum Response {
-    Response { text: String, error: Option<String> },
-    Error { message: String },
-}
+// Request/Response types are shared with the sidecar via the llama-protocol
+// crate — see its docs for the wire format.
 
 // ============================================================================
 // Global Sidecar Manager
@@ -115,6 +91,8 @@ fn resolve_model_path(app_data_dir: &PathBuf, model_name: &str) -> Result<PathBu
 /// * `system_prompt` - System instructions for the model
 /// * `user_prompt` - User message/task
 /// * `cancellation_token` - Optional token for cancellation
+/// * `on_delta` - Optional callback receiving incremental output text as
+///   the sidecar streams it (the returned String stays authoritative)
 ///
 /// # Returns
 /// Generated text
@@ -124,6 +102,7 @@ pub async fn generate_with_builtin(
     system_prompt: &str,
     user_prompt: &str,
     cancellation_token: Option<&CancellationToken>,
+    on_delta: Option<&(dyn Fn(&str) + Send + Sync)>,
 ) -> Result<String> {
     // Check cancellation at start
     if let Some(token) = cancellation_token {
@@ -192,17 +171,15 @@ pub async fn generate_with_builtin(
         stop_tokens: Some(model_def.sampling.stop_tokens.clone()),
     };
 
-    let request_json = serde_json::to_string(&request)?;
-
     // Send request with timeout
     let timeout = Duration::from_secs(models::GENERATION_TIMEOUT_SECS);
 
     log::info!("Sending generation request to sidecar");
 
     // Race between send_request and cancellation token
-    let response_json = if let Some(token) = cancellation_token {
+    let response = if let Some(token) = cancellation_token {
         tokio::select! {
-            result = manager.send_request(request_json, timeout) => {
+            result = manager.send_request(&request, timeout, on_delta) => {
                 result?
             }
             _ = token.cancelled() => {
@@ -215,19 +192,15 @@ pub async fn generate_with_builtin(
             }
         }
     } else {
-        manager.send_request(request_json, timeout).await?
+        manager.send_request(&request, timeout, on_delta).await?
     };
 
-    // Check cancellation before parsing response
+    // Check cancellation before returning
     if let Some(token) = cancellation_token {
         if token.is_cancelled() {
             return Err(anyhow!("Generation cancelled"));
         }
     }
-
-    // Parse response
-    let response: Response = serde_json::from_str(&response_json)
-        .with_context(|| format!("Failed to parse response: {}", response_json))?;
 
     match response {
         Response::Response { text, error } => {
@@ -239,6 +212,10 @@ pub async fn generate_with_builtin(
             }
         }
         Response::Error { message } => Err(anyhow!("Sidecar error: {}", message)),
+        other => Err(anyhow!(
+            "Unexpected sidecar response to generate request: {:?}",
+            other
+        )),
     }
 }
 
@@ -291,58 +268,5 @@ pub async fn is_sidecar_healthy() -> bool {
     }
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_request_serialization() {
-        let request = Request::Generate {
-            prompt: "test prompt".to_string(),
-            max_tokens: Some(512),
-            context_size: Some(2048),
-            model_path: Some("/path/to/model.gguf".to_string()),
-            temperature: Some(1.0),
-            top_k: Some(64),
-            top_p: Some(0.95),
-            stop_tokens: Some(vec!["<end_of_turn>".to_string()]),
-        };
-
-        let json = serde_json::to_string(&request).unwrap();
-        assert!(json.contains("\"type\":\"generate\""));
-        assert!(json.contains("\"prompt\":\"test prompt\""));
-        assert!(json.contains("\"max_tokens\":512"));
-        assert!(json.contains("\"temperature\":1.0"));
-    }
-
-    #[test]
-    fn test_response_deserialization() {
-        let json = r#"{"type":"response","text":"generated text","error":null}"#;
-        let response: Response = serde_json::from_str(json).unwrap();
-
-        match response {
-            Response::Response { text, error } => {
-                assert_eq!(text, "generated text");
-                assert!(error.is_none());
-            }
-            _ => panic!("Wrong response type"),
-        }
-    }
-
-    #[test]
-    fn test_error_response_deserialization() {
-        let json = r#"{"type":"error","message":"something went wrong"}"#;
-        let response: Response = serde_json::from_str(json).unwrap();
-
-        match response {
-            Response::Error { message } => {
-                assert_eq!(message, "something went wrong");
-            }
-            _ => panic!("Wrong response type"),
-        }
-    }
-}
+// Wire-format serialization tests live in the llama-protocol crate,
+// alongside the shared types they exercise.

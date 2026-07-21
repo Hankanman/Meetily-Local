@@ -350,7 +350,7 @@ pub async fn extract_for_meeting<R: Runtime>(
         summary_markdown.trim()
     );
 
-    let response = generate_summary(&config, EXTRACTION_SYSTEM_PROMPT, &user_prompt, None)
+    let response = generate_summary(&config, EXTRACTION_SYSTEM_PROMPT, &user_prompt, None, None)
         .await
         .map_err(|e| format!("LLM call failed: {e}"))?;
 
