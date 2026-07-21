@@ -1,14 +1,13 @@
 // High-level client API for built-in AI summary generation
 // Provides simple interface for generating text using the sidecar
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::sync::{LazyLock, RwLock};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -74,10 +73,6 @@ enum Response {
 static SIDECAR_MANAGER: LazyLock<Arc<Mutex<Option<Arc<SidecarManager>>>>> =
     LazyLock::new(|| Arc::new(Mutex::new(None)));
 
-// Model path cache to avoid repeated filesystem I/O and model lookups
-static MODEL_PATH_CACHE: LazyLock<RwLock<HashMap<String, PathBuf>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
-
 /// Initialize the global sidecar manager
 pub async fn init_sidecar_manager(app_data_dir: PathBuf) -> Result<()> {
     let manager = SidecarManager::new(app_data_dir)?;
@@ -94,32 +89,10 @@ async fn get_sidecar_manager() -> Result<Arc<SidecarManager>> {
         .ok_or_else(|| anyhow!("Sidecar manager not initialized. Call init_sidecar_manager first."))
 }
 
-/// Get cached model path with read-through caching to avoid repeated filesystem I/O
-fn get_cached_model_path(app_data_dir: &PathBuf, model_name: &str) -> Result<PathBuf> {
-    // Try read lock first (fast path for cache hits)
-    {
-        let cache = MODEL_PATH_CACHE.read().unwrap();
-        if let Some(path) = cache.get(model_name) {
-            // Verify file still exists before returning cached path
-            if path.exists() {
-                return Ok(path.clone());
-            }
-        }
-    }
-
-    // Cache miss or file deleted - acquire write lock and update cache
-    let mut cache = MODEL_PATH_CACHE.write().unwrap();
-
-    // Double-check after acquiring write lock (another thread may have updated it)
-    if let Some(path) = cache.get(model_name) {
-        if path.exists() {
-            return Ok(path.clone());
-        }
-    }
-
-    // Resolve model path (involves model lookup + filesystem operations)
+/// Resolve a model name to its on-disk GGUF path, erroring if the file
+/// isn't downloaded yet.
+fn resolve_model_path(app_data_dir: &PathBuf, model_name: &str) -> Result<PathBuf> {
     let model_path = models::get_model_path(app_data_dir, model_name)?;
-
     if !model_path.exists() {
         return Err(anyhow!(
             "Model file not found: {}. Please download the model '{}' first.",
@@ -127,9 +100,6 @@ fn get_cached_model_path(app_data_dir: &PathBuf, model_name: &str) -> Result<Pat
             model_name
         ));
     }
-
-    // Cache the validated path
-    cache.insert(model_name.to_string(), model_path.clone());
     Ok(model_path)
 }
 
@@ -169,8 +139,7 @@ pub async fn generate_with_builtin(
     let model_def = models::get_model_by_name(model_name)
         .ok_or_else(|| anyhow!("Unknown model: {}", model_name))?;
 
-    // Resolve model path with caching (avoids repeated filesystem I/O)
-    let model_path = get_cached_model_path(app_data_dir, model_name)?;
+    let model_path = resolve_model_path(app_data_dir, model_name)?;
 
     // Apply model-specific chat template
     let formatted_prompt = models::format_prompt(&model_def.template, system_prompt, user_prompt)?;
@@ -186,7 +155,7 @@ pub async fn generate_with_builtin(
     };
 
     // Ensure sidecar is running with this model
-    manager.ensure_running(model_path.clone()).await?;
+    SidecarManager::ensure_running(&manager, model_path.clone()).await?;
 
     // Check cancellation after sidecar startup
     if let Some(token) = cancellation_token {

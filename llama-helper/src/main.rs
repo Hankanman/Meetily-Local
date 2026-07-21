@@ -2,8 +2,6 @@ use std::io::{self, BufRead, Write};
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::pin::pin;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -178,7 +176,6 @@ struct ModelState {
     model: Option<LlamaModel>,
     model_path: Option<PathBuf>,
     context_size: u32,
-    last_activity: Arc<AtomicU64>,
 }
 
 impl ModelState {
@@ -189,24 +186,7 @@ impl ModelState {
             model: None,
             model_path: None,
             context_size: 2048,
-            last_activity: Arc::new(AtomicU64::new(Self::current_timestamp())),
         })
-    }
-
-    fn current_timestamp() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    }
-
-    fn update_activity(&self) {
-        self.last_activity
-            .store(Self::current_timestamp(), Ordering::SeqCst);
-    }
-
-    fn seconds_since_activity(&self) -> u64 {
-        Self::current_timestamp() - self.last_activity.load(Ordering::SeqCst)
     }
 
     fn load_model_if_needed(&mut self, model_path: PathBuf, context_size: u32) -> Result<()> {
@@ -214,7 +194,6 @@ impl ModelState {
         if let Some(ref loaded_path) = self.model_path {
             if loaded_path == &model_path && self.context_size == context_size {
                 eprintln!("✓ Model already loaded");
-                self.update_activity();
                 return Ok(());
             }
         }
@@ -234,7 +213,6 @@ impl ModelState {
         self.model = Some(model);
         self.model_path = Some(model_path);
         self.context_size = context_size;
-        self.update_activity();
 
         eprintln!("✅ Model loaded successfully");
         Ok(())
@@ -301,6 +279,34 @@ impl ModelState {
 
         eprintln!("🔄 Starting generation (max_tokens: {})", max_tokens);
 
+        use llama_cpp_2::sampling::LlamaSampler;
+
+        // Build the sampler chain ONCE for the whole generation — the chain
+        // (including the dist sampler's RNG) is stateful and designed to be
+        // reused across tokens; rebuilding it per token wastes work.
+        let sampler = if temperature <= 0.0 {
+            // Greedy sampling for temp <= 0
+            LlamaSampler::chain_simple([LlamaSampler::greedy()])
+        } else {
+            // Random sampling with temperature/top_k/top_p
+            let seed = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u32;
+
+            LlamaSampler::chain_simple([
+                LlamaSampler::top_k(top_k),
+                LlamaSampler::top_p(top_p, 1),
+                LlamaSampler::temp(temperature),
+                LlamaSampler::dist(seed),
+            ])
+        };
+        let mut sampler = pin!(sampler);
+
+        // Longest stop token, for bounding the per-token stop scan to the
+        // output's tail instead of rescanning the whole string every token.
+        let max_stop_len = stop_tokens.iter().map(|s| s.len()).max().unwrap_or(0);
+
         loop {
             // Check if we've generated enough tokens
             if (n_cur - n_prompt_tokens) >= max_tokens {
@@ -308,27 +314,6 @@ impl ModelState {
                 break;
             }
 
-            use llama_cpp_2::sampling::LlamaSampler;
-
-            let sampler = if temperature <= 0.0 {
-                // Greedy sampling for temp <= 0
-                LlamaSampler::chain_simple([LlamaSampler::greedy()])
-            } else {
-                // Random sampling with temperature/top_k/top_p
-                let seed = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u32;
-
-                LlamaSampler::chain_simple([
-                    LlamaSampler::top_k(top_k),
-                    LlamaSampler::top_p(top_p, 1),
-                    LlamaSampler::temp(temperature),
-                    LlamaSampler::dist(seed),
-                ])
-            };
-
-            let mut sampler = pin!(sampler);
             let token = sampler.as_mut().sample(&ctx, batch.n_tokens() - 1);
             sampler.as_mut().accept(token);
 
@@ -357,19 +342,29 @@ impl ModelState {
             let _ = decoder.decode_to_string(&output_bytes, &mut token_text, false);
             output.push_str(&token_text);
 
-            // Check for model-specific stop tokens
+            // Check for model-specific stop tokens. Only the tail can contain
+            // a *new* occurrence (earlier text was already scanned), so look
+            // back just far enough to catch one spanning the boundary of the
+            // freshly appended piece.
             let mut should_stop = false;
-            for stop_token in &stop_tokens {
-                if output.contains(stop_token) {
-                    eprintln!(
-                        "✓ Stop token '{}' detected (generated {} chars)",
-                        stop_token,
-                        output.len()
-                    );
-                    // Remove the stop token from output
-                    output = output.replace(stop_token, "").trim_end().to_string();
-                    should_stop = true;
-                    break;
+            if max_stop_len > 0 {
+                let mut scan_from = output.len().saturating_sub(token_text.len() + max_stop_len);
+                while scan_from > 0 && !output.is_char_boundary(scan_from) {
+                    scan_from -= 1;
+                }
+                for stop_token in &stop_tokens {
+                    if let Some(pos) = output[scan_from..].find(stop_token.as_str()) {
+                        eprintln!(
+                            "✓ Stop token '{}' detected (generated {} chars)",
+                            stop_token,
+                            output.len()
+                        );
+                        // Cut at the stop token — anything after it is noise.
+                        output.truncate(scan_from + pos);
+                        output.truncate(output.trim_end().len());
+                        should_stop = true;
+                        break;
+                    }
                 }
             }
             if should_stop {
@@ -404,7 +399,6 @@ impl ModelState {
         eprintln!("   • Total time: {:.2}s", total_time.as_secs_f64());
         eprintln!("   • Speed: {:.2} tokens/sec", tokens_per_sec);
 
-        self.update_activity();
         Ok(output)
     }
 }
@@ -431,16 +425,12 @@ fn main() -> Result<()> {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 
-    // Get idle timeout from environment variable (default 5 minutes)
-    let idle_timeout_secs = std::env::var("LLAMA_IDLE_TIMEOUT")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(300); // 5 minutes default
-
-    eprintln!(
-        "🦙 llama-helper starting (idle timeout: {}s)",
-        idle_timeout_secs
-    );
+    // Idle shutdown is the PARENT's job (see SidecarManager's idle loop):
+    // this process spends its life blocked in read_line below, so a timer
+    // here could only ever be checked between requests — and an unsolicited
+    // "Goodbye" line would desync the parent's next response read. We simply
+    // serve until stdin closes or a shutdown request arrives.
+    eprintln!("🦙 llama-helper starting");
 
     let mut state = ModelState::new()?;
 
@@ -449,13 +439,6 @@ fn main() -> Result<()> {
     let mut buffer = String::new();
 
     loop {
-        // Check idle timeout
-        if state.seconds_since_activity() > idle_timeout_secs {
-            eprintln!("💤 Idle timeout reached, shutting down");
-            send_response(&Response::Goodbye)?;
-            break;
-        }
-
         // Read line from stdin
         buffer.clear();
         match stdin_lock.read_line(&mut buffer) {
@@ -524,7 +507,6 @@ fn main() -> Result<()> {
                         }
                     }
                     Ok(Request::Ping) => {
-                        state.update_activity();
                         send_response(&Response::Pong)?;
                     }
                     Ok(Request::Shutdown) => {

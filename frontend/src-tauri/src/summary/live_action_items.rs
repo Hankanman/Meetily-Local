@@ -20,7 +20,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tracing::{info, warn};
 
 use crate::database::repositories::action_item::normalize_text_key;
-use crate::summary::action_extraction::LlmCredentials;
+use crate::summary::llm_client::LlmConfig;
 use crate::summary::transcript_action_items::{extract_window, Segment};
 
 /// How often to run a live extraction pass. A compromise between responsiveness
@@ -55,15 +55,15 @@ pub fn start<R: Runtime>(app: AppHandle<R>, pool: SqlitePool, provider_name: Str
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
 
     tauri::async_runtime::spawn(async move {
-        let creds = match LlmCredentials::resolve(&pool, &provider_name).await {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("Live action items: cannot resolve model ({e}); not running");
-                return;
-            }
-        };
         let app_data_dir = app.path().app_data_dir().ok();
-        let client = reqwest::Client::new();
+        let config =
+            match LlmConfig::resolve(&pool, &provider_name, &model_name, app_data_dir).await {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("Live action items: cannot resolve model ({e}); not running");
+                    return;
+                }
+            };
 
         info!("Live action-item extraction started (generation {generation})");
         let mut interval = tokio::time::interval(INTERVAL);
@@ -96,19 +96,19 @@ pub fn start<R: Runtime>(app: AppHandle<R>, pool: SqlitePool, provider_name: Str
             }
 
             // The recent slice: everything past the watermark, with look-back.
+            // Filtered from the snapshot already taken above — a second
+            // snapshot could disagree with the `latest` just computed.
             let cutoff = (watermark - OVERLAP_SECS).max(0.0);
-            let window: Vec<Segment> = crate::audio::recording_commands::snapshot_segments()
-                .iter()
-                .map(Segment::from_common)
-                .filter(|s| !s.is_empty() && s.start_secs().unwrap_or(0.0) >= cutoff)
+            let window: Vec<Segment> = segments
+                .into_iter()
+                .filter(|s| s.start_secs().unwrap_or(0.0) >= cutoff)
                 .collect();
             if window.is_empty() {
                 watermark = latest;
                 continue;
             }
 
-            let items = extract_window(&client, &creds, &model_name, app_data_dir.as_ref(), &window)
-                .await;
+            let items = extract_window(&config, &window).await;
             watermark = latest;
 
             // Superseded while we were awaiting the model? Drop the result.
