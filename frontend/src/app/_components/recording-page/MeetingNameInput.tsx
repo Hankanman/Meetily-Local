@@ -47,7 +47,7 @@ export function MeetingNameInput() {
         autoFocus
         placeholder="Meeting name"
         className="
-          w-full max-w-sm border-b-2 border-info bg-transparent px-2 py-1
+          w-full max-w-sm border-b-2 border-brand bg-transparent px-2 py-1
           text-center text-xl font-medium text-foreground
           focus:outline-none
         "

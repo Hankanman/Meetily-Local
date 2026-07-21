@@ -110,7 +110,7 @@ export function SettingsSidebar({
                   group relative flex w-full items-center gap-2 rounded-md
                   px-2 py-1.5 text-left text-sm
                   ${isActive
-                    ? "bg-info/10 font-medium text-info"
+                    ? "bg-brand-muted font-medium text-brand-strong"
                     : "text-foreground hover:bg-muted"}
                 `}
               >
@@ -119,12 +119,12 @@ export function SettingsSidebar({
                 {isActive && (
                   <span className="
                     absolute inset-y-1.5  left-0 w-0.5 rounded-r-full
-                    bg-info
+                    bg-brand
                   " />
                 )}
                 <Icon className={`
                   size-4 shrink-0
-                  ${isActive ? "text-info" : "text-muted-foreground"}
+                  ${isActive ? "text-brand-strong" : "text-muted-foreground"}
                 `} />
                 <span className="truncate">{c.label}</span>
               </button>

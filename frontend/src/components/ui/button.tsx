@@ -40,6 +40,12 @@ const buttonVariants = cva(
           text-primary underline-offset-4
           hover:underline
         `,
+        // Parley brand CTA — azure. Use for primary brand moments (e.g.
+        // "Generate note") where a coloured accent is wanted over ink `default`.
+        brand: `
+          bg-brand text-brand-foreground shadow-xs
+          hover:bg-brand/90 hover:shadow-brand
+        `,
         // Semantic action variants — use these instead of the legacy
         // green/blue/red names so the colors track the .dark theme flip.
         success: `

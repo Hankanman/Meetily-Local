@@ -41,9 +41,12 @@ export function TitleBar() {
     >
       <div
         data-tauri-drag-region
-        className="flex flex-1 items-center px-3 text-sm text-muted-foreground"
+        className="
+          flex flex-1 items-center px-3 font-display text-sm font-semibold
+          tracking-tight text-foreground
+        "
       >
-        Meetily
+        Parley
       </div>
       <div className="no-drag flex h-full">
         <TitleBarButton

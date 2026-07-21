@@ -453,7 +453,7 @@ export function DownloadProgressStep() {
   return (
     <OnboardingContainer
       title="Getting things ready"
-      description="You can start using Meetily after downloading the Transcription Engine."
+      description="You can start using Parley after downloading the Transcription Engine."
       step={3}
       totalSteps={3}
     >

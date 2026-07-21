@@ -14,11 +14,11 @@ export function About() {
       <div className="text-center">
         <div className="mb-3">
           <Image
-            src="icon_128x128.png"
-            alt="Meetily Logo"
+            src="/parley-mark.svg"
+            alt="Parley Logo"
             width={64}
             height={64}
-            className="mx-auto"
+            className="mx-auto rounded-2xl"
           />
         </div>
         <span className="text-sm text-muted-foreground"> v{currentVersion}</span>
@@ -29,7 +29,7 @@ export function About() {
 
       <div className="space-y-3">
         <h2 className="text-sm font-semibold text-foreground">
-          What makes Meetily different
+          What makes Parley different
         </h2>
         <div className="grid grid-cols-2 gap-2">
           <div className="

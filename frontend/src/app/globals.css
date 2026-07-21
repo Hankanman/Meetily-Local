@@ -67,6 +67,21 @@
     animation: fade-in-up 0.5s ease-out forwards;
 }
 
+/* Parley pulse — record dot, "Listening…" / "Recording" indicators. */
+@keyframes parley-pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.4;
+    }
+}
+
+.animate-parley-pulse {
+    animation: parley-pulse 1.4s var(--ease-standard, ease) infinite;
+}
+
 .delay-75 {
     animation-delay: 75ms;
 }
@@ -80,81 +95,143 @@
 }
 
 @layer base {
+    /* ========================================================================
+       Parley design system — warm-charcoal neutrals + an azure `--brand`
+       accent. HSL triplets are consumed via `hsl(var(--token))`. Structure
+       mirrors shadcn/ui; the palette is the Parley identity.
+       ======================================================================== */
     :root {
-        --background: 0 0% 100%;
-        --foreground: 0 0% 3.9%;
+        /* Surfaces & ink (warm charcoal on warm paper) */
+        --background: 40 24% 99%;
+        --foreground: 24 12% 12%;
         --card: 0 0% 100%;
-        --card-foreground: 0 0% 3.9%;
+        --card-foreground: 24 12% 12%;
         --popover: 0 0% 100%;
-        --popover-foreground: 0 0% 3.9%;
-        --primary: 0 0% 9%;
-        --primary-foreground: 0 0% 98%;
-        --secondary: 0 0% 96.1%;
-        --secondary-foreground: 0 0% 9%;
-        --muted: 0 0% 96.1%;
-        --muted-foreground: 0 0% 45.1%;
-        --accent: 0 0% 96.1%;
-        --accent-foreground: 0 0% 9%;
-        --destructive: 0 84.2% 60.2%;
-        --destructive-foreground: 0 0% 98%;
+        --popover-foreground: 24 12% 12%;
+
+        /* Primary = high-contrast ink (new-york). Deliberately NOT the brand hue. */
+        --primary: 24 14% 12%;
+        --primary-foreground: 40 30% 98%;
+        --secondary: 36 16% 95%;
+        --secondary-foreground: 24 14% 16%;
+        --muted: 36 16% 95.5%;
+        --muted-foreground: 28 7% 42%;
+        --accent: 36 18% 94%;
+        --accent-foreground: 24 14% 16%;
+
+        /* Brand — azure signal. Identity hook: logo, active nav, focus, links. */
+        --brand: 214 90% 48%;
+        --brand-foreground: 210 40% 98%;
+        --brand-strong: 214 88% 44%;
+        --brand-muted: 214 90% 48% / 0.12;
+        --brand-subtle: 214 92% 96%;
+
+        --destructive: 4 74% 51%;
+        --destructive-foreground: 0 0% 100%;
+        /* Live-recording indicator — distinct from `--destructive`. */
+        --record: 4 78% 55%;
         /* Semantic action / feedback colors. Use these (text-info, bg-success
            etc.) instead of raw blue / red / green / yellow palette classes
            which do not follow the .dark class flip and look pastel /
            illegible in dark mode. */
-        --info: 217 91% 60%;
+        --info: 190 82% 38%;
         --info-foreground: 0 0% 100%;
-        --info-muted: 217 91% 60% / 0.12;
-        --success: 142 71% 45%;
+        --info-muted: 190 82% 38% / 0.12;
+        --success: 150 58% 38%;
         --success-foreground: 0 0% 100%;
-        --success-muted: 142 71% 45% / 0.12;
+        --success-muted: 150 58% 38% / 0.12;
         --warning: 38 92% 50%;
-        --warning-foreground: 0 0% 100%;
-        --warning-muted: 38 92% 50% / 0.12;
-        --border: 0 0% 89.8%;
-        --input: 0 0% 89.8%;
-        --ring: 0 0% 3.9%;
+        --warning-foreground: 26 40% 10%;
+        --warning-muted: 38 92% 50% / 0.14;
+
+        --border: 34 14% 88%;
+        --input: 34 14% 86%;
+        --ring: 214 90% 48%;
         --radius: 0.5rem;
-        --chart-1: 12 76% 61%;
-        --chart-2: 173 58% 39%;
-        --chart-3: 197 37% 24%;
-        --chart-4: 43 74% 66%;
-        --chart-5: 27 87% 67%;
+
+        /* Data-viz — also used for stable per-speaker transcript colors. */
+        --chart-1: 214 90% 48%;
+        --chart-2: 150 52% 40%;
+        --chart-3: 268 52% 56%;
+        --chart-4: 350 70% 58%;
+        --chart-5: 268 48% 56%;
+
+        /* --- Scale tokens (radius / shadow / motion / layout / fonts) ---------
+           Shared across light + dark; defined once here. */
+        --radius-sm: calc(var(--radius) - 4px);   /* 4px  */
+        --radius-md: calc(var(--radius) - 2px);   /* 6px  */
+        --radius-lg: var(--radius);               /* 8px  */
+        --radius-xl: calc(var(--radius) + 4px);   /* 12px */
+        --radius-full: 9999px;
+
+        --shadow-xs: 0 1px 2px 0 hsl(24 12% 12% / 0.05);
+        --shadow-sm: 0 1px 2px 0 hsl(24 12% 12% / 0.06), 0 1px 3px 0 hsl(24 12% 12% / 0.08);
+        --shadow-md: 0 2px 6px -1px hsl(24 12% 12% / 0.10), 0 4px 12px -2px hsl(24 12% 12% / 0.08);
+        --shadow-lg: 0 8px 24px -4px hsl(24 12% 12% / 0.14), 0 4px 8px -4px hsl(24 12% 12% / 0.08);
+        --shadow-brand: 0 4px 16px -2px hsl(214 90% 48% / 0.35);
+
+        --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+        --ease-out: cubic-bezier(0, 0, 0.2, 1);
+        --duration-fast: 120ms;
+        --duration-base: 160ms;
+        --duration-slow: 240ms;
+
+        --sidebar-width: 256px;
+        --sidebar-collapsed: 56px;
+        --titlebar-height: 40px;
+
+        /* Font families — wired to the next/font variables set in layout.tsx.
+           Display = Space Grotesk, UI/body = Source Sans 3, Mono = JetBrains Mono. */
+        --font-display: var(--font-space-grotesk), "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
+        --font-sans: var(--font-source-sans-3), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
 
     .dark {
-        --background: 0 0% 3.9%;
-        --foreground: 0 0% 98%;
-        --card: 0 0% 3.9%;
-        --card-foreground: 0 0% 98%;
-        --popover: 0 0% 3.9%;
-        --popover-foreground: 0 0% 98%;
-        --primary: 0 0% 98%;
-        --primary-foreground: 0 0% 9%;
-        --secondary: 0 0% 14.9%;
-        --secondary-foreground: 0 0% 98%;
-        --muted: 0 0% 14.9%;
-        --muted-foreground: 0 0% 63.9%;
-        --accent: 0 0% 14.9%;
-        --accent-foreground: 0 0% 98%;
-        --destructive: 0 62.8% 30.6%;
-        --destructive-foreground: 0 0% 98%;
-        --info: 217 91% 60%;
+        --background: 26 10% 7%;
+        --foreground: 40 22% 95%;
+        --card: 26 9% 9.5%;
+        --card-foreground: 40 22% 95%;
+        --popover: 26 9% 10%;
+        --popover-foreground: 40 22% 95%;
+
+        --primary: 40 24% 96%;
+        --primary-foreground: 24 14% 11%;
+        --secondary: 28 7% 15%;
+        --secondary-foreground: 40 22% 95%;
+        --muted: 28 7% 14%;
+        --muted-foreground: 34 9% 63%;
+        --accent: 28 8% 17%;
+        --accent-foreground: 40 22% 95%;
+
+        --brand: 210 95% 60%;
+        --brand-foreground: 214 60% 10%;
+        --brand-strong: 210 92% 70%;
+        --brand-muted: 210 95% 60% / 0.18;
+        --brand-subtle: 214 42% 15%;
+
+        --destructive: 4 72% 52%;
+        --destructive-foreground: 0 0% 100%;
+        --record: 4 80% 60%;
+        --info: 190 78% 52%;
         --info-foreground: 0 0% 100%;
-        --info-muted: 217 91% 60% / 0.18;
-        --success: 142 71% 45%;
-        --success-foreground: 0 0% 100%;
-        --success-muted: 142 71% 45% / 0.18;
-        --warning: 38 92% 50%;
-        --warning-foreground: 0 0% 100%;
-        --warning-muted: 38 92% 50% / 0.18;
-        --border: 0 0% 14.9%;
-        --input: 0 0% 14.9%;
-        --ring: 0 0% 83.1%;
-        --chart-1: 220 70% 50%;
-        --chart-2: 160 60% 45%;
-        --chart-3: 30 80% 55%;
-        --chart-4: 280 65% 60%;
-        --chart-5: 340 75% 55%;
+        --info-muted: 190 78% 52% / 0.2;
+        --success: 150 56% 46%;
+        --success-foreground: 26 45% 9%;
+        --success-muted: 150 56% 46% / 0.2;
+        --warning: 38 94% 56%;
+        --warning-foreground: 26 45% 9%;
+        --warning-muted: 38 94% 56% / 0.2;
+
+        --border: 28 7% 18%;
+        --input: 28 7% 20%;
+        --ring: 210 95% 60%;
+
+        --chart-1: 210 95% 60%;
+        --chart-2: 150 52% 48%;
+        --chart-3: 268 60% 68%;
+        --chart-4: 350 74% 64%;
+        --chart-5: 268 56% 66%;
     }
 }
 
@@ -193,23 +270,55 @@
     }
 
     .custom-scrollbar::-webkit-scrollbar-thumb {
-        background: #d1d5db;
+        background: hsl(var(--border));
         border-radius: 3px;
     }
 
     .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-        background: #9ca3af;
+        background: hsl(var(--muted-foreground) / 0.6);
     }
 
     /* Firefox scrollbar */
     .custom-scrollbar {
         scrollbar-width: thin;
-        scrollbar-color: #d1d5db transparent;
+        scrollbar-color: hsl(var(--border)) transparent;
     }
 
     /* Let parent handle all scrolling — editor content flows naturally. */
     .ProseMirror {
         overflow: visible !important;
+    }
+
+    /* Parley base element defaults ------------------------------------------ */
+
+    /* Display headings default to Space Grotesk with tight tracking. */
+    h1, h2, h3 {
+        font-family: var(--font-display);
+        letter-spacing: -0.02em;
+    }
+
+    /* Links — brand azure, underline on hover. */
+    a {
+        color: hsl(var(--brand-strong));
+    }
+
+    a:hover {
+        text-decoration: underline;
+        text-underline-offset: 2px;
+    }
+
+    ::selection {
+        background: hsl(var(--brand) / 0.25);
+    }
+
+    /* Uppercase eyebrow / label utility (mono, wide tracking). */
+    .eyebrow {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: hsl(var(--muted-foreground));
     }
 }
 

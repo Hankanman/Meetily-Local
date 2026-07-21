@@ -31,7 +31,7 @@ const Info = React.forwardRef<HTMLButtonElement, InfoProps>(
                 `
             }
             `}
-            title="About Meetily"
+            title="About Parley"
           >
             <InfoIcon
               className={`
@@ -46,7 +46,7 @@ const Info = React.forwardRef<HTMLButtonElement, InfoProps>(
         </DialogTrigger>
         <DialogContent>
           <VisuallyHidden>
-            <DialogTitle>About Meetily</DialogTitle>
+            <DialogTitle>About Parley</DialogTitle>
           </VisuallyHidden>
           <About />
         </DialogContent>

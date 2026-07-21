@@ -1,0 +1,11 @@
+<svg width="760" height="200" viewBox="0 0 760 200" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Parley">
+  <rect x="8" y="8" width="184" height="184" rx="42" fill="#1877E6"></rect>
+  <g fill="#FFFFFF">
+    <rect x="40" y="78" width="16" height="44" rx="8"></rect>
+    <rect x="66" y="60" width="16" height="80" rx="8"></rect>
+    <rect x="92" y="46" width="16" height="108" rx="8"></rect>
+    <rect x="118" y="62" width="16" height="76" rx="8"></rect>
+    <rect x="144" y="74" width="16" height="52" rx="8"></rect>
+  </g>
+  <text x="228" y="132" font-family="'Space Grotesk','Source Sans 3',sans-serif" font-size="112" font-weight="700" letter-spacing="-3" fill="#211C18">Parley</text>
+</svg>

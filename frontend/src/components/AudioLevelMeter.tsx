@@ -29,12 +29,9 @@ export function AudioLevelMeter({
   const rmsPercent = Math.round(logRms * 100);
   const peakPercent = Math.round(logPeak * 100);
 
-  // Color coding based on level
-  const getLevelColor = (level: number) => {
-    if (level < 0.3) return "bg-success";
-    if (level < 0.7) return "bg-warning";
-    return "bg-destructive";
-  };
+  // Parley meters read brand-azure; clipping (near-max) flips to destructive
+  // so the "you're too hot" signal survives the retint.
+  const getLevelColor = (level: number) => (level >= 0.92 ? "bg-destructive" : "bg-brand");
 
   const rmsColor = getLevelColor(logRms);
   const peakColor = getLevelColor(logPeak);
@@ -70,7 +67,7 @@ export function AudioLevelMeter({
         className={`
           size-2 rounded-full
           ${
-          isActive ? "animate-pulse bg-success" : "bg-muted"
+          isActive ? "animate-parley-pulse bg-brand" : "bg-muted"
         }
         `}
         title={`${deviceName} - ${isActive ? "Active" : "Inactive"}`}
@@ -161,11 +158,7 @@ export function CompactAudioLevelMeter({
   const logRms = normalizedRms > 0 ? Math.log10(normalizedRms * 9 + 1) : 0;
   const rmsPercent = Math.round(logRms * 100);
 
-  const getLevelColor = (level: number) => {
-    if (level < 0.3) return "bg-success";
-    if (level < 0.7) return "bg-warning";
-    return "bg-destructive";
-  };
+  const getLevelColor = (level: number) => (level >= 0.92 ? "bg-destructive" : "bg-brand");
 
   return (
     <div className={`
@@ -177,7 +170,7 @@ export function CompactAudioLevelMeter({
         className={`
           size-1.5 rounded-full
           ${
-          isActive ? "bg-success" : "bg-muted"
+          isActive ? "bg-brand" : "bg-muted"
         }
         `}
       />
@@ -193,6 +186,54 @@ export function CompactAudioLevelMeter({
           style={{ width: `${rmsPercent}%` }}
         />
       </div>
+    </div>
+  );
+}
+
+interface SignalBarsProps {
+  rmsLevel: number;
+  isActive: boolean;
+  bars?: number;
+  height?: number;
+  className?: string;
+}
+
+/**
+ * Signal-bar meter (Parley recording status bar). Renders `bars` vertical
+ * bars that light up brand-azure in sequence with the (log-scaled) level.
+ * Inactive bars sit muted; the top bar flips destructive when clipping.
+ */
+export function SignalBars({
+  rmsLevel,
+  isActive,
+  bars = 5,
+  height = 18,
+  className = "",
+}: SignalBarsProps) {
+  const normalizedRms = Math.max(0, Math.min(1, rmsLevel));
+  const logRms = normalizedRms > 0 ? Math.log10(normalizedRms * 9 + 1) : 0;
+  const active = isActive ? Math.round(logRms * bars) : 0;
+
+  return (
+    <div
+      className={`flex items-end gap-0.5 ${className}`}
+      style={{ height }}
+      aria-hidden="true"
+    >
+      {Array.from({ length: bars }, (_, i) => {
+        const lit = i < active;
+        const clipping = lit && logRms >= 0.92 && i === bars - 1;
+        return (
+          <div
+            key={i}
+            className={`
+              w-1 rounded-full transition-[height,background-color] duration-150
+              ${clipping ? "bg-destructive" : lit ? "bg-brand" : "bg-muted-foreground/30"}
+            `}
+            style={{ height: `${((i + 1) / bars) * 100}%` }}
+          />
+        );
+      })}
     </div>
   );
 }

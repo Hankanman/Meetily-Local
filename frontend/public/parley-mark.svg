@@ -1,0 +1,10 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Parley mark">
+  <rect width="512" height="512" rx="116" fill="#1877E6"></rect>
+  <g fill="#FFFFFF">
+    <rect x="90" y="196" width="44" height="120" rx="22"></rect>
+    <rect x="162" y="146" width="44" height="220" rx="22"></rect>
+    <rect x="234" y="106" width="44" height="300" rx="22"></rect>
+    <rect x="306" y="156" width="44" height="200" rx="22"></rect>
+    <rect x="378" y="186" width="44" height="140" rx="22"></rect>
+  </g>
+</svg>

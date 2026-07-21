@@ -16,6 +16,7 @@ import { MeetingNotesPanel } from "./MeetingNotesPanel";
 import { ExportMenu } from "./ExportMenu";
 import { Heading } from "@/components/ui/typography";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { RefObject } from "react";
 
 interface SummaryPanelProps {
@@ -120,6 +121,23 @@ export function SummaryPanel({
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-background">
       {/* Title area */}
       <div className="border-b border-border p-4">
+        {/* Identity strip — reinforces Parley's "everything stays on this
+            machine" promise, with the meeting date. */}
+        <div className="mb-3 flex items-center gap-2">
+          <Badge variant="brand" dot>
+            Local
+          </Badge>
+          {meeting.created_at && (
+            <Badge variant="secondary">
+              {new Date(meeting.created_at).toLocaleDateString(undefined, {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+              })}
+            </Badge>
+          )}
+        </div>
+
         {/* <EditableTitle
           title={meetingTitle}
           isEditing={isEditingTitle}

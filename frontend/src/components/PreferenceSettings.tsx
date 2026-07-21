@@ -169,7 +169,7 @@ export function PreferenceSettings() {
           Data Storage Locations
         </Heading>
         <p className="mb-6 text-sm text-muted-foreground">
-          View and access where Meetily stores your data
+          View and access where Parley stores your data
         </p>
 
         <div className="space-y-4">

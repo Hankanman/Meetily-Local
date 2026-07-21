@@ -41,8 +41,8 @@ export function HeroStartButton({
         ${isDisabled
           ? "cursor-not-allowed bg-muted text-muted-foreground"
           : `
-            bg-destructive
-            hover:scale-105 hover:shadow-xl hover:ring-8 hover:ring-destructive/15
+            bg-record
+            hover:scale-105 hover:shadow-xl hover:ring-8 hover:ring-record/20
             active:scale-95
           `}
       `}

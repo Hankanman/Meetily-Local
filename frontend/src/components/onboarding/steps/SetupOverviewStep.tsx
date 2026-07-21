@@ -51,7 +51,7 @@ export function SetupOverviewStep() {
   return (
     <OnboardingContainer
       title="Setup Overview"
-      description="Meetily requires that you download the Transcription & Summarization AI models for the software to work."
+      description="Parley requires that you download the Transcription & Summarization AI models for the software to work."
       step={2}
       totalSteps={3}
     >

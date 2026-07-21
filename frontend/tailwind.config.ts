@@ -43,6 +43,19 @@ export default {
           DEFAULT: "hsl(var(--destructive))",
           foreground: "hsl(var(--destructive-foreground))",
         },
+        // Parley brand — azure accent. Identity hook for active nav, focus,
+        // links, and brand CTAs. `strong` is the readable text/link shade,
+        // `muted` a translucent surface tint, `subtle` a solid tinted surface.
+        brand: {
+          DEFAULT: "hsl(var(--brand))",
+          foreground: "hsl(var(--brand-foreground))",
+          strong: "hsl(var(--brand-strong))",
+          muted: "hsl(var(--brand-muted))",
+          subtle: "hsl(var(--brand-subtle))",
+        },
+        // Live-recording indicator — kept distinct from `destructive` so the
+        // record affordance and the "delete/stop" affordance can diverge.
+        record: "hsl(var(--record))",
         // Semantic action / feedback colors. Always use these instead of raw
         // blue-/red-/green-/yellow- palette classes — they follow the .dark
         // class flip via the underlying CSS variables.
@@ -64,6 +77,29 @@ export default {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
+      },
+      fontFamily: {
+        // Wired to the next/font CSS variables via the --font-* tokens in
+        // globals.css. `font-display` = Space Grotesk, `font-mono` = JetBrains
+        // Mono — neither resolved to the intended face before this entry existed.
+        sans: ["var(--font-sans)"],
+        display: ["var(--font-display)"],
+        mono: ["var(--font-mono)"],
+      },
+      boxShadow: {
+        // Soft, warm-neutral, low-elevation shadows (desktop app). Mapped to
+        // the --shadow-* tokens so `shadow-xs`/`shadow-brand` resolve correctly.
+        xs: "var(--shadow-xs)",
+        sm: "var(--shadow-sm)",
+        md: "var(--shadow-md)",
+        lg: "var(--shadow-lg)",
+        brand: "var(--shadow-brand)",
+      },
+      borderRadius: {
+        sm: "var(--radius-sm)",
+        md: "var(--radius-md)",
+        lg: "var(--radius-lg)",
+        xl: "var(--radius-xl)",
       },
       fontSize: {
         display: ["32px", { lineHeight: "1.2", fontWeight: "700" }],

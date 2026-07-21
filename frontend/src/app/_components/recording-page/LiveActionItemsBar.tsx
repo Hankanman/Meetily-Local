@@ -17,7 +17,7 @@ export function LiveActionItemsBar({ items }: { items: LiveActionItem[] }) {
     <div className="shrink-0 border-b border-border bg-muted/30 px-4 py-2">
       <div className="mx-auto w-full max-w-5xl">
         <div className="mb-1.5 flex items-center gap-2">
-          <span className="size-2 animate-pulse rounded-full bg-info" />
+          <span className="size-2 animate-parley-pulse rounded-full bg-info" />
           <span className="text-xs font-medium text-foreground">
             Live action items
           </span>

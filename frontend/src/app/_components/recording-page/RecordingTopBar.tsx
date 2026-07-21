@@ -8,7 +8,7 @@ import { appDataDir } from "@tauri-apps/api/path";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
 import { useAudioLevels } from "@/hooks/useAudioLevels";
-import { CompactAudioLevelMeter } from "@/components/AudioLevelMeter";
+import { SignalBars } from "@/components/AudioLevelMeter";
 import { Button } from "@/components/ui/button";
 
 interface RecordingTopBarProps {
@@ -137,7 +137,7 @@ export function RecordingTopBar({
             size-2.5 rounded-full
             ${isPaused
               ? "bg-warning"
-              : "animate-pulse bg-destructive"}
+              : "animate-parley-pulse bg-record"}
           `}
         />
         <span className="text-sm font-medium">
@@ -152,9 +152,8 @@ export function RecordingTopBar({
         {micLevel && (
           <div className="flex items-center gap-1.5">
             <span>Mic</span>
-            <CompactAudioLevelMeter
+            <SignalBars
               rmsLevel={micLevel.rms_level}
-              peakLevel={micLevel.peak_level}
               isActive={micLevel.is_active && !isPaused}
             />
           </div>
@@ -162,9 +161,8 @@ export function RecordingTopBar({
         {systemLevel && (
           <div className="flex items-center gap-1.5">
             <span>System</span>
-            <CompactAudioLevelMeter
+            <SignalBars
               rmsLevel={systemLevel.rms_level}
-              peakLevel={systemLevel.peak_level}
               isActive={systemLevel.is_active && !isPaused}
             />
           </div>

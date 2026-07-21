@@ -16,6 +16,7 @@ const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(
           <DialogTrigger asChild>
             <button
               ref={ref}
+              aria-label="About Parley"
               className="
                 mb-2 flex cursor-pointer items-center justify-start border-none
                 bg-transparent p-0 transition-opacity
@@ -23,30 +24,38 @@ const Logo = React.forwardRef<HTMLButtonElement, LogoProps>(
               "
             >
               <Image
-                src="/logo-collapsed.png"
-                alt="Logo"
-                width={40}
-                height={32}
+                src="/parley-mark.svg"
+                alt="Parley"
+                width={30}
+                height={30}
                 priority
-                style={{ height: "auto" }}
+                className="rounded-lg"
               />
             </button>
           </DialogTrigger>
         ) : (
           <DialogTrigger asChild>
-            <span className="
-              mb-2 block cursor-pointer items-center rounded-full border
-              border-background bg-info/10 text-center text-lg font-semibold
-              text-foreground transition-opacity
-              hover:opacity-80
-            ">
-              <span>Meetily</span>
-            </span>
+            <button
+              aria-label="About Parley"
+              className="
+                mb-2 flex cursor-pointer items-center bg-transparent p-0
+                transition-opacity
+                hover:opacity-80
+              "
+            >
+              <Image
+                src="/parley-logo-dark.svg"
+                alt="Parley"
+                width={99}
+                height={26}
+                priority
+              />
+            </button>
           </DialogTrigger>
         )}
         <DialogContent>
           <VisuallyHidden>
-            <DialogTitle>About Meetily</DialogTitle>
+            <DialogTitle>About Parley</DialogTitle>
           </VisuallyHidden>
           <About />
         </DialogContent>
