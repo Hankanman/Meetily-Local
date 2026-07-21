@@ -1,40 +1,50 @@
 use crate::database::repositories::{
-    meeting::MeetingsRepository, setting::SettingsRepository, summary::SummaryProcessesRepository,
+    meeting::MeetingsRepository, summary::SummaryProcessesRepository,
 };
-use crate::ollama::metadata::METADATA_CACHE;
-use crate::summary::llm_client::LLMProvider;
-use crate::summary::processor::{extract_meeting_name_from_markdown, generate_meeting_summary};
+use crate::summary::llm_client::LlmConfig;
+use crate::summary::processor::{
+    extract_meeting_name_from_markdown, generate_meeting_summary, strip_first_heading_line,
+};
 use once_cell::sync::Lazy;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Manager};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-// Global registry for cancellation tokens (thread-safe)
-static CANCELLATION_REGISTRY: Lazy<Arc<Mutex<HashMap<String, CancellationToken>>>> =
+/// Cancellation tokens for in-flight generations, keyed by meeting id. Each
+/// entry also carries the registration id it was created with, so a stale
+/// run's cleanup can never remove the token belonging to a newer run on the
+/// same meeting (start → start again → first cleanup used to strand the
+/// second run uncancellable).
+static CANCELLATION_REGISTRY: Lazy<Arc<Mutex<HashMap<String, (u64, CancellationToken)>>>> =
     Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+static REGISTRATION_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Summary service - handles all summary generation logic
 pub struct SummaryService;
 
 impl SummaryService {
-    /// Registers a new cancellation token for a meeting
-    fn register_cancellation_token(meeting_id: &str) -> CancellationToken {
+    /// Registers a new cancellation token for a meeting. Returns the token
+    /// and the registration id to pass back to [`Self::cleanup_cancellation_token`].
+    fn register_cancellation_token(meeting_id: &str) -> (u64, CancellationToken) {
         let token = CancellationToken::new();
+        let registration_id = REGISTRATION_COUNTER.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut registry) = CANCELLATION_REGISTRY.lock() {
-            registry.insert(meeting_id.to_string(), token.clone());
+            registry.insert(meeting_id.to_string(), (registration_id, token.clone()));
             info!("Registered cancellation token for meeting: {}", meeting_id);
         }
-        token
+        (registration_id, token)
     }
 
     /// Cancels the summary generation for a meeting
     pub fn cancel_summary(meeting_id: &str) -> bool {
         if let Ok(registry) = CANCELLATION_REGISTRY.lock() {
-            if let Some(token) = registry.get(meeting_id) {
+            if let Some((_, token)) = registry.get(meeting_id) {
                 info!("Cancelling summary generation for meeting: {}", meeting_id);
                 token.cancel();
                 return true;
@@ -47,10 +57,15 @@ impl SummaryService {
         false
     }
 
-    /// Cleans up the cancellation token after processing completes
-    fn cleanup_cancellation_token(meeting_id: &str) {
+    /// Cleans up the cancellation token after processing completes — but only
+    /// if the registered token still belongs to this run (see registry docs).
+    fn cleanup_cancellation_token(meeting_id: &str, registration_id: u64) {
         if let Ok(mut registry) = CANCELLATION_REGISTRY.lock() {
-            if registry.remove(meeting_id).is_some() {
+            if registry
+                .get(meeting_id)
+                .map_or(false, |(id, _)| *id == registration_id)
+            {
+                registry.remove(meeting_id);
                 info!("Cleaned up cancellation token for meeting: {}", meeting_id);
             }
         }
@@ -62,7 +77,7 @@ impl SummaryService {
     /// the main thread. It updates the database with progress and results.
     ///
     /// # Arguments
-    /// * `_app` - Tauri app handle (for future use)
+    /// * `app` - Tauri app handle
     /// * `pool` - SQLx connection pool
     /// * `meeting_id` - Unique identifier for the meeting
     /// * `text` - Full transcript text
@@ -71,7 +86,7 @@ impl SummaryService {
     /// * `custom_prompt` - Optional user-provided context
     /// * `template_id` - Template identifier (e.g., "daily_standup", "standard_meeting")
     pub async fn process_transcript_background<R: tauri::Runtime>(
-        _app: AppHandle<R>,
+        app: AppHandle<R>,
         pool: SqlitePool,
         meeting_id: String,
         text: String,
@@ -87,165 +102,30 @@ impl SummaryService {
         );
 
         // Register cancellation token for this meeting
-        let cancellation_token = Self::register_cancellation_token(&meeting_id);
+        let (registration_id, cancellation_token) =
+            Self::register_cancellation_token(&meeting_id);
 
-        // Parse provider
-        let provider = match LLMProvider::from_str(&model_provider) {
-            Ok(p) => p,
-            Err(e) => {
-                Self::update_process_failed(&pool, &meeting_id, &e).await;
-                return;
-            }
-        };
-
-        // Validate and setup api_key, Flexible for Ollama, BuiltInAI, and CustomOpenAI
-        let api_key = if provider == LLMProvider::Ollama
-            || provider == LLMProvider::BuiltInAI
-            || provider == LLMProvider::CustomOpenAI
-        {
-            // These providers don't require API keys from the standard database column
-            String::new()
-        } else {
-            match SettingsRepository::get_api_key(&pool, &model_provider).await {
-                Ok(Some(key)) if !key.is_empty() => key,
-                Ok(None) | Ok(Some(_)) => {
-                    let err_msg = format!("API key not found for {}", &model_provider);
-                    Self::update_process_failed(&pool, &meeting_id, &err_msg).await;
+        // Resolve provider, credentials and endpoints from settings — the
+        // same resolution every other LLM caller uses.
+        let app_data_dir = app.path().app_data_dir().ok();
+        let config =
+            match LlmConfig::resolve(&pool, &model_provider, &model_name, app_data_dir).await {
+                Ok(config) => config,
+                Err(e) => {
+                    Self::update_process_failed(&pool, &meeting_id, &e).await;
+                    Self::cleanup_cancellation_token(&meeting_id, registration_id);
                     return;
                 }
-                Err(e) => {
-                    let err_msg =
-                        format!("Failed to retrieve API key for {}: {}", &model_provider, e);
-                    Self::update_process_failed(&pool, &meeting_id, &err_msg).await;
-                    return;
-                }
-            }
-        };
+            };
 
-        // Get Ollama endpoint if provider is Ollama
-        let ollama_endpoint = if provider == LLMProvider::Ollama {
-            match SettingsRepository::get_model_config(&pool).await {
-                Ok(Some(config)) => config.ollama_endpoint,
-                Ok(None) => None,
-                Err(e) => {
-                    info!("Failed to retrieve Ollama endpoint: {}, using default", e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        let token_threshold = config.token_threshold().await;
 
-        // Get CustomOpenAI config if provider is CustomOpenAI
-        let (
-            custom_openai_endpoint,
-            custom_openai_api_key,
-            custom_openai_max_tokens,
-            custom_openai_temperature,
-            custom_openai_top_p,
-        ) = if provider == LLMProvider::CustomOpenAI {
-            match SettingsRepository::get_custom_openai_config(&pool).await {
-                Ok(Some(config)) => {
-                    info!("✓ Using custom OpenAI endpoint: {}", config.endpoint);
-                    (
-                        Some(config.endpoint),
-                        config.api_key,
-                        config.max_tokens.map(|t| t as u32),
-                        config.temperature,
-                        config.top_p,
-                    )
-                }
-                Ok(None) => {
-                    let err_msg = "Custom OpenAI provider selected but no configuration found";
-                    Self::update_process_failed(&pool, &meeting_id, err_msg).await;
-                    return;
-                }
-                Err(e) => {
-                    let err_msg = format!("Failed to retrieve custom OpenAI config: {}", e);
-                    Self::update_process_failed(&pool, &meeting_id, &err_msg).await;
-                    return;
-                }
-            }
-        } else {
-            (None, None, None, None, None)
-        };
-
-        // For CustomOpenAI, use its API key (if any) instead of the empty string
-        let final_api_key = if provider == LLMProvider::CustomOpenAI {
-            custom_openai_api_key.unwrap_or_default()
-        } else {
-            api_key
-        };
-
-        // Dynamically fetch context size based on provider and model
-        let token_threshold = if provider == LLMProvider::Ollama {
-            match METADATA_CACHE
-                .get_or_fetch(&model_name, ollama_endpoint.as_deref())
-                .await
-            {
-                Ok(metadata) => {
-                    // Reserve 300 tokens for prompt overhead
-                    let optimal = metadata.context_size.saturating_sub(300);
-                    info!(
-                        "✓ Using dynamic context for {}: {} tokens (chunk size: {})",
-                        model_name, metadata.context_size, optimal
-                    );
-                    optimal
-                }
-                Err(e) => {
-                    warn!(
-                        "Failed to fetch context for {}: {}. Using default 4000",
-                        model_name, e
-                    );
-                    4000 // Fallback to safe default
-                }
-            }
-        } else if provider == LLMProvider::BuiltInAI {
-            // Get model's context size from registry
-            use crate::summary::summary_engine::models;
-            let model = models::get_model_by_name(&model_name)
-                .ok_or_else(|| format!("Unknown model: {}", model_name));
-
-            match model {
-                Ok(model_def) => {
-                    // Reserve 300 tokens for prompt overhead
-                    let optimal = model_def.context_size.saturating_sub(300) as usize;
-                    info!(
-                        "✓ Using BuiltInAI context size: {} tokens (chunk size: {})",
-                        model_def.context_size, optimal
-                    );
-                    optimal
-                }
-                Err(e) => {
-                    warn!("{}, using default 2048", e);
-                    1748 // 2048 - 300 for overhead
-                }
-            }
-        } else {
-            // Cloud providers (OpenAI, Claude, Groq, CustomOpenAI) handle large contexts automatically
-            100000 // Effectively unlimited for single-pass processing
-        };
-
-        // Get app data directory for BuiltInAI provider
-        let app_data_dir = _app.path().app_data_dir().ok();
-
-        // Generate summary
-        let client = reqwest::Client::new();
         let result = generate_meeting_summary(
-            &client,
-            &provider,
-            &model_name,
-            &final_api_key,
+            &config,
             &text,
             &custom_prompt,
             &template_id,
             token_threshold,
-            ollama_endpoint.as_deref(),
-            custom_openai_endpoint.as_deref(),
-            custom_openai_max_tokens,
-            custom_openai_temperature,
-            custom_openai_top_p,
-            app_data_dir.as_ref(),
             Some(&cancellation_token),
         )
         .await;
@@ -253,11 +133,12 @@ impl SummaryService {
         let duration = start_time.elapsed().as_secs_f64();
 
         // Clean up cancellation token regardless of outcome
-        Self::cleanup_cancellation_token(&meeting_id);
+        Self::cleanup_cancellation_token(&meeting_id, registration_id);
 
         match result {
-            Ok((mut final_markdown, num_chunks)) => {
-                if num_chunks == 0 && final_markdown.is_empty() {
+            Ok(output) => {
+                let mut final_markdown = output.markdown;
+                if output.chunks_processed == 0 && final_markdown.is_empty() {
                     Self::update_process_failed(
                         &pool,
                         &meeting_id,
@@ -268,10 +149,12 @@ impl SummaryService {
                 }
 
                 info!(
-                    "✓ Successfully processed {} chunks for meeting_id: {}. Duration: {:.2}s",
-                    num_chunks, meeting_id, duration
+                    "✓ Successfully processed {} chunks for meeting_id: {} ({} chars of markdown). Duration: {:.2}s",
+                    output.chunks_processed,
+                    meeting_id,
+                    final_markdown.len(),
+                    duration
                 );
-                info!("final markdown is {}", &final_markdown);
 
                 // Extract and update meeting name if present
                 if let Some(name) = extract_meeting_name_from_markdown(&final_markdown) {
@@ -287,36 +170,34 @@ impl SummaryService {
                             error!("Failed to update meeting name for {}: {}", meeting_id, e);
                         }
 
-                        // Strip the title line from markdown
-                        info!("Stripping title from final_markdown");
-                        if let Some(hash_pos) = final_markdown.find('#') {
-                            // Find end of first line after '#'
-                            let body_start =
-                                if let Some(line_end) = final_markdown[hash_pos..].find('\n') {
-                                    hash_pos + line_end
-                                } else {
-                                    final_markdown.len() // No newline, whole string is title
-                                };
-
-                            final_markdown = final_markdown[body_start..].trim_start().to_string();
-                        } else {
-                            // No '#' found, clear the string
-                            final_markdown.clear();
-                        }
+                        // The title now lives on the meeting row; drop the
+                        // heading line so it isn't duplicated in the body.
+                        final_markdown = strip_first_heading_line(&final_markdown);
                     }
                 }
 
-                // Create result JSON with markdown only (summary_json will be added on first edit)
-                let result_json = serde_json::json!({
+                // Create result JSON with markdown only (summary_json will be
+                // added on first edit). `failed_chunks` flags a summary that's
+                // missing content because map-step calls failed — the UI can
+                // tell the user rather than presenting it as complete.
+                let mut result_json = serde_json::json!({
                     "markdown": final_markdown,
                 });
+                if output.failed_chunks > 0 {
+                    warn!(
+                        "Summary for {} is partial: {} chunk(s) failed",
+                        meeting_id, output.failed_chunks
+                    );
+                    result_json["failed_chunks"] =
+                        serde_json::json!(output.failed_chunks);
+                }
 
                 // Update database with completed status
                 if let Err(e) = SummaryProcessesRepository::update_process_completed(
                     &pool,
                     &meeting_id,
                     result_json.clone(),
-                    num_chunks,
+                    output.chunks_processed,
                     duration,
                 )
                 .await
@@ -350,7 +231,7 @@ impl SummaryService {
                     // the summary is committed, so a failure here can never
                     // roll one back.
                     crate::summary::transcript_action_items::spawn_transcript_extraction(
-                        _app.clone(),
+                        app.clone(),
                         pool.clone(),
                         meeting_id.clone(),
                         model_provider.clone(),

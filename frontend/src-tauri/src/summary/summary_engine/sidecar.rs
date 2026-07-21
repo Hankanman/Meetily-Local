@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,40 +18,51 @@ use super::models;
 // Sidecar State Management
 // ============================================================================
 
-/// Sidecar process manager with keep-alive and health monitoring
+/// Sidecar process manager with keep-alive and health monitoring.
+///
+/// Lives behind an `Arc` (see `client.rs`); the background health/idle
+/// loops hold a clone of that `Arc` plus the spawn generation they belong
+/// to, and exit as soon as a newer spawn supersedes them — so restarting
+/// the sidecar can never accumulate loops.
 pub struct SidecarManager {
     /// Child process handle
-    child_process: Arc<Mutex<Option<Child>>>,
+    child_process: Mutex<Option<Child>>,
 
     /// Stdin writer for sending requests
-    stdin_writer: Arc<Mutex<Option<ChildStdin>>>,
+    stdin_writer: Mutex<Option<ChildStdin>>,
 
     /// Stdout reader for receiving responses
-    stdout_reader: Arc<Mutex<Option<BufReader<ChildStdout>>>>,
+    stdout_reader: Mutex<Option<BufReader<ChildStdout>>>,
 
     /// Last activity timestamp
-    last_activity: Arc<RwLock<Instant>>,
+    last_activity: RwLock<Instant>,
 
     /// Health status
-    is_healthy: Arc<AtomicBool>,
+    is_healthy: AtomicBool,
 
     /// Shutdown flag
-    should_shutdown: Arc<AtomicBool>,
+    should_shutdown: AtomicBool,
 
-    /// Active request count (for graceful shutdown)
+    /// Active request count (for graceful shutdown). Arc'd because each
+    /// in-flight `RequestGuard` holds its own handle to it.
     active_request_count: Arc<AtomicUsize>,
 
     /// Serializes the full write-request + read-response round trip so
     /// concurrent callers (including the background health-check ping)
     /// can never interleave their stdin writes/stdout reads and end up
     /// reading back a response meant for a different request.
-    request_lock: Arc<Mutex<()>>,
+    request_lock: Mutex<()>,
+
+    /// Bumped by every `spawn()`. Background loops capture the value at
+    /// their spawn and exit when it changes, so a respawn retires the
+    /// previous spawn's loops instead of stacking new ones on top.
+    spawn_generation: AtomicU64,
 
     /// Path to llama-helper binary
     helper_binary_path: PathBuf,
 
     /// Current model path (if loaded)
-    current_model_path: Arc<RwLock<Option<PathBuf>>>,
+    current_model_path: RwLock<Option<PathBuf>>,
 
     /// Idle timeout in seconds (configurable via env var)
     idle_timeout_secs: u64,
@@ -94,16 +105,17 @@ impl SidecarManager {
         log::info!("Helper binary path: {}", helper_binary_path.display());
 
         Ok(Self {
-            child_process: Arc::new(Mutex::new(None)),
-            stdin_writer: Arc::new(Mutex::new(None)),
-            stdout_reader: Arc::new(Mutex::new(None)),
-            last_activity: Arc::new(RwLock::new(Instant::now())),
-            is_healthy: Arc::new(AtomicBool::new(false)),
-            should_shutdown: Arc::new(AtomicBool::new(false)),
+            child_process: Mutex::new(None),
+            stdin_writer: Mutex::new(None),
+            stdout_reader: Mutex::new(None),
+            last_activity: RwLock::new(Instant::now()),
+            is_healthy: AtomicBool::new(false),
+            should_shutdown: AtomicBool::new(false),
             active_request_count: Arc::new(AtomicUsize::new(0)),
-            request_lock: Arc::new(Mutex::new(())),
+            request_lock: Mutex::new(()),
+            spawn_generation: AtomicU64::new(0),
             helper_binary_path,
-            current_model_path: Arc::new(RwLock::new(None)),
+            current_model_path: RwLock::new(None),
             idle_timeout_secs,
         })
     }
@@ -254,42 +266,41 @@ impl SidecarManager {
     }
 
     /// Ensure sidecar is running, spawn if needed
-    pub async fn ensure_running(&self, model_path: PathBuf) -> Result<()> {
+    pub async fn ensure_running(this: &Arc<Self>, model_path: PathBuf) -> Result<()> {
         // Check if already running with correct model
         {
-            let current_model = self.current_model_path.read().await;
-            if current_model.as_ref() == Some(&model_path) && self.is_healthy() {
+            let current_model = this.current_model_path.read().await;
+            if current_model.as_ref() == Some(&model_path) && this.is_healthy() {
                 log::debug!("Sidecar already running with correct model");
-                self.update_activity().await;
+                this.update_activity().await;
                 return Ok(());
             }
         }
 
         // Need to spawn or restart
-        self.spawn(model_path).await
+        Self::spawn(this, model_path).await
     }
 
     /// Spawn the sidecar process
-    async fn spawn(&self, model_path: PathBuf) -> Result<()> {
+    async fn spawn(this: &Arc<Self>, model_path: PathBuf) -> Result<()> {
         // Shutdown existing process if running
-        self.shutdown().await?;
+        this.shutdown().await?;
 
         log::info!("Spawning llama-helper sidecar");
         log::info!("Model path: {}", model_path.display());
 
         let mut command = tokio::process::Command::new("nice");
-        command.arg("-n").arg("10").arg(&self.helper_binary_path);
+        command.arg("-n").arg("10").arg(&this.helper_binary_path);
 
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit()) // Log stderr to main process
-            .env("LLAMA_IDLE_TIMEOUT", self.idle_timeout_secs.to_string());
+            .stderr(Stdio::inherit()); // Log stderr to main process
 
         let mut child = command.spawn().with_context(|| {
             format!(
                 "Failed to spawn llama-helper at {:?}",
-                self.helper_binary_path
+                this.helper_binary_path
             )
         })?;
 
@@ -304,35 +315,37 @@ impl SidecarManager {
 
         // Store handles
         {
-            let mut child_lock = self.child_process.lock().await;
+            let mut child_lock = this.child_process.lock().await;
             *child_lock = Some(child);
         }
 
         {
-            let mut stdin_lock = self.stdin_writer.lock().await;
+            let mut stdin_lock = this.stdin_writer.lock().await;
             *stdin_lock = Some(stdin);
         }
 
         {
-            let mut stdout_lock = self.stdout_reader.lock().await;
+            let mut stdout_lock = this.stdout_reader.lock().await;
             *stdout_lock = Some(BufReader::new(stdout));
         }
 
         // Update state
         {
-            let mut current_model = self.current_model_path.write().await;
+            let mut current_model = this.current_model_path.write().await;
             *current_model = Some(model_path);
         }
 
-        self.is_healthy.store(true, Ordering::SeqCst);
-        self.should_shutdown.store(false, Ordering::SeqCst);
-        self.update_activity().await;
+        this.is_healthy.store(true, Ordering::SeqCst);
+        this.should_shutdown.store(false, Ordering::SeqCst);
+        this.update_activity().await;
 
         log::info!("Sidecar spawned successfully");
 
-        // Start background tasks
-        self.start_health_check_loop();
-        self.start_idle_check_loop();
+        // Start background tasks scoped to this spawn — bumping the
+        // generation retires the previous spawn's loops.
+        let generation = this.spawn_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        Self::start_health_check_loop(this, generation);
+        Self::start_idle_check_loop(this, generation);
 
         Ok(())
     }
@@ -568,21 +581,16 @@ impl SidecarManager {
         last_activity.elapsed().as_secs()
     }
 
-    /// Start health check loop (runs in background)
-    fn start_health_check_loop(&self) {
-        let manager = Self {
-            child_process: self.child_process.clone(),
-            stdin_writer: self.stdin_writer.clone(),
-            stdout_reader: self.stdout_reader.clone(),
-            last_activity: self.last_activity.clone(),
-            is_healthy: self.is_healthy.clone(),
-            should_shutdown: self.should_shutdown.clone(),
-            active_request_count: self.active_request_count.clone(),
-            request_lock: self.request_lock.clone(),
-            helper_binary_path: self.helper_binary_path.clone(),
-            current_model_path: self.current_model_path.clone(),
-            idle_timeout_secs: self.idle_timeout_secs,
-        };
+    /// Whether a background loop started for `generation` should keep
+    /// running: exits on shutdown, or when a newer spawn has taken over.
+    fn loop_is_current(&self, generation: u64) -> bool {
+        !self.should_shutdown.load(Ordering::SeqCst)
+            && self.spawn_generation.load(Ordering::SeqCst) == generation
+    }
+
+    /// Start health check loop for one spawn (runs in background)
+    fn start_health_check_loop(this: &Arc<Self>, generation: u64) {
+        let manager = Arc::clone(this);
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(30));
@@ -591,8 +599,7 @@ impl SidecarManager {
             loop {
                 interval.tick().await;
 
-                if manager.should_shutdown.load(Ordering::SeqCst) {
-                    log::debug!("Health check loop: shutdown flag set, exiting");
+                if !manager.loop_is_current(generation) {
                     break;
                 }
 
@@ -615,25 +622,13 @@ impl SidecarManager {
                 }
             }
 
-            log::debug!("Health check loop exited");
+            log::debug!("Health check loop exited (generation {})", generation);
         });
     }
 
-    /// Start idle check loop (runs in background)
-    fn start_idle_check_loop(&self) {
-        let manager = Self {
-            child_process: self.child_process.clone(),
-            stdin_writer: self.stdin_writer.clone(),
-            stdout_reader: self.stdout_reader.clone(),
-            last_activity: self.last_activity.clone(),
-            is_healthy: self.is_healthy.clone(),
-            should_shutdown: self.should_shutdown.clone(),
-            active_request_count: self.active_request_count.clone(),
-            request_lock: self.request_lock.clone(),
-            helper_binary_path: self.helper_binary_path.clone(),
-            current_model_path: self.current_model_path.clone(),
-            idle_timeout_secs: self.idle_timeout_secs,
-        };
+    /// Start idle check loop for one spawn (runs in background)
+    fn start_idle_check_loop(this: &Arc<Self>, generation: u64) {
+        let manager = Arc::clone(this);
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -642,8 +637,7 @@ impl SidecarManager {
             loop {
                 interval.tick().await;
 
-                if manager.should_shutdown.load(Ordering::SeqCst) {
-                    log::debug!("Idle check loop: shutdown flag set, exiting");
+                if !manager.loop_is_current(generation) {
                     break;
                 }
 
@@ -672,7 +666,7 @@ impl SidecarManager {
                 }
             }
 
-            log::debug!("Idle check loop exited");
+            log::debug!("Idle check loop exited (generation {})", generation);
         });
     }
 }

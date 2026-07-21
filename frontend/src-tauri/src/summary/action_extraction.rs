@@ -2,13 +2,11 @@
 //!
 //! ## Where this runs
 //!
-//! Automatically, right after a summary completes (see
-//! `SummaryService::process_transcript_background`), spawned as its own task so
-//! a slow or broken LLM never delays the summary the user is waiting on. Every
-//! failure here is logged and swallowed: the summary is the product, action
-//! items are a bonus on top of it. The same entry point backs the on-demand
-//! `extract_action_items` command, which is how meetings summarized before this
-//! feature existed get their items without a full re-summarization.
+//! As the *fallback* path of the on-demand `extract_action_items` command,
+//! for meetings that have a summary but no stored transcript segments. The
+//! automatic post-summary pass uses the transcript-sourced extractor
+//! ([`super::transcript_action_items`]) instead — it grounds items to real
+//! timestamps, which this summary-based path can't.
 //!
 //! ## Why a second LLM call
 //!
@@ -29,8 +27,7 @@
 use crate::database::repositories::action_item::{
     normalize_text_key, ActionItemsRepository, NewActionItem,
 };
-use crate::database::repositories::setting::SettingsRepository;
-use crate::summary::llm_client::{generate_summary, LLMProvider};
+use crate::summary::llm_client::{generate_summary, LlmConfig};
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::SqlitePool;
@@ -321,67 +318,6 @@ fn is_generic_speaker_label(s: &str) -> bool {
     rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit())
 }
 
-/// Everything the LLM call needs, resolved from settings for `provider`.
-///
-/// Mirrors the credential handling in `SummaryService::process_transcript_background`
-/// (deliberately: extraction must reach the same endpoint with the same key as
-/// the summary that produced its input), minus the context-window sizing — the
-/// summary markdown is small and this call is single-shot, so there's nothing to
-/// chunk.
-pub(crate) struct LlmCredentials {
-    pub(crate) provider: LLMProvider,
-    pub(crate) api_key: String,
-    pub(crate) ollama_endpoint: Option<String>,
-    pub(crate) custom_openai_endpoint: Option<String>,
-}
-
-impl LlmCredentials {
-    pub(crate) async fn resolve(pool: &SqlitePool, provider_name: &str) -> Result<Self, String> {
-        let provider = LLMProvider::from_str(provider_name)?;
-
-        let keyless = matches!(
-            provider,
-            LLMProvider::Ollama | LLMProvider::BuiltInAI | LLMProvider::CustomOpenAI
-        );
-        let api_key = if keyless {
-            String::new()
-        } else {
-            SettingsRepository::get_api_key(pool, provider_name)
-                .await
-                .map_err(|e| format!("failed to read API key for {provider_name}: {e}"))?
-                .filter(|k| !k.is_empty())
-                .ok_or_else(|| format!("API key not found for {provider_name}"))?
-        };
-
-        let ollama_endpoint = if provider == LLMProvider::Ollama {
-            SettingsRepository::get_model_config(pool)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|c| c.ollama_endpoint)
-        } else {
-            None
-        };
-
-        let (custom_openai_endpoint, api_key) = if provider == LLMProvider::CustomOpenAI {
-            let config = SettingsRepository::get_custom_openai_config(pool)
-                .await
-                .map_err(|e| format!("failed to read custom OpenAI config: {e}"))?
-                .ok_or_else(|| "custom OpenAI provider selected but not configured".to_string())?;
-            (Some(config.endpoint), config.api_key.unwrap_or_default())
-        } else {
-            (None, api_key)
-        };
-
-        Ok(Self {
-            provider,
-            api_key,
-            ollama_endpoint,
-            custom_openai_endpoint,
-        })
-    }
-}
-
 /// Extract action items from `summary_markdown` and replace the meeting's
 /// extractor-owned items with them.
 ///
@@ -406,32 +342,17 @@ pub async fn extract_for_meeting<R: Runtime>(
         return Err("summary is empty; nothing to extract".to_string());
     }
 
-    let creds = LlmCredentials::resolve(pool, provider_name).await?;
     let app_data_dir = app.path().app_data_dir().ok();
-    let client = reqwest::Client::new();
+    let config = LlmConfig::resolve(pool, provider_name, model_name, app_data_dir).await?;
 
     let user_prompt = format!(
         "Extract the action items from this meeting summary.\n\n---\n{}\n---",
         summary_markdown.trim()
     );
 
-    let response = generate_summary(
-        &client,
-        &creds.provider,
-        model_name,
-        &creds.api_key,
-        EXTRACTION_SYSTEM_PROMPT,
-        &user_prompt,
-        creds.ollama_endpoint.as_deref(),
-        creds.custom_openai_endpoint.as_deref(),
-        None,
-        None,
-        None,
-        app_data_dir.as_ref(),
-        None,
-    )
-    .await
-    .map_err(|e| format!("LLM call failed: {e}"))?;
+    let response = generate_summary(&config, EXTRACTION_SYSTEM_PROMPT, &user_prompt, None)
+        .await
+        .map_err(|e| format!("LLM call failed: {e}"))?;
 
     let items = parse_action_items(&response).ok_or_else(|| {
         format!(
@@ -452,40 +373,6 @@ pub async fn extract_for_meeting<R: Runtime>(
     );
 
     Ok(count)
-}
-
-/// Fire-and-forget wrapper used by the summary completion path.
-///
-/// Spawns its own task and logs any failure — the caller has already saved the
-/// summary and must not be blocked, slowed, or failed by this.
-pub fn spawn_extraction<R: Runtime>(
-    app: AppHandle<R>,
-    pool: SqlitePool,
-    meeting_id: String,
-    summary_markdown: String,
-    provider_name: String,
-    model_name: String,
-) {
-    tauri::async_runtime::spawn(async move {
-        match extract_for_meeting(
-            &app,
-            &pool,
-            &meeting_id,
-            &summary_markdown,
-            &provider_name,
-            &model_name,
-        )
-        .await
-        {
-            Ok(count) => {
-                info!("Action-item extraction finished for {meeting_id}: {count} item(s)");
-            }
-            Err(e) => {
-                // Non-fatal by design: the summary is saved and correct.
-                warn!("Action-item extraction failed for {meeting_id}: {e} (summary unaffected)");
-            }
-        }
-    });
 }
 
 #[cfg(test)]

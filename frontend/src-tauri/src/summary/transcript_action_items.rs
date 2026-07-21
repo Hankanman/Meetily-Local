@@ -16,8 +16,8 @@ use crate::database::models::Transcript;
 use crate::database::repositories::action_item::{
     normalize_text_key, ActionItemsRepository, NewActionItem,
 };
-use crate::summary::action_extraction::{parse_action_items, LlmCredentials};
-use crate::summary::llm_client::generate_summary;
+use crate::summary::action_extraction::parse_action_items;
+use crate::summary::llm_client::{generate_summary, LlmConfig};
 use sqlx::SqlitePool;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tracing::{info, warn};
@@ -105,9 +105,8 @@ pub async fn extract_from_transcript<R: Runtime>(
         return Err("no transcript segments to extract from".to_string());
     }
 
-    let creds = LlmCredentials::resolve(pool, provider_name).await?;
     let app_data_dir = app.path().app_data_dir().ok();
-    let client = reqwest::Client::new();
+    let config = LlmConfig::resolve(pool, provider_name, model_name, app_data_dir).await?;
 
     let windows = window_segments(&segments);
     info!(
@@ -118,9 +117,7 @@ pub async fn extract_from_transcript<R: Runtime>(
 
     let mut collected: Vec<NewActionItem> = Vec::new();
     for window in &windows {
-        collected.extend(
-            extract_window(&client, &creds, model_name, app_data_dir.as_ref(), window).await,
-        );
+        collected.extend(extract_window(&config, window).await);
     }
 
     let deduped = dedupe(collected);
@@ -156,31 +153,9 @@ pub fn spawn_transcript_extraction<R: Runtime>(
 /// model, parse, and ground each item's quote to a segment's timestamp.
 /// Returns grounded items — the caller dedupes across windows. Shared by the
 /// post-meeting pass and the live driver.
-pub(crate) async fn extract_window(
-    client: &reqwest::Client,
-    creds: &LlmCredentials,
-    model_name: &str,
-    app_data_dir: Option<&std::path::PathBuf>,
-    window: &[Segment],
-) -> Vec<NewActionItem> {
+pub(crate) async fn extract_window(config: &LlmConfig, window: &[Segment]) -> Vec<NewActionItem> {
     let user_prompt = format!("Transcript:\n\n{}", render_window(window));
-    let response = match generate_summary(
-        client,
-        &creds.provider,
-        model_name,
-        &creds.api_key,
-        SYSTEM_PROMPT,
-        &user_prompt,
-        creds.ollama_endpoint.as_deref(),
-        creds.custom_openai_endpoint.as_deref(),
-        None,
-        None,
-        None,
-        app_data_dir,
-        None,
-    )
-    .await
-    {
+    let response = match generate_summary(config, SYSTEM_PROMPT, &user_prompt, None).await {
         Ok(r) => r,
         Err(e) => {
             warn!("Action-item extraction window failed: {e}");

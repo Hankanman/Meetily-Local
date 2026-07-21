@@ -675,6 +675,14 @@ pub fn run() {
                 log::warn!("Failed to resolve resource directory for templates");
             }
 
+            // User-editable custom templates live under the same app-data
+            // root as every other user-data path.
+            if let Ok(app_data_dir) = _app.handle().path().app_data_dir() {
+                summary::templates::set_custom_templates_dir(app_data_dir.join("templates"));
+            } else {
+                log::warn!("Failed to resolve app data directory for custom templates");
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

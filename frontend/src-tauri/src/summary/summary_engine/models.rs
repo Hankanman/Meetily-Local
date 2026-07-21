@@ -143,11 +143,15 @@ pub fn get_models_directory(app_data_dir: &PathBuf) -> PathBuf {
 // Prompt Templates (Model-Specific Formatting)
 // ============================================================================
 
-/// Gemma 3 chat template format
+/// Gemma 3 chat template format.
+///
+/// Gemma has no system role — its convention is to prepend the system text
+/// to the *first user turn*, not to emit two consecutive user turns (which
+/// is off-spec and models handle unpredictably).
 pub const GEMMA3_TEMPLATE: &str = "\
 <start_of_turn>user
-{system_prompt}<end_of_turn>
-<start_of_turn>user
+{system_prompt}
+
 {user_prompt}<end_of_turn>
 <start_of_turn>model
 ";

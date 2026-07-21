@@ -30,10 +30,10 @@
 //!
 //! # Custom Templates
 //!
-//! Users can add custom templates to:
-//! - macOS: `~/Library/Application Support/Meetily/templates/`
-//! - Windows: `%APPDATA%\Meetily\templates\`
-//! - Linux: `~/.config/Meetily/templates/`
+//! Users can add custom templates to `<app_data_dir>/templates/` (the same
+//! Tauri app-data root as models and recordings; on Linux that's
+//! `~/.local/share/com.meetily.ai/templates/`). The directory is wired at
+//! startup via [`set_custom_templates_dir`].
 //!
 //! Custom templates must follow the JSON schema defined in `types::Template`.
 
@@ -44,7 +44,7 @@ mod types;
 // Re-export public API
 pub use loader::{
     get_template, list_template_ids, list_templates, set_bundled_templates_dir,
-    validate_and_parse_template,
+    set_custom_templates_dir, validate_and_parse_template,
 };
 pub use types::{Template, TemplateSection};
 
