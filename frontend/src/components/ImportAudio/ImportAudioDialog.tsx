@@ -250,7 +250,7 @@ export function ImportAudioDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="sm:max-w-125"
+        className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-125 grid-cols-1 overflow-y-auto"
         onEscapeKeyDown={handleEscapeKeyDown}
         onInteractOutside={handleInteractOutside}
       >
@@ -287,7 +287,7 @@ export function ImportAudioDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-4">
+        <div className="min-w-0 space-y-4 py-4">
           {/* File selection / info */}
           {!isProcessing && !error && (
             <>
@@ -296,12 +296,15 @@ export function ImportAudioDialog({
                   <div className="flex items-start gap-3">
                     <FileAudio className="size-8 shrink-0 text-info" />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium text-foreground">
+                      <p
+                        className="truncate font-medium text-foreground"
+                        title={fileInfo.filename}
+                      >
                         {fileInfo.filename}
                       </p>
                       <div
                         className="
-                        mt-1 flex items-center gap-4 text-sm
+                        mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm
                         text-muted-foreground
                       "
                       >
