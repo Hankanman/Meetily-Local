@@ -6,6 +6,7 @@
 use anyhow::Result;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::task::JoinHandle;
@@ -26,6 +27,68 @@ pub use super::transcription::TranscriptUpdate;
 // Global recording manager and transcription task to keep them alive during recording
 static RECORDING_MANAGER: Mutex<Option<RecordingManager>> = Mutex::new(None);
 static TRANSCRIPTION_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+
+/// Held from the first line of a `start_recording*` call until it returns.
+/// `is_recording()` only flips true once the manager is stored — after
+/// several awaits (model validation, preferences, device enumeration,
+/// PipeWire stream open) — so without this two overlapping starts both pass
+/// the "already recording" check and the second silently drops the first
+/// manager and its un-finalised audio.
+static START_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// Held for the whole of `stop_recording` — `is_recording()` reads false
+/// ~100 ms in (force-flush clears the state) while the transcription drain,
+/// model unload and audio merge run for seconds to minutes. A start that
+/// sneaks in during that window would take over the global manager slot and
+/// the tail of the stop would then finalise (and drop) the *new* recording.
+static STOP_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// RAII flag holder: clears the flag on every exit path, including `?`.
+struct PhaseGuard(&'static AtomicBool);
+
+impl PhaseGuard {
+    /// Atomically claim `flag`; `None` if it is already held.
+    fn try_acquire(flag: &'static AtomicBool) -> Option<Self> {
+        flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| PhaseGuard(flag))
+    }
+}
+
+impl Drop for PhaseGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// True while a stop is still draining / finalising a previous recording.
+pub fn is_stop_in_progress() -> bool {
+    STOP_IN_PROGRESS.load(Ordering::SeqCst)
+}
+
+/// Shared entry check for every start path. Refuses while another start is
+/// already running or a previous stop is still finalising, then re-checks the
+/// live recording flag. Returns the guard that must be held until the start
+/// call returns.
+async fn begin_start_phase() -> Result<PhaseGuard, String> {
+    let guard = PhaseGuard::try_acquire(&START_IN_PROGRESS)
+        .ok_or_else(|| "Recording start already in progress".to_string())?;
+
+    if is_stop_in_progress() {
+        return Err(
+            "The previous recording is still being finalised. Please wait a moment and try again."
+                .to_string(),
+        );
+    }
+
+    let current_recording_state = is_recording().await;
+    info!("🔍 recording state check: {}", current_recording_state);
+    if current_recording_state {
+        return Err("Recording already in progress".to_string());
+    }
+
+    Ok(guard)
+}
 
 /// Snapshot the transcript segments accumulated so far in the current recording
 /// session — in memory, before they're persisted on stop. Empty when nothing is
@@ -77,12 +140,9 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         meeting_name
     );
 
-    // Check if already recording
-    let current_recording_state = is_recording().await;
-    info!("🔍 recording state check: {}", current_recording_state);
-    if current_recording_state {
-        return Err("Recording already in progress".to_string());
-    }
+    // Claim the start phase (rejects overlapping starts and starts during a
+    // still-finalising stop) and check the live recording flag.
+    let _start_phase = begin_start_phase().await?;
 
     // Validate that transcription models are available before starting recording
     info!("🔍 Validating transcription model availability before starting recording...");
@@ -261,8 +321,14 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                 }
             }
         });
-        let mut global_listener = TRANSCRIPT_LISTENER_ID.lock().unwrap();
-        *global_listener = Some(listener_id);
+        // A stale id here means a previous session never reached its unlisten
+        // (error-path stop, crash recovery); drop it or every segment would be
+        // persisted twice for the rest of the process lifetime.
+        let stale = TRANSCRIPT_LISTENER_ID.lock().unwrap().replace(listener_id);
+        if let Some(stale_id) = stale {
+            app.unlisten(stale_id);
+            warn!("⚠️ Removed a stale transcript-update listener from a previous session");
+        }
         info!("✅ Transcript-update event listener registered for history persistence");
     }
 
@@ -306,12 +372,9 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         mic_device_name, system_device_name, meeting_name
     );
 
-    // Check if already recording
-    let current_recording_state = is_recording().await;
-    info!("🔍 recording state check: {}", current_recording_state);
-    if current_recording_state {
-        return Err("Recording already in progress".to_string());
-    }
+    // Claim the start phase (rejects overlapping starts and starts during a
+    // still-finalising stop) and check the live recording flag.
+    let _start_phase = begin_start_phase().await?;
 
     // Validate that transcription models are available before starting recording
     info!("🔍 Validating transcription model availability before starting recording...");
@@ -455,8 +518,14 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                 }
             }
         });
-        let mut global_listener = TRANSCRIPT_LISTENER_ID.lock().unwrap();
-        *global_listener = Some(listener_id);
+        // A stale id here means a previous session never reached its unlisten
+        // (error-path stop, crash recovery); drop it or every segment would be
+        // persisted twice for the rest of the process lifetime.
+        let stale = TRANSCRIPT_LISTENER_ID.lock().unwrap().replace(listener_id);
+        if let Some(stale_id) = stale {
+            app.unlisten(stale_id);
+            warn!("⚠️ Removed a stale transcript-update listener from a previous session");
+        }
         info!("✅ Transcript-update event listener registered for history persistence");
     }
 
@@ -496,6 +565,11 @@ pub async fn stop_recording<R: Runtime>(
         info!("Recording was not active");
         return Ok(());
     }
+
+    // Hold the stop phase until this function returns so no start can take
+    // over the manager slot while the drain / save below is still running.
+    let _stop_phase = PhaseGuard::try_acquire(&STOP_IN_PROGRESS)
+        .ok_or_else(|| "Recording stop already in progress".to_string())?;
 
     // Emit shutdown progress to frontend
     let _ = app.emit(
@@ -898,6 +972,7 @@ pub async fn get_recording_state() -> serde_json::Value {
     if let Some(manager) = manager_guard.as_ref() {
         serde_json::json!({
             "is_recording": manager.is_recording(),
+            "is_finalising": is_stop_in_progress(),
             "is_paused": manager.is_paused(),
             "is_active": manager.is_active(),
             "recording_duration": manager.get_recording_duration(),
@@ -908,6 +983,7 @@ pub async fn get_recording_state() -> serde_json::Value {
     } else {
         serde_json::json!({
             "is_recording": false,
+            "is_finalising": is_stop_in_progress(),
             "is_paused": false,
             "is_active": false,
             "recording_duration": null,

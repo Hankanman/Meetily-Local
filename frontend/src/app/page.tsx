@@ -116,8 +116,21 @@ export default function Home() {
     })();
   }, [checkForRecoverableTranscripts, recordingState.isRecording, status]);
 
+  // Any phase of the stop flow (STOPPING included — the backend reports
+  // `isRecording=false` within ~100 ms of a stop while it is still draining
+  // transcripts and merging audio for seconds). Starting during it would let
+  // a second recording take over the backend's manager slot.
+  const isStopFlowActive =
+    status === RecordingStatus.STOPPING ||
+    status === RecordingStatus.PROCESSING_TRANSCRIPTS ||
+    status === RecordingStatus.SAVING ||
+    isStopping ||
+    isProcessing ||
+    isSaving;
+
   const handleStartClick = async () => {
-    if (isRecordingDisabled || isRecording || isStarting) return;
+    if (isRecordingDisabled || isRecording || isStarting || isStopFlowActive)
+      return;
     setIsStarting(true);
     try {
       await handleRecordingStart();
@@ -215,10 +228,7 @@ export default function Home() {
 
   const isProcessingStop =
     status === RecordingStatus.PROCESSING_TRANSCRIPTS || isProcessing;
-  const isFinalising =
-    status === RecordingStatus.PROCESSING_TRANSCRIPTS ||
-    status === RecordingStatus.SAVING ||
-    isSaving;
+  const isFinalising = isStopFlowActive;
 
   return (
     <Page>
@@ -246,7 +256,7 @@ export default function Home() {
             >
               <RecordingHero
                 onStart={handleStartClick}
-                isStarting={isStarting || isRecordingDisabled}
+                isStarting={isStarting || isRecordingDisabled || isStopFlowActive}
               />
             </motion.div>
           ) : (

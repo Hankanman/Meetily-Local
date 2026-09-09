@@ -732,6 +732,12 @@ impl WhisperEngine {
                     params.set_initial_prompt(prompt);
                 }
 
+                // whisper.cpp silently returns zero segments (no error) for
+                // input shorter than 1 s ("input is too short"), so
+                // sub-second utterances — "yes", "okay", "no" — would vanish.
+                // Zero-pad the tail up to a safe floor before decoding.
+                let audio_data = pad_to_min_whisper_input(audio_data);
+
                 let mut state = ctx.create_state()?;
                 state.full(params, &audio_data)?;
                 let num_segments = state.full_n_segments();
@@ -1118,5 +1124,37 @@ impl WhisperEngine {
         }
 
         Ok(())
+    }
+}
+
+/// whisper.cpp refuses (with zero segments, not an error) any input shorter
+/// than 1 s of 16 kHz audio. Pad with trailing silence to a little over that
+/// so the mel window is comfortably inside the decoder's minimum.
+pub(crate) const WHISPER_MIN_INPUT_SAMPLES: usize = 16_000 + 1_600; // 1.1 s @ 16 kHz
+
+pub(crate) fn pad_to_min_whisper_input(mut audio: Vec<f32>) -> Vec<f32> {
+    if audio.len() < WHISPER_MIN_INPUT_SAMPLES {
+        audio.resize(WHISPER_MIN_INPUT_SAMPLES, 0.0);
+    }
+    audio
+}
+
+#[cfg(test)]
+mod min_input_tests {
+    use super::*;
+
+    #[test]
+    fn pads_short_input_to_floor() {
+        let out = pad_to_min_whisper_input(vec![0.5; 4_000]);
+        assert_eq!(out.len(), WHISPER_MIN_INPUT_SAMPLES);
+        assert_eq!(out[3_999], 0.5);
+        assert_eq!(out[4_000], 0.0);
+    }
+
+    #[test]
+    fn leaves_long_input_untouched() {
+        let input = vec![0.25; 40_000];
+        let out = pad_to_min_whisper_input(input.clone());
+        assert_eq!(out, input);
     }
 }
