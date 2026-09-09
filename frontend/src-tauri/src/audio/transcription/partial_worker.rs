@@ -58,6 +58,14 @@ pub fn start_partial_decode_task<R: Runtime>(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         info!("🎬 Streaming partial-decode task started");
+
+        // This task decodes off the same shared Whisper engine as the final
+        // worker (start_transcription_task), independently and concurrently.
+        // Hold the live-transcription lease for its whole lifetime too, so a
+        // batch job can't swap/unload the model mid-decode here either. See
+        // `whisper_engine::lease`.
+        let _live_engine_lease = crate::whisper_engine::LIVE_ENGINE_LEASE.acquire_live();
+
         let mut states: HashMap<DeviceType, SourceState> = HashMap::new();
 
         while let Some(mut chunk) = receiver.recv().await {

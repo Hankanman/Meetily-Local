@@ -113,45 +113,48 @@ pub fn normalize_v2(audio: &[f32]) -> Vec<f32> {
         .collect()
 }
 
-/// True peak limiter with lookahead buffer (prevents clipping)
-struct TruePeakLimiter {
-    lookahead_samples: usize,
-    buffer: Vec<f32>,
-    gain_reduction: Vec<f32>,
-    current_position: usize,
+/// Soft-clipping "limiter" (issue #21).
+///
+/// The previous `TruePeakLimiter` here wasn't actually a limiter: it fed
+/// each sample through a 10ms delay line and hard-clipped it if it exceeded
+/// the threshold, with no knee — a delayed hard clip, not true-peak
+/// limiting. Replaced with a `tanh` soft clip: samples below `threshold`
+/// pass through completely unchanged (so normal-level speech is untouched),
+/// and samples above it are compressed smoothly toward ±1.0 instead of
+/// being clipped flat. That trades a little harmonic distortion on rare
+/// over-threshold peaks for no lookahead buffer (zero added latency) and no
+/// audible "wall" at the threshold — the right trade for a live mic path
+/// feeding VAD/Whisper, not a mastering chain.
+struct SoftClipper {
+    threshold: f32,
 }
 
-impl TruePeakLimiter {
-    fn new(sample_rate: u32) -> Self {
-        const LIMITER_LOOKAHEAD_MS: usize = 10;
-        let lookahead_samples = ((sample_rate as usize * LIMITER_LOOKAHEAD_MS) / 1000).max(1);
-
+impl SoftClipper {
+    fn new(threshold: f32) -> Self {
         Self {
-            lookahead_samples,
-            buffer: vec![0.0; lookahead_samples],
-            gain_reduction: vec![1.0; lookahead_samples],
-            current_position: 0,
+            threshold: threshold.clamp(0.0, 0.999),
         }
     }
 
-    fn process(&mut self, sample: f32, true_peak_limit: f32) -> f32 {
-        self.buffer[self.current_position] = sample;
-
-        let sample_abs = sample.abs();
-        if sample_abs > true_peak_limit {
-            let reduction = true_peak_limit / sample_abs;
-            self.gain_reduction[self.current_position] = reduction;
-        } else {
-            self.gain_reduction[self.current_position] = 1.0;
+    fn process(&self, sample: f32) -> f32 {
+        let abs = sample.abs();
+        if abs <= self.threshold {
+            return sample;
         }
-
-        let output_position = (self.current_position + 1) % self.lookahead_samples;
-        let output_sample = self.buffer[output_position] * self.gain_reduction[output_position];
-
-        self.current_position = output_position;
-        output_sample
+        let headroom = (1.0 - self.threshold).max(1e-6);
+        let over = (abs - self.threshold) / headroom;
+        sample.signum() * (self.threshold + headroom * over.tanh())
     }
 }
+
+/// Gain the mic normalizer is allowed to request, in dB (issue #21).
+///
+/// Unbounded gain was the bug: a very quiet (e.g. -60 LUFS) mic could ask
+/// for +37 dB, which also amplifies whatever echo AEC didn't fully cancel
+/// back up toward the target loudness. Capping keeps the normalizer doing
+/// comfort gain, not undoing AEC's work.
+const GAIN_CEILING_DB: f32 = 18.0;
+const GAIN_FLOOR_DB: f32 = -12.0;
 
 /// Professional loudness normalizer using EBU R128 standard
 /// This is a STATEFUL normalizer that tracks cumulative loudness over time
@@ -161,12 +164,22 @@ impl TruePeakLimiter {
 /// - Used by: Netflix, YouTube, Spotify, all professional broadcast
 /// - Perceptually accurate (not just simple RMS)
 ///
+/// Gain is capped to [GAIN_FLOOR_DB, GAIN_CEILING_DB] and smoothed with a
+/// one-pole follower (issue #21) so it never steps abruptly every 512-sample
+/// analysis window, and never demands more boost than a downstream AEC path
+/// can tolerate. This normalizer must run AFTER acoustic echo cancellation
+/// (see `AudioPipeline::run` in pipeline.rs) — applying it before AEC feeds
+/// AEC a time-varying near-end signal and breaks its convergence.
 pub struct LoudnessNormalizer {
     ebur128: ebur128::EbuR128,
-    limiter: TruePeakLimiter,
+    limiter: SoftClipper,
+    /// Current, smoothed linear gain actually applied to samples.
     gain_linear: f32,
+    /// Most recent gain measurement (capped), which `gain_linear` chases.
+    target_gain_linear: f32,
+    /// One-pole smoothing coefficient — see `new` for the time constant.
+    smoothing_alpha: f32,
     loudness_buffer: Vec<f32>,
-    true_peak_limit: f32,
 }
 
 impl LoudnessNormalizer {
@@ -176,34 +189,38 @@ impl LoudnessNormalizer {
     /// * `channels` - Number of audio channels (1 for mono, 2 for stereo)
     /// * `sample_rate` - Sample rate in Hz (e.g., 48000)
     pub fn new(channels: u32, sample_rate: u32) -> Result<Self> {
-        const TRUE_PEAK_LIMIT: f64 = -1.0;
         const ANALYZE_CHUNK_SIZE: usize = 512;
+        // -1 dBFS soft-clip threshold — matches the previous true-peak target.
+        const SOFT_CLIP_THRESHOLD_DB: f32 = -1.0;
+        // 50ms one-pole time constant for the gain follower: fast enough to
+        // track real level changes, slow enough that no single 512-sample
+        // measurement update is audible as a step.
+        const SMOOTHING_TAU_SECS: f32 = 0.05;
 
-        let ebur128 = ebur128::EbuR128::new(
-            channels,
-            sample_rate,
-            ebur128::Mode::I | ebur128::Mode::TRUE_PEAK,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create EBU R128 normalizer: {}", e))?;
+        let ebur128 = ebur128::EbuR128::new(channels, sample_rate, ebur128::Mode::I)
+            .map_err(|e| anyhow::anyhow!("Failed to create EBU R128 normalizer: {}", e))?;
 
-        let true_peak_limit = 10_f32.powf(TRUE_PEAK_LIMIT as f32 / 20.0);
+        let soft_clip_threshold = 10_f32.powf(SOFT_CLIP_THRESHOLD_DB / 20.0);
+        let smoothing_alpha = 1.0 - (-1.0 / (SMOOTHING_TAU_SECS * sample_rate as f32)).exp();
 
         Ok(Self {
             ebur128,
-            limiter: TruePeakLimiter::new(sample_rate),
+            limiter: SoftClipper::new(soft_clip_threshold),
             gain_linear: 1.0,
+            target_gain_linear: 1.0,
+            smoothing_alpha,
             loudness_buffer: Vec::with_capacity(ANALYZE_CHUNK_SIZE),
-            true_peak_limit,
         })
     }
 
-    /// Normalize loudness using EBU R128 standard with true peak limiting
+    /// Normalize loudness using EBU R128 standard with a capped, smoothed
+    /// gain and a soft clip.
     ///
-    /// This maintains cumulative loudness measurements across all processed audio,
-    /// resulting in consistent normalization that sounds natural.
-    ///
-    /// Target: -23 LUFS (professional broadcast standard for speech/dialog)
-    /// Applies sample-by-sample with 10ms lookahead limiter to prevent clipping
+    /// This maintains cumulative loudness measurements across all processed
+    /// audio, resulting in consistent normalization that sounds natural.
+    /// Target: -23 LUFS (professional broadcast standard for speech/dialog).
+    /// Gain is capped to [-12dB, +18dB] and smoothed per-sample toward the
+    /// latest measurement (issue #21) rather than jumping to it.
     pub fn normalize_loudness(&mut self, samples: &[f32]) -> Vec<f32> {
         if samples.is_empty() {
             return Vec::new();
@@ -223,20 +240,26 @@ impl LoudnessNormalizer {
                 if let Err(e) = self.ebur128.add_frames_f32(&self.loudness_buffer) {
                     warn!("Failed to add frames to EBU R128: {}", e);
                 } else {
-                    // Update gain based on cumulative loudness
+                    // Update the gain target based on cumulative loudness.
+                    // `gain_linear` itself is smoothed toward this below,
+                    // one sample at a time, rather than snapping here.
                     if let Ok(current_lufs) = self.ebur128.loudness_global() {
                         if current_lufs.is_finite() && current_lufs < 0.0 {
-                            let gain_db = TARGET_LUFS - current_lufs;
-                            self.gain_linear = 10_f32.powf(gain_db as f32 / 20.0);
+                            let gain_db = (TARGET_LUFS - current_lufs) as f32;
+                            let capped_db = gain_db.clamp(GAIN_FLOOR_DB, GAIN_CEILING_DB);
+                            self.target_gain_linear = 10_f32.powf(capped_db / 20.0);
                         }
                     }
                 }
                 self.loudness_buffer.clear();
             }
 
-            // Apply gain and true peak limiting
+            // Chase the target gain smoothly instead of stepping to it.
+            self.gain_linear +=
+                (self.target_gain_linear - self.gain_linear) * self.smoothing_alpha;
+
             let amplified = sample * self.gain_linear;
-            let limited = self.limiter.process(amplified, self.true_peak_limit);
+            let limited = self.limiter.process(amplified);
 
             normalized_samples.push(limited);
         }
@@ -698,4 +721,155 @@ pub fn write_audio_to_file_with_meeting_name(
         )?;
     }
     Ok(file_path_clone)
+}
+
+#[cfg(test)]
+mod mic_enhancement_tests {
+    //! Pure-function tests for issue #21: the normalizer's gain cap/smoothing
+    //! and the soft clip. No audio devices involved.
+    use super::*;
+
+    fn gain_db_to_linear(db: f32) -> f32 {
+        10f32.powf(db / 20.0)
+    }
+
+    // ---- SoftClipper -------------------------------------------------
+
+    #[test]
+    fn soft_clip_passes_samples_below_threshold_unchanged() {
+        let clipper = SoftClipper::new(0.9);
+        assert!((clipper.process(0.5) - 0.5).abs() < 1e-6);
+        assert!((clipper.process(-0.5) - (-0.5)).abs() < 1e-6);
+        assert!((clipper.process(0.9) - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn soft_clip_bounds_samples_above_threshold() {
+        let clipper = SoftClipper::new(0.9);
+        // Moderately over threshold (not so far that f32 tanh saturates to
+        // exactly 1.0): stays bounded strictly below full scale, above the
+        // threshold (soft knee, not a hard clip down to the threshold).
+        let pos = clipper.process(1.2);
+        let neg = clipper.process(-1.2);
+        assert!(pos < 1.0 && pos > 0.9, "pos={pos}");
+        assert!(neg > -1.0 && neg < -0.9, "neg={neg}");
+
+        // Far-over-threshold samples still never exceed full scale, even
+        // once f32 precision saturates tanh to 1.0.
+        let extreme = clipper.process(50.0);
+        assert!(extreme <= 1.0, "extreme={extreme}");
+    }
+
+    #[test]
+    fn soft_clip_is_monotonic_and_antisymmetric() {
+        let clipper = SoftClipper::new(0.8);
+        let mut prev_out = f32::NEG_INFINITY;
+        let mut x = -3.0f32;
+        while x <= 3.0 {
+            let out = clipper.process(x);
+            assert!(
+                out >= prev_out,
+                "soft clip must be monotonic: x={x} out={out} prev_out={prev_out}"
+            );
+            // Odd function: f(-x) == -f(x).
+            let out_neg = clipper.process(-x);
+            assert!(
+                (out_neg + out).abs() < 1e-5,
+                "soft clip should be antisymmetric: x={x} out={out} out(-x)={out_neg}"
+            );
+            prev_out = out;
+            x += 0.1;
+        }
+    }
+
+    // ---- LoudnessNormalizer gain cap + smoothing ----------------------
+
+    #[test]
+    fn normalizer_gain_is_capped_for_very_quiet_audio() {
+        let mut norm = LoudnessNormalizer::new(1, 48_000).unwrap();
+        // Far below -23 LUFS target; an uncapped normalizer would demand
+        // tens of dB of boost (issue #21). Feed several seconds so the
+        // EBU R128 integrated measurement settles.
+        let quiet: Vec<f32> = (0..48_000 * 3)
+            .map(|i| 0.0003 * (i as f32 * 0.05).sin())
+            .collect();
+        for chunk in quiet.chunks(4800) {
+            norm.normalize_loudness(chunk);
+        }
+        let ceiling_linear = gain_db_to_linear(GAIN_CEILING_DB);
+        assert!(
+            norm.target_gain_linear <= ceiling_linear + 1e-3,
+            "target gain {} exceeded +{}dB ceiling {}",
+            norm.target_gain_linear,
+            GAIN_CEILING_DB,
+            ceiling_linear
+        );
+        assert!(
+            norm.gain_linear <= ceiling_linear + 1e-3,
+            "smoothed gain {} exceeded +{}dB ceiling {}",
+            norm.gain_linear,
+            GAIN_CEILING_DB,
+            ceiling_linear
+        );
+    }
+
+    #[test]
+    fn normalizer_gain_is_floored_for_very_loud_audio() {
+        let mut norm = LoudnessNormalizer::new(1, 48_000).unwrap();
+        // Well above -23 LUFS; an uncapped normalizer would ask for large
+        // negative gain, undoing AEC's work on residual echo (issue #21).
+        let loud: Vec<f32> = (0..48_000 * 3)
+            .map(|i| 0.8 * (i as f32 * 0.05).sin())
+            .collect();
+        for chunk in loud.chunks(4800) {
+            norm.normalize_loudness(chunk);
+        }
+        let floor_linear = gain_db_to_linear(GAIN_FLOOR_DB);
+        assert!(
+            norm.target_gain_linear >= floor_linear - 1e-3,
+            "target gain {} went below {}dB floor {}",
+            norm.target_gain_linear,
+            GAIN_FLOOR_DB,
+            floor_linear
+        );
+    }
+
+    #[test]
+    fn normalizer_gain_changes_smoothly_not_in_steps() {
+        let mut norm = LoudnessNormalizer::new(1, 48_000).unwrap();
+
+        // EBU R128's integrated-loudness measurement needs hundreds of ms
+        // to converge, which would make this test slow and indirect. Stage
+        // a large target jump directly instead, to isolate the one-pole
+        // smoothing math (the thing issue #21 asks for) from the
+        // measurement pipeline.
+        norm.target_gain_linear = gain_db_to_linear(GAIN_CEILING_DB);
+        assert!((norm.gain_linear - 1.0).abs() < 1e-6);
+
+        // Silence doesn't yield a finite loudness measurement (guarded by
+        // `current_lufs.is_finite()` in `normalize_loudness`), so
+        // `target_gain_linear` stays exactly what we staged above — only
+        // the smoothing follower moves.
+        let silence = vec![0.0f32; 512];
+        norm.normalize_loudness(&silence);
+
+        assert!(
+            norm.gain_linear < norm.target_gain_linear - 1e-4,
+            "gain should not jump instantly to target: gain={} target={}",
+            norm.gain_linear,
+            norm.target_gain_linear
+        );
+
+        // Feeding enough further silence lets the smoothed gain converge
+        // toward the (fixed) target.
+        for _ in 0..50 {
+            norm.normalize_loudness(&silence);
+        }
+        assert!(
+            (norm.gain_linear - norm.target_gain_linear).abs() < 0.05,
+            "gain should have converged close to target after many blocks: gain={} target={}",
+            norm.gain_linear,
+            norm.target_gain_linear
+        );
+    }
 }

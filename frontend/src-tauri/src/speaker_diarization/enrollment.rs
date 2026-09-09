@@ -50,7 +50,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{command, AppHandle, Emitter, Manager, Runtime};
 
 use crate::audio::audio_processing::{audio_to_mono, resample_audio};
-use crate::audio::pw::{PwCaptureStream, CAPTURE_CHANNELS, CAPTURE_RATE};
+use crate::audio::pw::{PwCaptureStream, PwStreamEvent, CAPTURE_CHANNELS, CAPTURE_RATE};
 use crate::audio::recording_state::DeviceType;
 use crate::audio::stream::capture_target_for;
 use crate::audio::vad::extract_enrollment_speech_16k;
@@ -224,6 +224,11 @@ pub async fn start_self_voice_enrollment<R: Runtime>(
                     if room > 0 {
                         b.extend_from_slice(&mono[..room.min(mono.len())]);
                     }
+                }
+            }),
+            Box::new(move |event| {
+                if !matches!(event, PwStreamEvent::Ended) {
+                    log::warn!("Voice enrollment: capture stream event: {:?}", event);
                 }
             }),
         )

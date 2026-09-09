@@ -185,7 +185,7 @@ impl RecordingManager {
         self.state.stop_recording();
 
         // Stop audio streams
-        if let Err(e) = self.stream_manager.stop_streams() {
+        if let Err(e) = self.stream_manager.stop_streams().await {
             error!("Error stopping audio streams: {}", e);
         }
 
@@ -206,7 +206,7 @@ impl RecordingManager {
         self.state.stop_recording();
 
         // Stop audio streams immediately
-        if let Err(e) = self.stream_manager.stop_streams() {
+        if let Err(e) = self.stream_manager.stop_streams().await {
             error!("Error stopping audio streams: {}", e);
         }
 
@@ -272,7 +272,7 @@ impl RecordingManager {
         self.state.stop_recording();
 
         // Stop audio streams
-        if let Err(e) = self.stream_manager.stop_streams() {
+        if let Err(e) = self.stream_manager.stop_streams().await {
             error!("Error stopping audio streams: {}", e);
         }
 
@@ -419,7 +419,7 @@ impl RecordingManager {
             self.state.stop_recording();
 
             // Stop audio streams
-            if let Err(e) = self.stream_manager.stop_streams() {
+            if let Err(e) = self.stream_manager.stop_streams().await {
                 error!("Error stopping audio streams during cleanup: {}", e);
             }
 
@@ -435,11 +435,6 @@ impl RecordingManager {
     /// Returns None if no meeting name was set or folder structure not initialized
     pub fn get_meeting_folder(&self) -> Option<std::path::PathBuf> {
         self.recording_saver.get_meeting_folder().map(|p| p.clone())
-    }
-
-    /// Check if currently attempting to reconnect
-    pub fn is_reconnecting(&self) -> bool {
-        self.state.is_reconnecting()
     }
 
     /// Get reference to recording state for external access

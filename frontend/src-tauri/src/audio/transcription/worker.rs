@@ -167,6 +167,15 @@ pub fn start_transcription_task<R: Runtime>(
     tokio::spawn(async move {
         info!("🚀 Starting transcription task (serial, ordered emission)");
 
+        // Hold the live-transcription lease for the entire lifetime of this
+        // task, so no batch job (import / retranscription / auto-refine) can
+        // swap or unload the shared Whisper engine's model out from under
+        // this live recording. Released automatically when this async block
+        // exits (loop break below, or an early return on init failure), i.e.
+        // once the receive loop has fully drained. See
+        // `whisper_engine::lease` for the full rationale.
+        let _live_engine_lease = crate::whisper_engine::LIVE_ENGINE_LEASE.acquire_live();
+
         let engine = match super::engine::get_or_init_transcription_engine(&app).await {
             Ok(engine) => engine,
             Err(e) => {

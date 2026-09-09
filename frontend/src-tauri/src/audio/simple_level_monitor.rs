@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Runtime};
 
-use super::pw::PwCaptureStream;
+use super::pw::{PwCaptureStream, PwStreamEvent};
 use super::recording_state::DeviceType;
 use super::stream::capture_target_for;
 
@@ -78,6 +78,11 @@ fn open_role_stream(
             };
             if let Ok(mut map) = levels.lock() {
                 map.insert(role, entry);
+            }
+        }),
+        Box::new(move |event| {
+            if !matches!(event, PwStreamEvent::Ended) {
+                warn!("level monitor: {} stream event: {:?}", role, event);
             }
         }),
     )
