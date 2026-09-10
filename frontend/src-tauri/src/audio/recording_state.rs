@@ -123,6 +123,13 @@ pub struct RecordingState {
     recoverable_error_count: AtomicU32,
     last_error: Mutex<Option<AudioError>>,
     error_callback: Mutex<Option<Box<dyn Fn(&AudioError) + Send + Sync>>>,
+    /// Set by `report_error` on a fatal error (a non-recoverable error, or
+    /// too many recoverable/total errors) instead of half-stopping the
+    /// session itself (issue #24). The command layer's error callback is the
+    /// thing that actually runs the full stop flow; this flag just records
+    /// that the session ended in error rather than a clean user stop, and
+    /// makes sure the callback fires exactly once.
+    errored: AtomicBool,
 
     // Statistics
     stats: Mutex<RecordingStats>,
@@ -147,6 +154,7 @@ impl RecordingState {
             recoverable_error_count: AtomicU32::new(0),
             last_error: Mutex::new(None),
             error_callback: Mutex::new(None),
+            errored: AtomicBool::new(false),
             stats: Mutex::new(RecordingStats::default()),
             recording_start: Mutex::new(None),
             pause_start: Mutex::new(None),
@@ -161,6 +169,7 @@ impl RecordingState {
         self.error_count.store(0, Ordering::SeqCst);
         self.recoverable_error_count.store(0, Ordering::SeqCst);
         *self.last_error.lock().unwrap() = None;
+        self.errored.store(false, Ordering::SeqCst);
         Ok(())
     }
 
@@ -294,8 +303,24 @@ impl RecordingState {
         *self.error_callback.lock().unwrap() = Some(Box::new(callback));
     }
 
+    /// Record an audio error. This deliberately does **not** call
+    /// `stop_recording()` itself any more (issue #24): that only cleared the
+    /// atomic + sender + device refs, leaving capture streams, the pipeline
+    /// task, the transcription worker, the global `RecordingManager` and the
+    /// transcript-update listener all still alive — after which the user's
+    /// Stop button saw `is_recording() == false` and silently no-op'd
+    /// instead of running the real shutdown.
+    ///
+    /// Instead, a fatal error (non-recoverable, or too many
+    /// recoverable/total errors) just flips `errored` and invokes the error
+    /// callback *once*. The callback — installed by the command layer via
+    /// `set_error_callback` — is what actually runs the same full
+    /// `stop_recording` command flow the Stop button runs, so streams,
+    /// pipeline, worker, save and the `recording-stopped` event all still
+    /// happen.
     pub fn report_error(&self, error: AudioError) {
         let count = self.error_count.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut fatal = false;
 
         // Track recoverable vs non-recoverable errors separately
         if error.is_recoverable() {
@@ -306,35 +331,47 @@ impl RecordingState {
                 error
             );
 
-            // Allow more recoverable errors before stopping
+            // Allow more recoverable errors before treating the session as errored
             if recoverable_count >= 10 {
                 log::error!(
-                    "Too many recoverable errors ({}), stopping recording",
+                    "Too many recoverable errors ({}), marking recording as errored",
                     recoverable_count
                 );
-                self.stop_recording();
+                fatal = true;
             }
         } else {
             log::error!("Non-recoverable audio error: {:?}", error);
-            // Stop immediately for non-recoverable errors
-            self.stop_recording();
+            fatal = true;
+        }
+
+        // Fallback: mark errored after too many total errors
+        if count >= 15 {
+            log::error!(
+                "Too many total audio errors ({}), marking recording as errored",
+                count
+            );
+            fatal = true;
         }
 
         *self.last_error.lock().unwrap() = Some(error.clone());
 
-        // Call error callback if set
-        if let Some(callback) = self.error_callback.lock().unwrap().as_ref() {
-            callback(&error);
+        if fatal {
+            // `swap` so the callback (which triggers a full stop) fires
+            // exactly once even if further errors are reported while the
+            // stop it kicks off is still draining.
+            let was_already_errored = self.errored.swap(true, Ordering::SeqCst);
+            if !was_already_errored {
+                if let Some(callback) = self.error_callback.lock().unwrap().as_ref() {
+                    callback(&error);
+                }
+            }
         }
+    }
 
-        // Fallback: stop recording after too many total errors
-        if count >= 15 {
-            log::error!(
-                "Too many total audio errors ({}), stopping recording",
-                count
-            );
-            self.stop_recording();
-        }
+    /// True once a fatal error has been reported for this session (see
+    /// `report_error`). Reset by `cleanup()` when a new recording starts.
+    pub fn is_errored(&self) -> bool {
+        self.errored.load(Ordering::SeqCst)
     }
 
     pub fn get_error_count(&self) -> u32 {
@@ -420,6 +457,7 @@ impl RecordingState {
         *self.total_pause_duration.lock().unwrap() = std::time::Duration::ZERO;
         self.error_count.store(0, Ordering::SeqCst);
         self.recoverable_error_count.store(0, Ordering::SeqCst);
+        self.errored.store(false, Ordering::SeqCst);
 
         // Clear buffer pool to free memory
         self.buffer_pool.clear();
@@ -439,6 +477,7 @@ impl Default for RecordingState {
             recoverable_error_count: AtomicU32::new(0),
             last_error: Mutex::new(None),
             error_callback: Mutex::new(None),
+            errored: AtomicBool::new(false),
             stats: Mutex::new(RecordingStats::default()),
             recording_start: Mutex::new(None),
             pause_start: Mutex::new(None),

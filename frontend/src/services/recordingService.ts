@@ -113,6 +113,25 @@ class RecordingService {
   async onRecordingResumed(callback: () => void): Promise<UnlistenFn> {
     return listen("recording-resumed", callback);
   }
+
+  /**
+   * Listen for recording-error event.
+   *
+   * Emitted by the Rust side when `RecordingState::report_error` hits a
+   * fatal error (see recording_state.rs / recording_commands.rs). The
+   * backend follows this up by running the full stop flow itself, which
+   * emits `recording-stopped` shortly after — this listener only needs to
+   * surface the reason to the user.
+   * @param callback - Function to call with the user-facing error message
+   * @returns Promise that resolves to unlisten function
+   */
+  async onRecordingError(
+    callback: (message: string) => void,
+  ): Promise<UnlistenFn> {
+    return listen<string>("recording-error", (event) => {
+      callback(event.payload);
+    });
+  }
 }
 
 // Export singleton instance

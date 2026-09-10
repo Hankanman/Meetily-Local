@@ -2,7 +2,9 @@
 
 import React, { useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { toast } from "sonner";
 import { useRecordingStop } from "@/hooks/useRecordingStop";
+import { recordingService } from "@/services/recordingService";
 
 /**
  * RecordingPostProcessingProvider
@@ -72,6 +74,38 @@ export function RecordingPostProcessingProvider({
       }
     };
   }, [handleRecordingStop]);
+
+  // Surface fatal recording errors (issue #24). The backend auto-stops via
+  // the full stop flow when this fires, so the subsequent
+  // `recording-stopped` / `recording-stop-complete` events already drive
+  // the rest of the UI back to idle — this only needs to show the reason.
+  useEffect(() => {
+    let unlistenError: (() => void) | undefined;
+
+    const setupErrorListener = async () => {
+      try {
+        unlistenError = await recordingService.onRecordingError((message) => {
+          console.error("[RecordingPostProcessing] recording-error:", message);
+          toast.error("Recording stopped due to an error", {
+            description: message,
+          });
+        });
+      } catch (error) {
+        console.error(
+          "[RecordingPostProcessing] Failed to set up recording-error listener:",
+          error,
+        );
+      }
+    };
+
+    setupErrorListener();
+
+    return () => {
+      if (unlistenError) {
+        unlistenError();
+      }
+    };
+  }, []);
 
   return <>{children}</>;
 }

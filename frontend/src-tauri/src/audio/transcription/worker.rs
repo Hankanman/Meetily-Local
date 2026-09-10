@@ -232,6 +232,10 @@ pub fn start_transcription_task<R: Runtime>(
                 Some(item) => item,
                 None => match receiver.recv().await {
                     Some(segment) => {
+                        // Segment left the transcription queue — see
+                        // transcription::queue for the accounting this feeds
+                        // (issue #26: queue-depth visibility).
+                        super::queue::dequeued();
                         pending.extend(split_chunk_by_speaker(segment).await);
                         match pending.pop_front() {
                             Some(item) => item,

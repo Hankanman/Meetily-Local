@@ -64,9 +64,17 @@ impl RecordingManager {
             auto_save, enable_partials
         );
 
-        // Set up transcription channel
-        let (transcription_sender, transcription_receiver) =
+        // Set up transcription channel. The pipeline gets a plain
+        // `UnboundedSender` as before (unmodified pipeline.rs); a lightweight
+        // forwarding task counts segments in flight for the transcription
+        // backlog metric (issue #26) without pipeline.rs needing to know
+        // about it. See `transcription::queue` for the accounting and the
+        // "channel closed" completion-signal handoff.
+        super::transcription::reset_queue_depth();
+        let (transcription_sender, raw_transcription_receiver) =
             mpsc::unbounded_channel::<AudioChunk>();
+        let transcription_receiver =
+            super::transcription::spawn_counting_forwarder(raw_transcription_receiver);
 
         // Streaming-partial channel (only when enabled). The command layer
         // claims the receiver via take_partial_receiver() and spawns the
@@ -134,6 +142,8 @@ impl RecordingManager {
             mic_kind,
             sys_name,
             sys_kind,
+            microphone_device.is_some(),
+            system_device.is_some(),
         )?;
 
         // Give the pipeline a moment to fully initialize before starting streams
