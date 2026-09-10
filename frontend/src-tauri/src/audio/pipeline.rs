@@ -1,5 +1,3 @@
-use super::batch_processor::AudioMetricsBatcher;
-use crate::batch_audio_metric;
 use anyhow::Result;
 use log::{debug, error, info, warn};
 use std::collections::VecDeque;
@@ -502,8 +500,6 @@ pub struct AudioPipeline {
     // Performance optimization: reduce logging frequency
     last_summary_time: std::time::Instant,
     processed_chunks: u64,
-    // Smart batching for audio metrics
-    metrics_batcher: Option<AudioMetricsBatcher>,
     // Aligns the async mic + system streams into equal-length windows.
     ring_buffer: AudioMixerRingBuffer,
     // Acoustic echo canceller: removes the system audio the mic picks up from
@@ -590,35 +586,16 @@ impl AudioPipeline {
         target_chunk_duration_ms: u32,
         sample_rate: u32,
         mic_device_name: String,
-        mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
-        system_device_kind: super::device_detection::InputDeviceKind,
         mic_present: bool,
         system_present: bool,
     ) -> Self {
-        // Log device characteristics for adaptive buffering
-        info!("🎛️ AudioPipeline initializing with device characteristics:");
         info!(
-            "   Mic: '{}' ({:?}) - Buffer: {:?}",
-            mic_device_name,
-            mic_device_kind,
-            mic_device_kind.buffer_timeout()
-        );
-        info!(
-            "   System: '{}' ({:?}) - Buffer: {:?}",
-            system_device_name,
-            system_device_kind,
-            system_device_kind.buffer_timeout()
+            "🎛️ AudioPipeline initializing: mic='{}' system='{}'",
+            mic_device_name, system_device_name
         );
 
-        // Device kind information can be used for adaptive buffering in the future
-        // For now, we log it for monitoring and potential optimization
-        let _ = (
-            mic_device_name,
-            mic_device_kind,
-            system_device_name,
-            system_device_kind,
-        );
+        let _ = (mic_device_name, system_device_name);
 
         // Redemption time = the trailing-silence gap that ends a segment.
         // Per-source, because the two streams have different needs:
@@ -705,8 +682,6 @@ impl AudioPipeline {
             // Performance optimization: reduce logging frequency
             last_summary_time: std::time::Instant::now(),
             processed_chunks: 0,
-            // Initialize metrics batcher for smart batching
-            metrics_batcher: Some(AudioMetricsBatcher::new()),
             // Ring buffer for aligning mic + system into interleaved windows
             ring_buffer,
             echo_canceller,
@@ -752,33 +727,24 @@ impl AudioPipeline {
                     // Logging in hot paths causes severe performance degradation
                     self.processed_chunks += 1;
 
-                    // Smart batching: collect metrics instead of logging every chunk
-                    if let Some(ref batcher) = self.metrics_batcher {
-                        let avg_level = chunk.data.iter().map(|&x| x.abs()).sum::<f32>()
-                            / chunk.data.len() as f32;
-                        let duration_ms =
-                            chunk.data.len() as f64 / chunk.sample_rate as f64 * 1000.0;
-
-                        batch_audio_metric!(
-                            Some(batcher),
-                            chunk.chunk_id,
-                            chunk.data.len(),
-                            duration_ms,
-                            avg_level
-                        );
-                    }
-
                     // CRITICAL: Log summary only every 200 chunks OR every 60 seconds (99.5% reduction)
                     // This eliminates I/O overhead in the audio processing hot path
                     // Use performance-optimized debug macro that compiles to nothing in release builds
                     if self.processed_chunks % 200 == 0
                         || self.last_summary_time.elapsed().as_secs() >= 60
                     {
+                        let avg_level = if chunk.data.is_empty() {
+                            0.0
+                        } else {
+                            chunk.data.iter().map(|&x| x.abs()).sum::<f32>()
+                                / chunk.data.len() as f32
+                        };
                         perf_debug!(
-                            "Pipeline processed {} chunks, current chunk: {} ({} samples)",
+                            "Pipeline processed {} chunks, current chunk: {} ({} samples, avg level {:.4})",
                             self.processed_chunks,
                             chunk.chunk_id,
-                            chunk.data.len()
+                            chunk.data.len(),
+                            avg_level
                         );
                         self.last_summary_time = std::time::Instant::now();
                     }
@@ -1028,22 +994,14 @@ impl AudioPipelineManager {
         recording_sender: Option<mpsc::UnboundedSender<AudioChunk>>,
         partial_sender: Option<mpsc::UnboundedSender<super::recording_state::PartialAudioChunk>>,
         mic_device_name: String,
-        mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
-        system_device_kind: super::device_detection::InputDeviceKind,
         mic_present: bool,
         system_present: bool,
     ) -> Result<()> {
-        // Log device information for adaptive buffering
+        // Log device information
         info!("🎙️ Starting pipeline with device info:");
-        info!(
-            "   Microphone: '{}' ({:?})",
-            mic_device_name, mic_device_kind
-        );
-        info!(
-            "   System Audio: '{}' ({:?})",
-            system_device_name, system_device_kind
-        );
+        info!("   Microphone: '{}'", mic_device_name);
+        info!("   System Audio: '{}'", system_device_name);
 
         // Create audio processing channel
         let (audio_sender, audio_receiver) = mpsc::unbounded_channel::<AudioChunk>();
@@ -1058,9 +1016,7 @@ impl AudioPipelineManager {
             target_chunk_duration_ms,
             sample_rate,
             mic_device_name,
-            mic_device_kind,
             system_device_name,
-            system_device_kind,
             mic_present,
             system_present,
         );

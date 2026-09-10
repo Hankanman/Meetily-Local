@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
 
-use super::buffer_pool::AudioBufferPool;
 use super::devices::AudioDevice;
 
 /// Device type for audio chunks
@@ -94,14 +93,6 @@ impl AudioError {
     }
 }
 
-/// Recording statistics
-#[derive(Debug, Default)]
-pub struct RecordingStats {
-    pub chunks_processed: u64,
-    pub total_duration: f64,
-    pub last_activity: Option<Instant>,
-}
-
 /// Unified state management for audio recording
 pub struct RecordingState {
     // Core recording state
@@ -115,9 +106,6 @@ pub struct RecordingState {
     // Audio pipeline
     audio_sender: Mutex<Option<mpsc::UnboundedSender<AudioChunk>>>,
 
-    // Memory optimization
-    buffer_pool: AudioBufferPool,
-
     // Error handling
     error_count: AtomicU32,
     recoverable_error_count: AtomicU32,
@@ -130,9 +118,6 @@ pub struct RecordingState {
     /// that the session ended in error rather than a clean user stop, and
     /// makes sure the callback fires exactly once.
     errored: AtomicBool,
-
-    // Statistics
-    stats: Mutex<RecordingStats>,
 
     // Recording start time for accurate timestamps
     recording_start: Mutex<Option<Instant>>,
@@ -149,13 +134,11 @@ impl RecordingState {
             microphone_device: Mutex::new(None),
             system_device: Mutex::new(None),
             audio_sender: Mutex::new(None),
-            buffer_pool: AudioBufferPool::new(16, 48000), // Pool of 16 buffers with 48kHz samples capacity
             error_count: AtomicU32::new(0),
             recoverable_error_count: AtomicU32::new(0),
             last_error: Mutex::new(None),
             error_callback: Mutex::new(None),
             errored: AtomicBool::new(false),
-            stats: Mutex::new(RecordingStats::default()),
             recording_start: Mutex::new(None),
             pause_start: Mutex::new(None),
             total_pause_duration: Mutex::new(std::time::Duration::ZERO),
@@ -281,11 +264,6 @@ impl RecordingState {
             sender
                 .send(chunk)
                 .map_err(|_| anyhow::anyhow!("Failed to send audio chunk"))?;
-
-            // Update statistics
-            let mut stats = self.stats.lock().unwrap();
-            stats.chunks_processed += 1;
-            stats.last_activity = Some(Instant::now());
             Ok(())
         } else {
             // Return an error when no sender is available (pipeline not ready)
@@ -394,11 +372,6 @@ impl RecordingState {
         }
     }
 
-    // Statistics
-    pub fn get_stats(&self) -> RecordingStats {
-        self.stats.lock().unwrap().clone()
-    }
-
     pub fn get_recording_duration(&self) -> Option<f64> {
         self.recording_start
             .lock()
@@ -438,11 +411,6 @@ impl RecordingState {
         }
     }
 
-    // Memory management
-    pub fn get_buffer_pool(&self) -> AudioBufferPool {
-        self.buffer_pool.clone()
-    }
-
     // Cleanup
     pub fn cleanup(&self) {
         self.stop_recording();
@@ -451,16 +419,12 @@ impl RecordingState {
         *self.audio_sender.lock().unwrap() = None;
         *self.last_error.lock().unwrap() = None;
         *self.error_callback.lock().unwrap() = None;
-        *self.stats.lock().unwrap() = RecordingStats::default();
         *self.recording_start.lock().unwrap() = None;
         *self.pause_start.lock().unwrap() = None;
         *self.total_pause_duration.lock().unwrap() = std::time::Duration::ZERO;
         self.error_count.store(0, Ordering::SeqCst);
         self.recoverable_error_count.store(0, Ordering::SeqCst);
         self.errored.store(false, Ordering::SeqCst);
-
-        // Clear buffer pool to free memory
-        self.buffer_pool.clear();
     }
 }
 
@@ -472,27 +436,14 @@ impl Default for RecordingState {
             microphone_device: Mutex::new(None),
             system_device: Mutex::new(None),
             audio_sender: Mutex::new(None),
-            buffer_pool: AudioBufferPool::new(16, 48000), // Pool of 16 buffers with 48kHz samples capacity
             error_count: AtomicU32::new(0),
             recoverable_error_count: AtomicU32::new(0),
             last_error: Mutex::new(None),
             error_callback: Mutex::new(None),
             errored: AtomicBool::new(false),
-            stats: Mutex::new(RecordingStats::default()),
             recording_start: Mutex::new(None),
             pause_start: Mutex::new(None),
             total_pause_duration: Mutex::new(std::time::Duration::ZERO),
-        }
-    }
-}
-
-// Thread-safe cloning for RecordingStats
-impl Clone for RecordingStats {
-    fn clone(&self) -> Self {
-        Self {
-            chunks_processed: self.chunks_processed,
-            total_duration: self.total_duration,
-            last_activity: self.last_activity,
         }
     }
 }

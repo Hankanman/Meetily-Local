@@ -15,13 +15,7 @@ pub mod devices;
 #[cfg(target_os = "linux")]
 pub mod pw;
 
-// Device classification for adaptive buffering (Bluetooth vs wired)
-pub mod device_detection;
-pub mod ffmpeg_mixer;
-
 // Recording system
-pub mod batch_processor;
-pub mod buffer_pool;
 pub mod hardware_detector;
 pub mod incremental_saver;
 pub mod pipeline;
@@ -50,8 +44,6 @@ pub mod import;
 
 pub use devices::{list_audio_devices, trigger_audio_permission, AudioDevice, DeviceType};
 
-pub use buffer_pool::{AudioBufferPool, PooledBuffer};
-pub use encode::{encode_single_audio, AudioInput};
 pub use hardware_detector::{AdaptiveWhisperConfig, GpuType, HardwareProfile, PerformanceTier};
 pub use pipeline::AudioPipelineManager;
 pub use recording_commands::{
@@ -65,11 +57,6 @@ pub use recording_state::{
     AudioChunk, AudioError, DeviceType as RecordingDeviceType, ProcessedAudioChunk, RecordingState,
 };
 pub use stream::AudioStreamManager;
-
-pub use device_detection::{calculate_buffer_timeout, InputDeviceKind};
-pub use ffmpeg_mixer::{BufferStats, FFmpegAudioMixer, RNNOISE_APPLY_ENABLED};
-
-pub use vad::extract_speech_16k;
 
 // Export decoder for retranscription
 pub use decoder::{decode_audio_file, DecodedAudio};

@@ -1,18 +1,9 @@
 use super::ffmpeg::find_ffmpeg_path;
-use super::AudioDevice;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
 use tracing::{debug, error, warn};
-
-pub struct AudioInput {
-    pub data: Arc<Vec<f32>>,
-    pub sample_rate: u32,
-    pub channels: u16,
-    pub device: Arc<AudioDevice>,
-}
 
 /// AAC-LC in MP4, 192 kbps — the recording's final on-disk format.
 const AAC_BITRATE: &str = "192k";
@@ -117,29 +108,6 @@ fn finish_ffmpeg(
         warn!("FFmpeg stderr: {}", stderr.trim());
     }
     Ok(())
-}
-
-/// Encode one in-memory buffer of interleaved f32le PCM to an AAC/MP4 file.
-pub fn encode_single_audio(
-    data: &[u8],
-    sample_rate: u32,
-    channels: u16,
-    output_path: &PathBuf,
-) -> anyhow::Result<()> {
-    debug!(
-        "Starting FFmpeg process for {} bytes of audio data",
-        data.len()
-    );
-    if data.is_empty() {
-        return Err(anyhow::anyhow!("No audio data provided for encoding"));
-    }
-
-    let (mut child, stderr_reader) = spawn_pcm_to_aac(sample_rate, channels, output_path)?;
-    let write_result = match child.stdin.take() {
-        Some(mut stdin) => stdin.write_all(data),
-        None => Err(std::io::Error::other("failed to open FFmpeg stdin")),
-    };
-    finish_ffmpeg(child, stderr_reader, write_result)
 }
 
 /// Encode a sequence of raw interleaved f32le PCM files (the recording's

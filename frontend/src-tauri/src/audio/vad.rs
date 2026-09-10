@@ -376,56 +376,6 @@ impl StreamingDownsampler {
     }
 }
 
-/// Legacy helper: extract concatenated speech samples from a 16 kHz mono buffer.
-/// Used by older code paths that want a single contiguous "speech-only" array.
-pub fn extract_speech_16k(samples_mono_16k: &[f32]) -> Result<Vec<f32>> {
-    let mut processor = ContinuousVadProcessor::new(16_000, 400)?;
-
-    let mut all_segments = processor.process_audio(samples_mono_16k)?;
-    let final_segments = processor.flush()?;
-    all_segments.extend(final_segments);
-
-    let mut result = Vec::new();
-    let num_segments = all_segments.len();
-    for segment in &all_segments {
-        result.extend_from_slice(&segment.samples);
-    }
-
-    // Energy-based fallback for very short outputs (avoids Whisper hallucinating
-    // on near-silent input that VAD over-aggressively trimmed).
-    if result.len() < 1600 {
-        let input_energy: f32 =
-            samples_mono_16k.iter().map(|&x| x * x).sum::<f32>() / samples_mono_16k.len() as f32;
-        let rms = input_energy.sqrt();
-        let peak = samples_mono_16k
-            .iter()
-            .map(|&x| x.abs())
-            .fold(0.0f32, f32::max);
-
-        if rms < 0.2 || peak < 0.20 {
-            info!(
-                "VAD detected silence/noise (RMS: {:.6}, Peak: {:.6}); skipping",
-                rms, peak
-            );
-            return Ok(Vec::new());
-        } else {
-            info!(
-                "VAD energy-fallback: passing through full buffer (RMS: {:.6}, Peak: {:.6})",
-                rms, peak
-            );
-            return Ok(samples_mono_16k.to_vec());
-        }
-    }
-
-    debug!(
-        "VAD: processed {} samples → {} speech samples from {} segments",
-        samples_mono_16k.len(),
-        result.len(),
-        num_segments
-    );
-    Ok(result)
-}
-
 /// Trim a voice-enrollment recording (16 kHz mono) down to its voiced parts.
 ///
 /// Unlike [`extract_speech_16k`], this uses [`ContinuousVadProcessor::new_for_enrollment`]

@@ -393,7 +393,6 @@ impl WhisperEngine {
                     }
                     (crate::audio::GpuType::Cuda, false) => "CUDA GPU acceleration",
                     (crate::audio::GpuType::Vulkan, _) => "Vulkan GPU acceleration",
-                    (crate::audio::GpuType::OpenCL, _) => "OpenCL GPU acceleration",
                     (crate::audio::GpuType::None, _) => "CPU processing only",
                 };
 

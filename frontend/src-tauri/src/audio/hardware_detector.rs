@@ -16,7 +16,6 @@ pub enum GpuType {
     None,
     Cuda,   // NVIDIA
     Vulkan, // AMD/Intel
-    OpenCL, // Generic GPU compute
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -172,7 +171,7 @@ impl HardwareProfile {
                     PerformanceTier::High
                 }
             }
-            GpuType::Vulkan | GpuType::OpenCL => {
+            GpuType::Vulkan => {
                 if memory_gb >= 12 && cpu_cores >= 6 {
                     PerformanceTier::High
                 } else {
@@ -261,27 +260,6 @@ impl HardwareProfile {
         }
     }
 
-    /// Get recommended chunk duration in milliseconds based on performance tier
-    pub fn get_recommended_chunk_duration_ms(&self) -> u32 {
-        match self.performance_tier {
-            PerformanceTier::Ultra => 25000,  // 25 seconds for maximum accuracy
-            PerformanceTier::High => 20000,   // 20 seconds for high quality
-            PerformanceTier::Medium => 15000, // 15 seconds for balance
-            PerformanceTier::Low => 10000,    // 10 seconds for responsiveness
-        }
-    }
-
-    /// Check if hardware can handle real-time processing of given sample rate
-    pub fn can_handle_realtime(&self, sample_rate: u32, channels: u16) -> bool {
-        let data_rate = sample_rate * channels as u32;
-
-        match self.performance_tier {
-            PerformanceTier::Ultra => data_rate <= 192000, // Up to 192kHz stereo
-            PerformanceTier::High => data_rate <= 96000,   // Up to 96kHz stereo or 192kHz mono
-            PerformanceTier::Medium => data_rate <= 48000, // Up to 48kHz stereo
-            PerformanceTier::Low => data_rate <= 22050,    // Up to 22kHz stereo or 48kHz mono
-        }
-    }
 }
 
 #[cfg(test)]
