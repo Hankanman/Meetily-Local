@@ -303,6 +303,68 @@ class IndexedDBService {
   }
 
   /**
+   * Save a batch of transcript segments for a meeting in a single
+   * transaction. Prefer this over repeated `saveTranscript` calls when
+   * multiple segments are ready to persist at once (e.g. a periodic flush) —
+   * one IndexedDB transaction instead of one per segment.
+   */
+  async saveTranscripts(
+    meetingId: string,
+    transcripts: any[],
+  ): Promise<void> {
+    if (transcripts.length === 0) return;
+
+    try {
+      if (!this.db) await this.init();
+
+      const now = Date.now();
+      const transaction = this.db!.transaction(
+        ["transcripts", "meetings"],
+        "readwrite",
+      );
+      const transcriptsStore = transaction.objectStore("transcripts");
+      const meetingsStore = transaction.objectStore("meetings");
+
+      await Promise.all(
+        transcripts.map(
+          (transcript) =>
+            new Promise<void>((resolve, reject) => {
+              const storedTranscript: StoredTranscript = {
+                ...transcript,
+                meetingId,
+                storedAt: now,
+              };
+              const request = transcriptsStore.add(storedTranscript);
+              request.onsuccess = () => resolve();
+              request.onerror = () => reject(request.error);
+            }),
+        ),
+      );
+
+      const meeting = await new Promise<MeetingMetadata | null>(
+        (resolve, reject) => {
+          const request = meetingsStore.get(meetingId);
+          request.onsuccess = () => resolve(request.result || null);
+          request.onerror = () => reject(request.error);
+        },
+      );
+
+      if (meeting) {
+        meeting.lastUpdated = now;
+        meeting.transcriptCount += transcripts.length;
+        await new Promise<void>((resolve, reject) => {
+          const request = meetingsStore.put(meeting);
+          request.onsuccess = () => resolve();
+          request.onerror = () => reject(request.error);
+        });
+      }
+    } catch (error) {
+      console.warn("Failed to batch-save transcripts to IndexedDB:", error);
+      // Fail silently - don't interrupt recording
+    }
+  }
+
+  /**
    * Get all transcripts for a meeting
    */
   async getTranscripts(meetingId: string): Promise<StoredTranscript[]> {

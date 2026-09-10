@@ -186,15 +186,32 @@ export function RecordingStateProvider({
       const backendState = await recordingService.getRecordingState();
       const isFinalising = backendState.is_finalising ?? false;
 
-      setState((prev) => ({
-        ...prev,
-        isRecording: backendState.is_recording,
-        isPaused: backendState.is_paused,
-        isActive: backendState.is_active,
-        recordingDuration: backendState.recording_duration,
-        activeDuration: backendState.active_duration,
-        isBackendFinalising: isFinalising,
-      }));
+      // Skip the setState when nothing the backend reports has actually
+      // changed - `syncWithBackend` runs every 500ms while a recording/stop
+      // is in flight, and re-creating the state object on every tick forces
+      // every consumer (page.tsx, the sidebar, the top bar, ...) to
+      // re-render for no reason (issue #51).
+      setState((prev) => {
+        if (
+          prev.isRecording === backendState.is_recording &&
+          prev.isPaused === backendState.is_paused &&
+          prev.isActive === backendState.is_active &&
+          prev.recordingDuration === backendState.recording_duration &&
+          prev.activeDuration === backendState.active_duration &&
+          prev.isBackendFinalising === isFinalising
+        ) {
+          return prev;
+        }
+        return {
+          ...prev,
+          isRecording: backendState.is_recording,
+          isPaused: backendState.is_paused,
+          isActive: backendState.is_active,
+          recordingDuration: backendState.recording_duration,
+          activeDuration: backendState.active_duration,
+          isBackendFinalising: isFinalising,
+        };
+      });
 
       const inStopFlow = [
         RecordingStatus.STOPPING,

@@ -2,6 +2,7 @@
 
 import { Mic, Square } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useElapsedTime } from "@/hooks/useElapsedTime";
 
 interface SidebarRecordingButtonProps {
   isRecording: boolean;
@@ -45,7 +46,6 @@ export function SidebarRecordingButton({
   collapsed = false,
 }: SidebarRecordingButtonProps) {
   const [startedAt, setStartedAt] = useState<number | null>(null);
-  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     if (!isRecording) {
@@ -53,11 +53,9 @@ export function SidebarRecordingButton({
       return;
     }
     setStartedAt((prev) => prev ?? Date.now());
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
   }, [isRecording]);
 
-  const elapsed = isRecording && startedAt ? now - startedAt : 0;
+  const elapsed = useElapsedTime(isRecording ? startedAt : null);
   const handleClick = isRecording ? onResumeView : onStart;
 
   if (collapsed) {

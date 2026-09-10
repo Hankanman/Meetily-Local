@@ -8,8 +8,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
-use tokio::sync::RwLock;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use tokio::sync::{Mutex as AsyncMutex, RwLock};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ModelStatus {
@@ -25,11 +27,25 @@ pub enum ModelStatus {
     },
 }
 
+/// Which long-lived `WhisperState` a decode should use (see #49). The final
+/// path (`worker.rs`) and the streaming partial-decode path
+/// (`partial_worker.rs`) run concurrently against the same loaded model, so
+/// each gets its own state to avoid serializing on one another or racing on
+/// a shared `whisper_state`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum DecodePurpose {
+    /// The authoritative, committed transcript.
+    #[default]
+    Final,
+    /// A discarded streaming preview of the in-progress utterance.
+    Partial,
+}
+
 /// Per-call overrides for `transcribe_audio_with_confidence_opts`.
 ///
 /// Defaults (`TranscribeOptions::default()`) reproduce the historical
 /// behavior of `transcribe_audio_with_confidence`: full adaptive thread
-/// budget, beam search at the hardware-adaptive beam size.
+/// budget, beam search at the hardware-adaptive beam size, final-path state.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TranscribeOptions {
     /// Upper bound on the number of whisper threads to use for this call.
@@ -42,12 +58,33 @@ pub struct TranscribeOptions {
     /// which are discarded previews, not the committed transcript — greedy
     /// decoding is faster and the lower quality is acceptable there.
     pub greedy: bool,
+    /// Which pooled `WhisperState` to decode on (see `DecodePurpose`).
+    pub purpose: DecodePurpose,
 }
 
 /// Cap `default` (the hardware-adaptive thread count) at `requested`, if
 /// given, flooring the result at 1 so a caller can never request zero or
 /// negative threads. Pure function so the cap logic is unit-testable
 /// without spinning up a whisper context.
+/// Re-check-under-write-lock + lazily-insert helper backing the
+/// `DecodePurpose` state pool (#49): if `purpose` is already present,
+/// return its `Arc` (a caller may have raced us between dropping the read
+/// lock and taking the write lock); otherwise construct a fresh value with
+/// `make`, insert it, and return it. Generic and pure of any whisper-rs
+/// type so it's unit-testable without a real model loaded.
+fn pool_get_or_insert<T, E>(
+    pool: &mut HashMap<DecodePurpose, Arc<AsyncMutex<T>>>,
+    purpose: DecodePurpose,
+    make: impl FnOnce() -> Result<T, E>,
+) -> Result<Arc<AsyncMutex<T>>, E> {
+    if let Some(existing) = pool.get(&purpose) {
+        return Ok(existing.clone());
+    }
+    let value = Arc::new(AsyncMutex::new(make()?));
+    pool.insert(purpose, value.clone());
+    Ok(value)
+}
+
 fn effective_threads(default: i32, requested: Option<i32>) -> i32 {
     let capped = match requested {
         Some(requested) => default.min(requested),
@@ -74,6 +111,15 @@ pub struct WhisperEngine {
     // WhisperContext itself) across the blocking call.
     current_context: Arc<RwLock<Option<Arc<WhisperContext>>>>,
     current_model: Arc<RwLock<Option<String>>>,
+    // Long-lived `WhisperState`s, keyed by `DecodePurpose`, reused across
+    // decodes instead of calling `ctx.create_state()` per call (#49).
+    // Created lazily on first use after `load_model`, dropped in
+    // `unload_model` (and thus whenever the model changes, since
+    // `load_model` unloads the previous one first). Each entry is behind
+    // its own `tokio::sync::Mutex` so the final and partial paths never
+    // block on each other — only concurrent decodes for the *same*
+    // purpose serialize.
+    state_pool: Arc<RwLock<HashMap<DecodePurpose, Arc<AsyncMutex<WhisperState>>>>>,
     available_models: Arc<RwLock<HashMap<String, ModelInfo>>>,
     // Tracks in-flight downloads and cooperative cancellation requests
     // (shared with summary_engine::model_manager's downloader).
@@ -287,6 +333,7 @@ impl WhisperEngine {
         let engine = Self {
             models_dir,
             current_context: Arc::new(RwLock::new(None)),
+            state_pool: Arc::new(RwLock::new(HashMap::new())),
             current_model: Arc::new(RwLock::new(None)),
             available_models: Arc::new(RwLock::new(HashMap::new())),
             // Initialize download tracking
@@ -454,6 +501,12 @@ impl WhisperEngine {
         let mut model_name_guard = self.current_model.write().await;
         model_name_guard.take();
 
+        // Pooled states borrow the (now-gone) context's underlying weights
+        // via their own `Arc<WhisperInnerContext>` clone — drop them here
+        // so nothing keeps the model's memory alive past unload, and so the
+        // next `load_model` starts from an empty pool (see #49).
+        self.state_pool.write().await.clear();
+
         unloaded
     }
 
@@ -463,6 +516,31 @@ impl WhisperEngine {
 
     pub async fn is_model_loaded(&self) -> bool {
         self.current_context.read().await.is_some()
+    }
+
+    /// Get the pooled `WhisperState` for `purpose`, creating it lazily on
+    /// first use. Reused across calls (#49) instead of `ctx.create_state()`
+    /// per decode — `WhisperState` is safe to reuse across `full()` calls
+    /// and owns its own reference to the context, so it isn't invalidated
+    /// by anything short of `unload_model`/`load_model`.
+    async fn get_or_create_state(
+        &self,
+        purpose: DecodePurpose,
+    ) -> Result<Arc<AsyncMutex<WhisperState>>> {
+        if let Some(state) = self.state_pool.read().await.get(&purpose) {
+            return Ok(state.clone());
+        }
+
+        let ctx = {
+            let ctx_lock = self.current_context.read().await;
+            ctx_lock
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| anyhow!("No model loaded. Please load a model first."))?
+        };
+
+        let mut pool = self.state_pool.write().await;
+        Ok(pool_get_or_insert(&mut pool, purpose, || ctx.create_state())?)
     }
 
     // Enhanced function to clean repetitive text patterns and meaningless outputs
@@ -699,13 +777,10 @@ impl WhisperEngine {
         context_prompt: Option<String>,
         options: TranscribeOptions,
     ) -> Result<(String, f32, bool)> {
-        let ctx = {
-            let ctx_lock = self.current_context.read().await;
-            ctx_lock
-                .as_ref()
-                .cloned()
-                .ok_or_else(|| anyhow!("No model loaded. Please load a model first."))?
-        };
+        // Reuse the long-lived state for this purpose instead of creating a
+        // fresh `WhisperState` per decode (#49). Final and partial decodes
+        // never contend on the same lock since each purpose gets its own.
+        let state_lock = self.get_or_create_state(options.purpose).await?;
 
         let duration_seconds = audio_data.len() as f64 / 16000.0;
         let is_partial = duration_seconds < 15.0; // Consider chunks under 15s as partial
@@ -808,7 +883,9 @@ impl WhisperEngine {
                 // Zero-pad the tail up to a safe floor before decoding.
                 let audio_data = pad_to_min_whisper_input(audio_data);
 
-                let mut state = ctx.create_state()?;
+                // `blocking_lock()` — never held across an `.await`, this
+                // closure runs entirely inside `spawn_blocking`.
+                let mut state = state_lock.blocking_lock();
                 state.full(params, &audio_data)?;
                 let num_segments = state.full_n_segments();
                 // Suppressor dropped here, stderr restored
@@ -1226,6 +1303,58 @@ mod min_input_tests {
         let input = vec![0.25; 40_000];
         let out = pad_to_min_whisper_input(input.clone());
         assert_eq!(out, input);
+    }
+}
+
+#[cfg(test)]
+mod state_pool_tests {
+    use super::{pool_get_or_insert, AsyncMutex, DecodePurpose};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    // No real whisper model is available in this environment, so these
+    // exercise the pooling algorithm (`pool_get_or_insert`) against a
+    // trivial stand-in type rather than an actual `WhisperState` — it's
+    // generic over the pooled value, so the behavior under test (distinct
+    // entries per purpose, same entry on repeated calls, lazy construction)
+    // is identical either way.
+    #[tokio::test]
+    async fn distinct_states_per_purpose() {
+        let mut pool: HashMap<DecodePurpose, Arc<AsyncMutex<u32>>> = HashMap::new();
+        let final_state =
+            pool_get_or_insert(&mut pool, DecodePurpose::Final, || Ok::<_, ()>(1)).unwrap();
+        let partial_state =
+            pool_get_or_insert(&mut pool, DecodePurpose::Partial, || Ok::<_, ()>(2)).unwrap();
+
+        assert!(!Arc::ptr_eq(&final_state, &partial_state));
+        assert_eq!(*final_state.lock().await, 1);
+        assert_eq!(*partial_state.lock().await, 2);
+    }
+
+    #[tokio::test]
+    async fn same_state_on_repeated_calls() {
+        let mut pool: HashMap<DecodePurpose, Arc<AsyncMutex<u32>>> = HashMap::new();
+        let mut construct_calls = 0;
+
+        let first = pool_get_or_insert(&mut pool, DecodePurpose::Final, || {
+            construct_calls += 1;
+            Ok::<_, ()>(42)
+        })
+        .unwrap();
+        let second = pool_get_or_insert(&mut pool, DecodePurpose::Final, || {
+            construct_calls += 1;
+            Ok::<_, ()>(99) // would prove reuse if this ever got called again
+        })
+        .unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(construct_calls, 1, "constructor should only run once");
+        assert_eq!(*second.lock().await, 42);
+    }
+
+    #[test]
+    fn default_purpose_is_final() {
+        assert_eq!(DecodePurpose::default(), DecodePurpose::Final);
     }
 }
 

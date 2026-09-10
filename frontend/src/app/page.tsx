@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useRouter } from "next/navigation";
 import { listen } from "@tauri-apps/api/event";
@@ -30,6 +30,14 @@ import { RecordingHero } from "./_components/recording-page/RecordingHero";
 import { RecordingTopBar } from "./_components/recording-page/RecordingTopBar";
 import { LiveActionItemsBar } from "./_components/recording-page/LiveActionItemsBar";
 import { useLiveActionItems } from "@/hooks/useLiveActionItems";
+
+// Module-level guard (issue #51): the IndexedDB cleanup scans
+// (`deleteOldMeetings` / `deleteSavedMeetings`) are cheap housekeeping that
+// only needs to happen once per app session, not on every render/status
+// change that returns to idle. Lives outside the component so it survives
+// remounts of this page within the same app session (SPA navigation), and
+// resets naturally on a full app restart.
+let didRunSessionCleanupScans = false;
 
 export default function Home() {
   const router = useRouter();
@@ -80,36 +88,62 @@ export default function Home() {
   } = useTranscriptRecovery();
   void _isRecovering;
 
-  // Startup checks (cleanup + recovery dialog) — same intent as the
-  // previous version, just lifted into this composer.
+  // Tracks whether the previous idle-transition check found us in a
+  // stop-flow status, so the effect below can tell "just returned to idle
+  // after a recording stopped" (when a new recoverable meeting could have
+  // appeared) apart from any other re-render while already idle.
+  const wasInStopFlowRef = useRef(false);
+
+  // Startup checks (cleanup + recovery dialog). The two IndexedDB cleanup
+  // scans only need to run once per app session — they were previously
+  // re-running on every transition back to idle (issue #51). The
+  // recoverable-transcripts check also only needs to run once per session,
+  // *plus* right after a recording stops, since that's the only time a new
+  // recoverable meeting can appear.
   useEffect(() => {
+    const inStopFlow =
+      recordingState.isRecording ||
+      status === RecordingStatus.STOPPING ||
+      status === RecordingStatus.PROCESSING_TRANSCRIPTS ||
+      status === RecordingStatus.SAVING;
+
+    if (inStopFlow) {
+      wasInStopFlowRef.current = true;
+      return;
+    }
+
+    const justStoppedRecording = wasInStopFlowRef.current;
+    wasInStopFlowRef.current = false;
+
     (async () => {
       try {
-        if (
-          recordingState.isRecording ||
-          status === RecordingStatus.STOPPING ||
-          status === RecordingStatus.PROCESSING_TRANSCRIPTS ||
-          status === RecordingStatus.SAVING
-        ) {
-          return;
+        if (!didRunSessionCleanupScans) {
+          didRunSessionCleanupScans = true;
+          try {
+            await indexedDBService.deleteOldMeetings(7);
+          } catch (err) {
+            console.warn("Failed to clean up old meetings:", err);
+          }
+          try {
+            await indexedDBService.deleteSavedMeetings(24);
+          } catch (err) {
+            console.warn("Failed to clean up saved meetings:", err);
+          }
         }
-        try {
-          await indexedDBService.deleteOldMeetings(7);
-        } catch (err) {
-          console.warn("Failed to clean up old meetings:", err);
-        }
-        try {
-          await indexedDBService.deleteSavedMeetings(24);
-        } catch (err) {
-          console.warn("Failed to clean up saved meetings:", err);
-        }
-        const meetings = await checkForRecoverableTranscripts();
-        if (
-          meetings.length > 0 &&
-          !sessionStorage.getItem("recovery_dialog_shown")
-        ) {
-          setShowRecoveryDialog(true);
-          sessionStorage.setItem("recovery_dialog_shown", "true");
+
+        const alreadyCheckedThisSession = sessionStorage.getItem(
+          "recovery_check_done",
+        );
+        if (!alreadyCheckedThisSession || justStoppedRecording) {
+          sessionStorage.setItem("recovery_check_done", "true");
+          const meetings = await checkForRecoverableTranscripts();
+          if (
+            meetings.length > 0 &&
+            !sessionStorage.getItem("recovery_dialog_shown")
+          ) {
+            setShowRecoveryDialog(true);
+            sessionStorage.setItem("recovery_dialog_shown", "true");
+          }
         }
       } catch (err) {
         console.error("Startup checks failed:", err);

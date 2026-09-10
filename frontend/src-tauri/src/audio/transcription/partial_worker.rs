@@ -237,6 +237,7 @@ async fn decode_and_emit<R: Runtime>(
     let options = crate::whisper_engine::TranscribeOptions {
         max_threads: Some(max_threads),
         greedy: true,
+        purpose: crate::whisper_engine::DecodePurpose::Partial,
     };
     let (text, _conf, _partial) = engine
         .transcribe_audio_with_confidence_opts(windowed, language, None, options)

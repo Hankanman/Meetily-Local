@@ -37,6 +37,14 @@ pub struct RecordingPreferences {
     /// transcript is unaffected when off. Defaults on.
     #[serde(default = "default_true")]
     pub streaming_partials: bool,
+    /// Unload the Whisper model from memory after each recording stops
+    /// instead of keeping it resident (see #47). Off by default: keeping
+    /// the model loaded avoids paying the (multi-second, on some hardware
+    /// much longer) reload cost at the start of the next recording. Turn
+    /// this on to free the model's memory/VRAM between recordings instead,
+    /// at the cost of a reload next time.
+    #[serde(default)]
+    pub unload_model_after_recording: bool,
 }
 
 fn default_true() -> bool {
@@ -54,8 +62,18 @@ impl Default for RecordingPreferences {
             show_recording_notification: true,
             auto_refine: true,
             streaming_partials: true,
+            unload_model_after_recording: false,
         }
     }
+}
+
+/// Whether the Whisper model should be unloaded once a recording finishes,
+/// per issue #47. Pure decision function (no I/O) so it's unit-testable
+/// without a `RecordingPreferences` round-trip: defaults to `false` (keep
+/// the model resident across recordings) unless the user has opted into
+/// `unload_model_after_recording`.
+pub fn should_unload_after_stop(preferences: &RecordingPreferences) -> bool {
+    preferences.unload_model_after_recording
 }
 
 /// Get the default recordings folder (~/Documents/meetily-recordings)
@@ -267,4 +285,36 @@ pub async fn select_recording_folder<R: Runtime>(
     // when it's available in the Cargo.toml
     warn!("Folder selection not yet implemented - using dialog plugin");
     Ok(None)
+}
+
+#[cfg(test)]
+mod unload_after_stop_tests {
+    use super::{should_unload_after_stop, RecordingPreferences};
+
+    #[test]
+    fn defaults_to_keeping_model_loaded() {
+        let prefs = RecordingPreferences::default();
+        assert!(!prefs.unload_model_after_recording);
+        assert!(!should_unload_after_stop(&prefs));
+    }
+
+    #[test]
+    fn honors_opt_in_flag() {
+        let mut prefs = RecordingPreferences::default();
+        prefs.unload_model_after_recording = true;
+        assert!(should_unload_after_stop(&prefs));
+    }
+
+    #[test]
+    fn deserializes_missing_field_as_false() {
+        // Old preferences JSON predating this field should not suddenly
+        // start unloading the model.
+        let json = serde_json::json!({
+            "save_folder": "/tmp/x",
+            "auto_save": true,
+            "file_format": "mp4",
+        });
+        let prefs: RecordingPreferences = serde_json::from_value(json).unwrap();
+        assert!(!prefs.unload_model_after_recording);
+    }
 }

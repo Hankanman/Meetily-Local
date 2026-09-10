@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Pause, Play, Square } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -8,6 +8,7 @@ import { appDataDir } from "@tauri-apps/api/path";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
 import { useAudioLevels } from "@/hooks/useAudioLevels";
+import { useElapsedTime } from "@/hooks/useElapsedTime";
 import { SignalBars } from "@/components/AudioLevelMeter";
 import { Button } from "@/components/ui/button";
 
@@ -54,14 +55,10 @@ export function RecordingTopBar({
   const isPaused = recordingState.isPaused;
 
   const [startedAt] = useState(() => Date.now());
-  const [now, setNow] = useState(() => Date.now());
   const [pausing, setPausing] = useState(false);
   const [resuming, setResuming] = useState(false);
 
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, []);
+  const elapsed = useElapsedTime(startedAt);
 
   // Fall back to "default" when the user hasn't picked specific devices —
   // matches the hero's behaviour and ensures meters render even with the
@@ -144,7 +141,7 @@ export function RecordingTopBar({
           {isPaused ? "Paused" : "Recording"}
         </span>
         <span className="font-mono text-sm tabular-nums text-muted-foreground">
-          {formatElapsed(now - startedAt)}
+          {formatElapsed(elapsed)}
         </span>
       </div>
 

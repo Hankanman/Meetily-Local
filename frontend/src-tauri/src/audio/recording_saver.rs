@@ -1,6 +1,6 @@
 use anyhow::Result;
 use log::{error, info, warn};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::mpsc;
@@ -8,8 +8,8 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use super::audio_processing::create_meeting_folder;
 use super::common::{
-    write_metadata as common_write_metadata, write_transcripts_json as common_write_transcripts_json,
-    DeviceInfo, MeetingMetadata,
+    self, write_metadata as common_write_metadata, write_transcripts_json as common_write_transcripts_json,
+    DeviceInfo, MeetingMetadata, TRANSCRIPTS_JOURNAL_FILENAME,
 };
 use super::incremental_saver::IncrementalAudioSaver;
 use super::recording_state::AudioChunk;
@@ -34,6 +34,17 @@ pub struct RecordingSaver {
     // `stop_and_save` can wait for it to fully drain the channel (and write
     // every already-queued chunk) instead of racing it with a fixed sleep.
     accumulation_task: Option<tokio::task::JoinHandle<()>>,
+    // Sender side of the dedicated transcript journal writer task (issue
+    // #48). `add_transcript_segment` pushes every segment here instead of
+    // synchronously rewriting the whole transcripts.json on every call; the
+    // writer task appends it to transcripts.ndjson and periodically rebuilds
+    // transcripts.json in the background. `None` before `start_accumulation`
+    // sets up a meeting folder, and set back to `None` (closing the channel)
+    // once the writer task is stopped in `stop_and_save`/`discard_empty_session`.
+    journal_sender: Option<mpsc::UnboundedSender<TranscriptSegment>>,
+    // Handle to the journal writer task, joined (stop_and_save) or aborted
+    // (discard_empty_session) alongside dropping `journal_sender`.
+    journal_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl RecordingSaver {
@@ -47,6 +58,8 @@ impl RecordingSaver {
             chunk_receiver: None,
             is_saving: Arc::new(Mutex::new(false)),
             accumulation_task: None,
+            journal_sender: None,
+            journal_task: None,
         }
     }
 
@@ -106,11 +119,25 @@ impl RecordingSaver {
             );
         }
 
-        // NEW: Save incrementally to disk
-        if let Some(folder) = &self.meeting_folder {
-            if let Err(e) = self.write_transcripts_json(folder) {
-                warn!("Failed to write incremental transcript update: {}", e);
+        // Persist incrementally via the dedicated journal writer task
+        // (issue #48) rather than synchronously re-serialising and
+        // rewriting the whole transcripts.json here on every segment: this
+        // is a cheap, non-blocking channel send, and it's the writer task
+        // that appends the line to transcripts.ndjson and periodically (at
+        // most every 5s while dirty) rebuilds transcripts.json in the
+        // background.
+        if let Some(sender) = &self.journal_sender {
+            if sender.send(segment.clone()).is_err() {
+                warn!(
+                    "Transcript journal writer task is gone; segment {} not persisted to disk",
+                    segment.id
+                );
             }
+        } else if self.meeting_folder.is_some() {
+            warn!(
+                "No transcript journal writer available; segment {} not persisted to disk",
+                segment.id
+            );
         }
     }
 
@@ -284,10 +311,124 @@ impl RecordingSaver {
         // Write initial metadata.json
         self.write_metadata(&meeting_folder, &metadata)?;
 
+        // Start the dedicated transcript journal writer task (issue #48).
+        // Any writer left over from a previous session should already have
+        // been stopped by `stop_and_save`/`discard_empty_session`, but drop
+        // it defensively rather than leak a task talking to the old folder.
+        self.journal_sender = None;
+        if let Some(old_task) = self.journal_task.take() {
+            old_task.abort();
+        }
+        let (sender, task) =
+            Self::spawn_journal_writer(meeting_folder.clone(), self.transcript_segments.clone());
+        self.journal_sender = Some(sender);
+        self.journal_task = Some(task);
+
         self.meeting_folder = Some(meeting_folder);
         self.metadata = Some(metadata);
 
         Ok(())
+    }
+
+    /// Spawn the dedicated transcript journal writer task (issue #48).
+    ///
+    /// Owns the write side of `transcripts.ndjson`: every segment received
+    /// from `rx` is appended as one JSON line (never blocking a tokio
+    /// worker — the append itself runs on this task, off the caller's
+    /// path), and `transcripts.json` is rebuilt from `segments` (the same
+    /// `Arc<Mutex<Vec<TranscriptSegment>>>` `add_transcript_segment` already
+    /// keeps deduped/upserted) at most once every `DEBOUNCE` while dirty.
+    /// The task exits once `rx` closes (all senders dropped) — it does not
+    /// perform a final rebuild itself; the caller (`stop_and_save`) does
+    /// that explicitly after joining this task, so the "always write at
+    /// stop" guarantee doesn't depend on debounce timing.
+    fn spawn_journal_writer(
+        folder: PathBuf,
+        segments: Arc<Mutex<Vec<TranscriptSegment>>>,
+    ) -> (
+        mpsc::UnboundedSender<TranscriptSegment>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        const DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(5);
+
+        let (sender, mut receiver) = mpsc::unbounded_channel::<TranscriptSegment>();
+
+        let task = tokio::spawn(async move {
+            info!("Transcript journal writer task started for {}", folder.display());
+            let mut dirty = false;
+
+            loop {
+                tokio::select! {
+                    biased;
+
+                    maybe_segment = receiver.recv() => {
+                        match maybe_segment {
+                            Some(segment) => {
+                                if let Err(e) = common::append_transcript_journal_line(&folder, &segment).await {
+                                    warn!(
+                                        "Failed to append transcript journal line for {}: {}",
+                                        segment.id, e
+                                    );
+                                }
+                                dirty = true;
+                            }
+                            None => {
+                                info!("Transcript journal writer task ended (channel closed)");
+                                break;
+                            }
+                        }
+                    }
+
+                    _ = tokio::time::sleep(DEBOUNCE), if dirty => {
+                        Self::rebuild_transcripts_json(&folder, &segments).await;
+                        dirty = false;
+                    }
+                }
+            }
+        });
+
+        (sender, task)
+    }
+
+    /// Rebuild transcripts.json from the current in-memory segment set.
+    /// Used both by the journal writer task's debounced rebuild and, via
+    /// `write_transcripts_json`'s callers, at final save time.
+    async fn rebuild_transcripts_json(folder: &Path, segments: &Arc<Mutex<Vec<TranscriptSegment>>>) {
+        let mut segments_clone = match segments.lock() {
+            Ok(guard) => guard.clone(),
+            Err(e) => {
+                error!("Failed to lock transcript segments for debounced rebuild: {}", e);
+                return;
+            }
+        };
+        Self::sort_segments_chronologically(&mut segments_clone);
+
+        let folder = folder.to_path_buf();
+        let write_result =
+            tokio::task::spawn_blocking(move || common_write_transcripts_json(&folder, &segments_clone))
+                .await;
+        match write_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => warn!("Debounced transcripts.json rebuild failed: {}", e),
+            Err(e) => warn!("Debounced transcripts.json rebuild task panicked: {}", e),
+        }
+    }
+
+    /// Stop the transcript journal writer task, waiting (bounded) for it to
+    /// drain and append every already-queued segment before returning. Used
+    /// by `stop_and_save` so the journal on disk is complete before the
+    /// caller does the final `transcripts.json` rewrite from it.
+    async fn stop_journal_writer(&mut self) {
+        // Dropping the sender closes the channel, which is what lets the
+        // writer task's `receiver.recv()` return `None` and exit its loop.
+        self.journal_sender = None;
+        if let Some(task) = self.journal_task.take() {
+            match tokio::time::timeout(std::time::Duration::from_secs(5), task).await {
+                Ok(Ok(())) => info!("Transcript journal writer task drained cleanly"),
+                Ok(Err(e)) => warn!("Transcript journal writer task panicked: {}", e),
+                Err(_) => warn!("Timed out waiting for transcript journal writer task to drain"),
+            }
+        }
     }
 
     /// Write metadata.json to disk (atomic write with temp file, merging
@@ -404,6 +545,14 @@ impl RecordingSaver {
         self.meeting_folder = None;
         self.metadata = None;
         self.incremental_saver = None;
+        // Drop the sender (closing its channel) and abort the journal
+        // writer task rather than waiting for a graceful drain: this
+        // session produced no data and its folder is already gone, so
+        // there's nothing left for the writer to usefully flush.
+        self.journal_sender = None;
+        if let Some(task) = self.journal_task.take() {
+            task.abort();
+        }
         if let Ok(mut segments) = self.transcript_segments.lock() {
             segments.clear();
         }
@@ -418,8 +567,10 @@ impl RecordingSaver {
     /// — safe to silently delete rather than leaving it for crash recovery
     /// to offer — only when `.checkpoints/` holds no `audio_chunk_*` files
     /// (covers both the current `.f32` checkpoints and the legacy `.mp4`
-    /// ones) and `transcripts.json` is either absent or contains no
-    /// segments.
+    /// ones) and neither `transcripts.json` nor `transcripts.ndjson`
+    /// (issue #48: a session can have produced segments that only made it
+    /// into the journal, not yet into a debounced transcripts.json rewrite)
+    /// contains any segments.
     fn session_is_empty(meeting_folder: &std::path::Path) -> bool {
         let checkpoints_dir = meeting_folder.join(".checkpoints");
         let has_checkpoint_audio = match std::fs::read_dir(&checkpoints_dir) {
@@ -437,17 +588,13 @@ impl RecordingSaver {
             return false;
         }
 
-        let transcripts_path = meeting_folder.join("transcripts.json");
-        let has_transcript_segments = match std::fs::read_to_string(&transcripts_path) {
-            Ok(contents) => match serde_json::from_str::<serde_json::Value>(&contents) {
-                Ok(serde_json::Value::Array(segments)) => !segments.is_empty(),
-                // Any other shape (or an object wrapper) — treat non-empty
-                // content as "has data" rather than risk deleting real
-                // transcripts on a format we don't recognize.
-                Ok(other) => !other.is_null(),
-                Err(_) => true,
-            },
-            Err(_) => false,
+        let has_transcript_segments = match common::load_transcripts_from_folder(meeting_folder) {
+            Ok(segments) => !segments.is_empty(),
+            // A transcripts.json that exists but fails to parse — treat
+            // non-empty/unrecognized content as "has data" rather than risk
+            // deleting real transcripts on a format we don't recognize
+            // (mirrors the previous direct-read behavior here).
+            Err(_) => true,
         };
 
         !has_transcript_segments
@@ -500,12 +647,61 @@ impl RecordingSaver {
             }
         }
 
+        // Stop the transcript journal writer task and wait (bounded) for it
+        // to drain: every segment already queued gets appended to
+        // transcripts.ndjson before we replay the in-memory segment set
+        // into the final transcripts.json rewrite below (issue #48 —
+        // guarantees the "always write transcripts.json at stop" contract
+        // doesn't race the debounce timer).
+        self.stop_journal_writer().await;
+
+        // Save final transcripts.json with validation. Done unconditionally
+        // (regardless of whether audio auto-save is enabled below) since
+        // the debounced background rebuild may be up to 5s stale.
+        if let Some(folder) = self.meeting_folder.clone() {
+            if let Err(e) = self.write_transcripts_json(&folder) {
+                error!("❌ Failed to write final transcripts: {}", e);
+                return Err(format!("Failed to save transcripts: {}", e));
+            }
+
+            // Verify transcripts were written correctly
+            let transcript_path = folder.join("transcripts.json");
+            if !transcript_path.exists() {
+                error!(
+                    "❌ Transcript file was not created at: {}",
+                    transcript_path.display()
+                );
+                return Err("Transcript file verification failed".to_string());
+            }
+            info!(
+                "✅ Transcripts saved and verified at: {}",
+                transcript_path.display()
+            );
+
+            // The journal is now fully superseded by this fresh
+            // transcripts.json — remove it so a stale ndjson never shadows
+            // the just-written json for a later reader (see
+            // `common::load_transcripts_from_folder`). Deliberately left in
+            // place on every earlier error-return above, so crash recovery
+            // can still replay it if something above failed.
+            let journal_path = folder.join(TRANSCRIPTS_JOURNAL_FILENAME);
+            if journal_path.exists() {
+                if let Err(e) = std::fs::remove_file(&journal_path) {
+                    warn!(
+                        "Failed to remove transcript journal {}: {}",
+                        journal_path.display(),
+                        e
+                    );
+                }
+            }
+        }
+
         // Check if incremental saver exists (indicates auto_save was enabled)
         let should_save_audio = self.incremental_saver.is_some();
 
         if !should_save_audio {
             info!("⚠️  No audio saver initialized (auto-save was disabled) - skipping audio finalization");
-            info!("✅ Transcripts and metadata already saved incrementally");
+            info!("✅ Transcripts and metadata already saved");
             return Ok(None);
         }
 
@@ -526,28 +722,6 @@ impl RecordingSaver {
             error!("No incremental saver initialized - cannot save recording");
             return Err("No incremental saver initialized".to_string());
         };
-
-        // Save final transcripts.json with validation
-        if let Some(folder) = &self.meeting_folder {
-            if let Err(e) = self.write_transcripts_json(folder) {
-                error!("❌ Failed to write final transcripts: {}", e);
-                return Err(format!("Failed to save transcripts: {}", e));
-            }
-
-            // Verify transcripts were written correctly
-            let transcript_path = folder.join("transcripts.json");
-            if !transcript_path.exists() {
-                error!(
-                    "❌ Transcript file was not created at: {}",
-                    transcript_path.display()
-                );
-                return Err("Transcript file verification failed".to_string());
-            }
-            info!(
-                "✅ Transcripts saved and verified at: {}",
-                transcript_path.display()
-            );
-        }
 
         // Update metadata to completed status with actual recording duration
         if let (Some(folder), Some(mut metadata)) = (&self.meeting_folder, self.metadata.clone()) {
@@ -618,20 +792,12 @@ impl RecordingSaver {
 
     /// Sort transcript segments chronologically by `audio_start_time`, using
     /// `sequence_id` as a tie-breaker when the start time is equal or absent.
-    /// See `write_transcripts_json` for why this ordering matters.
+    /// See `write_transcripts_json` for why this ordering matters. Thin
+    /// wrapper over `common::sort_segments_chronologically` so it's shared
+    /// with journal-replay callers (kept as an associated fn here since the
+    /// existing tests below call it as `RecordingSaver::sort_segments_chronologically`).
     fn sort_segments_chronologically(segments: &mut [TranscriptSegment]) {
-        segments.sort_by(|a, b| {
-            let a_time = a.audio_start_time.unwrap_or(f64::MAX);
-            let b_time = b.audio_start_time.unwrap_or(f64::MAX);
-            a_time
-                .partial_cmp(&b_time)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    a.sequence_id
-                        .unwrap_or(u64::MAX)
-                        .cmp(&b.sequence_id.unwrap_or(u64::MAX))
-                })
-        });
+        common::sort_segments_chronologically(segments);
     }
 }
 
@@ -822,5 +988,77 @@ mod tests {
     fn discard_empty_session_is_a_no_op_with_no_meeting_folder() {
         let mut saver = RecordingSaver::new();
         assert!(!saver.discard_empty_session());
+    }
+
+    // ---- transcript journal writer (issue #48) ----------------------------
+
+    #[tokio::test]
+    async fn journal_writer_drains_queued_segments_and_stop_removes_the_journal_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let meeting_folder = tmp.path().join("Meeting");
+        std::fs::create_dir_all(&meeting_folder).unwrap();
+
+        let mut saver = RecordingSaver::new();
+        saver.meeting_folder = Some(meeting_folder.clone());
+        let (sender, task) = RecordingSaver::spawn_journal_writer(
+            meeting_folder.clone(),
+            saver.transcript_segments.clone(),
+        );
+        saver.journal_sender = Some(sender);
+        saver.journal_task = Some(task);
+
+        // add_transcript_segment both updates the in-memory (deduped) vec
+        // and enqueues the segment for the journal writer task.
+        saver.add_transcript_segment(segment("seg-1", Some(1.0), Some(0)));
+        saver.add_transcript_segment(segment("seg-2", Some(2.0), Some(1)));
+
+        // Draining (as stop_and_save does) waits for every queued segment
+        // to actually land in transcripts.ndjson before returning.
+        saver.stop_journal_writer().await;
+
+        let journal_path = meeting_folder.join(common::TRANSCRIPTS_JOURNAL_FILENAME);
+        assert!(journal_path.exists(), "journal should exist after draining");
+        let contents = std::fs::read_to_string(&journal_path).unwrap();
+        assert!(contents.contains("seg-1"));
+        assert!(contents.contains("seg-2"));
+
+        // Mirror stop_and_save's final-write step: rewrite transcripts.json
+        // from the (already up to date) in-memory vec, then remove the
+        // now-superseded journal — exactly what stop_and_save does after a
+        // successful final write.
+        saver.write_transcripts_json(&meeting_folder).unwrap();
+        assert!(meeting_folder.join("transcripts.json").exists());
+        std::fs::remove_file(&journal_path).unwrap();
+
+        assert!(
+            !journal_path.exists(),
+            "journal should be removed once transcripts.json is finalized"
+        );
+
+        // A reader loading the folder afterwards sees the same two segments
+        // purely from transcripts.json, with no journal left to consult.
+        let loaded = common::load_transcripts_from_folder(&meeting_folder).unwrap();
+        assert_eq!(loaded.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn discard_empty_session_stops_the_journal_writer_without_hanging() {
+        let tmp = tempfile::tempdir().unwrap();
+        let meeting_folder = tmp.path().join("Meeting");
+        std::fs::create_dir_all(meeting_folder.join(".checkpoints")).unwrap();
+
+        let mut saver = RecordingSaver::new();
+        saver.meeting_folder = Some(meeting_folder.clone());
+        let (sender, task) = RecordingSaver::spawn_journal_writer(
+            meeting_folder.clone(),
+            saver.transcript_segments.clone(),
+        );
+        saver.journal_sender = Some(sender);
+        saver.journal_task = Some(task);
+
+        assert!(saver.discard_empty_session());
+        assert!(saver.journal_sender.is_none());
+        assert!(saver.journal_task.is_none());
+        assert!(!meeting_folder.exists());
     }
 }

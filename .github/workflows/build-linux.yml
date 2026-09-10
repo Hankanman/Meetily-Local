@@ -48,8 +48,9 @@ concurrency:
 env:
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
-  WHISPER_NO_AVX: ON
-  WHISPER_NO_AVX2: ON
+  # linuxdeploy's bundled `strip` chokes on SHT_RELR sections in modern libs
+  # (same workaround as build.sh); the release profile already strips symbols.
+  NO_STRIP: 1
 
 jobs:
   build-linux:
@@ -87,13 +88,11 @@ jobs:
 
           # Determine bundle arguments
           BUNDLE_TYPE="${{ github.event.inputs.bundle-type }}"
+          # AppImage is the only supported bundle: deb/rpm do not carry
+          # libsherpa-onnx-c-api.so and fail on a clean host (see
+          # docs/building_in_linux.md). Keep the input for experiments only.
           if [[ "$BUNDLE_TYPE" == "all" ]] || [[ -z "$BUNDLE_TYPE" ]]; then
-            # Default based on Ubuntu version
-            if [[ "${{ github.event.inputs.ubuntu-version }}" == "ubuntu-24.04" ]]; then
-              BUNDLES="appimage,rpm"
-            else
-              BUNDLES="deb"
-            fi
+            BUNDLES="appimage"
           else
             BUNDLES="$BUNDLE_TYPE"
           fi
@@ -144,7 +143,7 @@ jobs:
         if: github.event.inputs.ubuntu-version == 'ubuntu-24.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev \
+          sudo apt-get install -y libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libpipewire-0.3-dev libclang-dev meson ninja-build \
             libwebkit2gtk-4.1-0=2.44.0-2 \
             libwebkit2gtk-4.1-dev=2.44.0-2 \
             libjavascriptcoregtk-4.1-0=2.44.0-2 \
@@ -156,25 +155,7 @@ jobs:
         if: github.event.inputs.ubuntu-version == 'ubuntu-22.04' || github.event.inputs.ubuntu-version == ''
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev
-
-      - name: Prepare Vulkan SDK (Ubuntu 24.04)
-        if: github.event.inputs.ubuntu-version == 'ubuntu-24.04'
-        run: |
-          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-1.3.290-noble.list https://packages.lunarg.com/vulkan/1.3.290/lunarg-vulkan-1.3.290-noble.list
-          sudo apt update
-          sudo apt install vulkan-sdk -y
-          sudo apt-get install -y mesa-vulkan-drivers
-
-      - name: Prepare Vulkan SDK (Ubuntu 22.04)
-        if: github.event.inputs.ubuntu-version == 'ubuntu-22.04' || github.event.inputs.ubuntu-version == ''
-        run: |
-          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-1.3.290-jammy.list https://packages.lunarg.com/vulkan/1.3.290/lunarg-vulkan-1.3.290-jammy.list
-          sudo apt update
-          sudo apt install vulkan-sdk -y
-          sudo apt-get install -y mesa-vulkan-drivers
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libpipewire-0.3-dev libclang-dev meson ninja-build
 
       - name: Install FUSE for AppImage
         run: |
@@ -198,10 +179,21 @@ jobs:
           echo "Copied llama-helper to frontend/src-tauri/binaries/"
           ls -la frontend/src-tauri/binaries/
 
+      - name: Cache FFmpeg binary
+        uses: actions/cache@v4
+        with:
+          path: frontend/src-tauri/binaries/ffmpeg-*
+          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # sherpa-onnx-sys drops libsherpa-onnx-c-api.so into the cargo output
+          # dir without a RUNPATH on the binary; linuxdeploy needs this to find
+          # and bundle it (same as build.sh). Without it the AppImage is either
+          # missing the lib or truncated (issue #3).
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/x86_64-unknown-linux-gnu/release:${{ github.workspace }}/target/release
           # Tauri updater signing (ALWAYS enabled for .sig files)
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -218,6 +210,20 @@ jobs:
         run: |
           echo "Build artifacts:"
           find target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle -type f
+          # A bundling failure can leave a tiny/empty AppImage behind (issue #3).
+          # Refuse to ship anything implausibly small or missing sherpa-onnx.
+          for f in target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/appimage/*.AppImage; do
+            [ -f "$f" ] || { echo "::error::no AppImage produced"; exit 1; }
+            size=$(stat -c%s "$f")
+            echo "$f: $size bytes"
+            if [ "$size" -lt 50000000 ]; then echo "::error::AppImage is only $size bytes"; exit 1; fi
+            chmod +x "$f"
+            (cd "$(dirname "$f")" && "./$(basename "$f")" --appimage-extract >/dev/null 2>&1) || { echo "::error::AppImage does not extract"; exit 1; }
+            if ! find "$(dirname "$f")/squashfs-root" -name 'libsherpa-onnx-c-api.so*' | grep -q .; then
+              echo "::error::libsherpa-onnx-c-api.so is not bundled in the AppImage"; exit 1
+            fi
+            rm -rf "$(dirname "$f")/squashfs-root"
+          done
 
       - name: Remove libwayland-client.so from AppImage
         if: contains(steps.build-profile.outputs.args, 'appimage')

@@ -16,14 +16,45 @@ selection, the gnarly Fedora/CUDA build-environment quirks, and the
 sudo apt update
 sudo apt install build-essential cmake git \
   libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-  libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev
+  libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev \
+  libpipewire-0.3-dev libclang-dev meson ninja-build
 
 # Fedora/RHEL
-sudo dnf install gcc-c++ cmake git llvm openmp-devel
+sudo dnf install gcc-c++ cmake git llvm openmp-devel \
+  webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel patchelf \
+  alsa-lib-devel openblas-devel pipewire-devel clang-devel meson ninja-build
 
 # Arch Linux
-sudo pacman -S base-devel cmake git
+sudo pacman -S base-devel cmake git webkit2gtk-4.1 libappindicator-gtk3 \
+  librsvg patchelf alsa-lib openblas pipewire clang meson ninja
 ```
+
+`libpipewire` is the audio capture backend (PipeWire ≥ 0.3.44 at runtime),
+`libclang` is needed by its Rust bindings, and `meson` + `ninja` build the
+bundled WebRTC echo-cancellation library (the app no longer needs the system
+`webrtc-audio-processing-2` package).
+
+### Building offline or behind a proxy
+
+Three things are fetched at build time: whisper.cpp sources (via
+`whisper-rs-sys`), a prebuilt `sherpa-onnx` archive (via `sherpa-onnx-sys`),
+and a static `ffmpeg` binary (via `build.rs`). Cargo's registry proxy settings
+cover the first; the other two can be pre-seeded:
+
+```bash
+# sherpa-onnx: download the archive the sys crate expects and point it there
+mkdir -p ~/.cache/sherpa-onnx
+curl -L -o ~/.cache/sherpa-onnx/sherpa-onnx-v1.13.7-linux-x64-shared-lib.tar.bz2 \
+  https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.7/sherpa-onnx-v1.13.7-linux-x64-shared-lib.tar.bz2
+export SHERPA_ONNX_ARCHIVE_DIR=~/.cache/sherpa-onnx
+
+# ffmpeg: drop a static binary at this path and build.rs will skip the download
+cp /path/to/ffmpeg frontend/src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu
+```
+
+The exact sherpa-onnx version is the one pinned in `Cargo.lock`
+(`sherpa-onnx-sys`); once built, the archive is cached under
+`target/sherpa-onnx-prebuilt/`.
 
 You'll also need [pnpm](https://pnpm.io/installation) and a Rust toolchain
 (`rustup`).
@@ -177,8 +208,12 @@ embeds all native libs via linuxdeploy.
   bundled `strip`).
 
 ### `Could not find dependency: libsherpa-onnx-c-api.so`
-- **Fix:** Already handled — `build.sh` points linuxdeploy at
-  `target/release` via `LD_LIBRARY_PATH` so it can find and bundle the lib.
+- **Fix:** Already handled — `build.sh` (and the CI workflows) point
+  linuxdeploy at `target/release` via `LD_LIBRARY_PATH` so it can find and
+  bundle the lib. If you invoke `cargo tauri build` by hand, export it
+  yourself; a build without it produces an AppImage that is missing the
+  library or is truncated to a few bytes. CI now refuses to upload an
+  AppImage under 50 MB or without the library inside.
 
 ### Build works but no GPU acceleration
 - **Check:** `nvidia-smi` (NVIDIA) should work before `./build.sh` (or
