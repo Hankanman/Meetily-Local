@@ -33,6 +33,31 @@ interface UseRecordingStopReturn {
 }
 
 /**
+ * Shared across every `useRecordingStop()` call site (e.g. `page.tsx`'s
+ * button-driven instance and the app-wide `RecordingPostProcessingProvider`
+ * instance) so that a stop already being handled by one instance is visible
+ * to the others — in particular, so the provider's tray-stop fallback timer
+ * (issue #17 gap) can tell a button-initiated stop, which calls
+ * `handleRecordingStop` directly and never waits for
+ * `recording-stop-complete`, apart from a tray/global-shortcut stop that
+ * only the provider's `recording-stop-complete` listener (or its fallback)
+ * will handle. A plain module-scoped mutable object (rather than a
+ * `useRef` local to each hook call) keeps this one flag instead of each
+ * instance tracking its own, which would let them race each other.
+ */
+export const isStopInProgressRef: { current: boolean } = { current: false };
+
+/**
+ * Set for the duration of `handleRecordingStop`'s execution (across every
+ * `useRecordingStop()` instance, for the same reason as
+ * `isStopInProgressRef` above). Lets `RecordingStateContext`'s watchdog
+ * (issue #17 gap) tell "post-processing is legitimately still running" apart
+ * from "post-processing never ran and the UI is stuck" without needing its
+ * own reference to whichever hook instance is doing the work.
+ */
+export const isPostProcessingRef: { current: boolean } = { current: false };
+
+/**
  * Custom hook for managing recording stop lifecycle.
  * Handles the complex stop sequence: transcription wait → buffer flush → SQLite save → navigation.
  *
@@ -77,8 +102,11 @@ export function useRecordingStop(
 
   const router = useRouter();
 
-  // Guard to prevent duplicate/concurrent stop calls (e.g., from UI and tray simultaneously)
-  const stopInProgressRef = useRef(false);
+  // Guard to prevent duplicate/concurrent stop calls (e.g., from UI and tray
+  // simultaneously, or a button-initiated stop racing the provider's
+  // tray-stop fallback timer). Module-scoped and shared across instances —
+  // see `isStopInProgressRef` above.
+  const stopInProgressRef = isStopInProgressRef;
 
   // Promise to track recording-stopped event data (fixes race condition with recording-stop-complete)
   const recordingStoppedDataRef = useRef<Promise<void> | null>(null);
@@ -149,6 +177,7 @@ export function useRecordingStop(
         return;
       }
       stopInProgressRef.current = true;
+      isPostProcessingRef.current = true;
 
       // Set status to STOPPING immediately
       setStatus(RecordingStatus.STOPPING);
@@ -458,14 +487,16 @@ export function useRecordingStop(
         // isRecording already set to false at function start
         setIsRecordingDisabled(false);
       } finally {
-        // Always reset the guard flag when done
+        // Always reset the guard flags when done
         stopInProgressRef.current = false;
+        isPostProcessingRef.current = false;
       }
     },
     [
       setIsRecording,
       setIsRecordingDisabled,
       setStatus,
+      stopInProgressRef,
       transcriptsRef,
       flushBuffer,
       clearTranscripts,

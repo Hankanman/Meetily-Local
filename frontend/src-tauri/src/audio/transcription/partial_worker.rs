@@ -118,6 +118,18 @@ pub fn start_partial_decode_task<R: Runtime>(
         // `whisper_engine::lease`.
         let _live_engine_lease = crate::whisper_engine::LIVE_ENGINE_LEASE.acquire_live();
 
+        // Reduced thread budget for partial decodes (issue #26): partials
+        // run concurrently with the final worker on the same Whisper
+        // context, so on CPU-only hardware giving them the full adaptive
+        // thread count starves the authoritative path. Computed once here
+        // (hardware doesn't change mid-recording) and applied to every
+        // decode via `TranscribeOptions::max_threads`.
+        let adaptive_threads = crate::audio::HardwareProfile::detect()
+            .get_whisper_config()
+            .max_threads
+            .unwrap_or(4) as i32;
+        let partial_max_threads = (adaptive_threads / 2).max(1);
+
         let mut states: HashMap<DeviceType, SourceState> = HashMap::new();
 
         while let Some(mut chunk) = receiver.recv().await {
@@ -146,7 +158,9 @@ pub fn start_partial_decode_task<R: Runtime>(
             }
 
             for (source, chunk) in latest {
-                if let Err(e) = decode_and_emit(&app, &mut states, source, chunk).await {
+                if let Err(e) =
+                    decode_and_emit(&app, &mut states, source, chunk, partial_max_threads).await
+                {
                     debug!("partial decode skipped for {:?}: {}", source, e);
                 }
             }
@@ -185,6 +199,7 @@ async fn decode_and_emit<R: Runtime>(
     states: &mut HashMap<DeviceType, SourceState>,
     source: DeviceType,
     chunk: PartialAudioChunk,
+    max_threads: i32,
 ) -> Result<(), String> {
     // Grab the shared whisper engine (same instance the final worker uses).
     let engine = {
@@ -206,22 +221,25 @@ async fn decode_and_emit<R: Runtime>(
     // us in `chunk.samples` — decoding the full buffer on every ~1.2s tick
     // is O(n^2) over an utterance's lifetime.
     //
-    // NOTE on thread budget: the task description calls for running partial
-    // decodes with a reduced thread count (e.g. max_threads/2) alongside the
-    // final worker's full budget, to leave the authoritative path headroom.
-    // `WhisperEngine::transcribe_audio_with_confidence` does not currently
-    // accept a thread-count override (it derives threads from
-    // `HardwareProfile::detect().get_whisper_config()` internally) and
-    // `whisper_engine.rs` is owned by another workstream, so that part is
-    // not implemented here — see the caveat in the handoff notes. The
-    // queue-depth skip below (`SKIP_PARTIAL_QUEUE_DEPTH`) is the mitigation
-    // actually in place: once the final path is behind, partials stop
-    // competing with it for CPU at all.
+    // Thread budget (issue #26): partials run concurrently with the final
+    // worker on the same Whisper context, so they're capped at half the
+    // hardware-adaptive thread count (computed once by the caller) — this
+    // leaves the authoritative final path headroom on CPU-only hardware.
+    // The queue-depth skip above (`SKIP_PARTIAL_QUEUE_DEPTH`) is the other
+    // half of the mitigation: once the final path is behind, partials stop
+    // competing with it for CPU entirely.
     let windowed: Vec<f32> = sliding_window(&chunk.samples, PARTIAL_WINDOW_SAMPLES).to_vec();
     // No context prompt: a partial is a fresh best-effort decode of the
     // in-progress utterance; cross-segment context is a final-path concern.
+    // `greedy: true` skips beam search — partials are discarded previews,
+    // not the committed transcript, so the speed win is worth the lower
+    // per-decode quality here.
+    let options = crate::whisper_engine::TranscribeOptions {
+        max_threads: Some(max_threads),
+        greedy: true,
+    };
     let (text, _conf, _partial) = engine
-        .transcribe_audio_with_confidence(windowed, language, None)
+        .transcribe_audio_with_confidence_opts(windowed, language, None, options)
         .await
         .map_err(|e| e.to_string())?;
 

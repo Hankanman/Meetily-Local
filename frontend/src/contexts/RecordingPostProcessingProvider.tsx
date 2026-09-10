@@ -3,8 +3,17 @@
 import React, { useCallback, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
-import { useRecordingStop } from "@/hooks/useRecordingStop";
+import {
+  useRecordingStop,
+  isStopInProgressRef,
+} from "@/hooks/useRecordingStop";
 import { recordingService } from "@/services/recordingService";
+
+// How long to wait for `recording-stop-complete` after `recording-stopped`
+// before assuming the event was missed and running post-processing anyway
+// (issue #17 gap: a stuck STOPPING state when a tray-initiated stop's
+// `recording-stop-complete` event never arrives).
+const STOP_COMPLETE_FALLBACK_MS = 4000;
 
 /**
  * RecordingPostProcessingProvider
@@ -52,13 +61,27 @@ export function RecordingPostProcessingProvider({
     handleRecordingStopRef.current = handleRecordingStop;
   });
 
-  useEffect(() => {
-    let unlistenFn: (() => void) | undefined;
+  // Guards the fallback timer below against double-running post-processing:
+  // true once this stop's post-processing has either been kicked off by the
+  // real `recording-stop-complete` event or by the fallback timer itself.
+  const completeHandledRef = useRef(true);
+  const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    const setupListener = async () => {
+  const clearFallbackTimer = useCallback(() => {
+    if (fallbackTimerRef.current) {
+      clearTimeout(fallbackTimerRef.current);
+      fallbackTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    let unlistenComplete: (() => void) | undefined;
+    let unlistenStopped: (() => void) | undefined;
+
+    const setupListeners = async () => {
       try {
         // Listen for recording-stop-complete event from Rust
-        unlistenFn = await listen<boolean>(
+        unlistenComplete = await listen<boolean>(
           "recording-stop-complete",
           (event) => {
             console.log(
@@ -66,32 +89,76 @@ export function RecordingPostProcessingProvider({
               event.payload,
             );
 
+            clearFallbackTimer();
+            if (completeHandledRef.current) {
+              // Already handled (e.g. the fallback timer beat this event,
+              // or a button-initiated stop already ran directly) - don't
+              // run post-processing twice.
+              return;
+            }
+            completeHandledRef.current = true;
+
             // Call the post-processing handler
             // event.payload is the callApi boolean (true for normal stops)
             handleRecordingStopRef.current(event.payload);
           },
         );
 
+        // Arm a fallback: if a stop was initiated somewhere this provider
+        // doesn't directly drive (tray, global shortcut) and
+        // `recording-stop-complete` never arrives, run post-processing
+        // anyway after a short grace period instead of leaving the app
+        // stuck in STOPPING forever (issue #17 gap).
+        unlistenStopped = await listen("recording-stopped", () => {
+          if (isStopInProgressRef.current) {
+            // A stop is already being handled locally (e.g. a
+            // button-initiated stop that calls handleRecordingStop
+            // directly, without waiting for recording-stop-complete at
+            // all) - nothing to fall back for.
+            return;
+          }
+
+          clearFallbackTimer();
+          completeHandledRef.current = false;
+          fallbackTimerRef.current = setTimeout(() => {
+            fallbackTimerRef.current = null;
+            if (completeHandledRef.current || isStopInProgressRef.current) {
+              return;
+            }
+            completeHandledRef.current = true;
+            console.warn(
+              "[RecordingPostProcessing] recording-stop-complete not received within",
+              STOP_COMPLETE_FALLBACK_MS,
+              "ms of recording-stopped - running post-processing fallback",
+            );
+            handleRecordingStopRef.current(true);
+          }, STOP_COMPLETE_FALLBACK_MS);
+        });
+
         console.log(
-          "[RecordingPostProcessing] Event listener set up successfully",
+          "[RecordingPostProcessing] Event listeners set up successfully",
         );
       } catch (error) {
         console.error(
-          "[RecordingPostProcessing] Failed to set up event listener:",
+          "[RecordingPostProcessing] Failed to set up event listeners:",
           error,
         );
       }
     };
 
-    setupListener();
+    setupListeners();
 
     return () => {
-      if (unlistenFn) {
-        console.log("[RecordingPostProcessing] Cleaning up event listener");
-        unlistenFn();
+      clearFallbackTimer();
+      if (unlistenComplete) {
+        console.log("[RecordingPostProcessing] Cleaning up event listeners");
+        unlistenComplete();
+      }
+      if (unlistenStopped) {
+        unlistenStopped();
       }
     };
-  }, []);
+  }, [clearFallbackTimer]);
 
   // Surface fatal recording errors (issue #24). The backend auto-stops via
   // the full stop flow when this fires, so the subsequent
@@ -118,7 +185,28 @@ export function RecordingPostProcessingProvider({
 
     setupErrorListener();
 
+    let unlistenWarning: (() => void) | undefined;
+    const setupWarningListener = async () => {
+      try {
+        unlistenWarning = await recordingService.onTranscriptionWarning(
+          (message) => {
+            console.warn("[RecordingPostProcessing] transcription-warning:", message);
+            toast.warning(message);
+          },
+        );
+      } catch (error) {
+        console.error(
+          "[RecordingPostProcessing] Failed to set up transcription-warning listener:",
+          error,
+        );
+      }
+    };
+    setupWarningListener();
+
     return () => {
+      if (unlistenWarning) {
+        unlistenWarning();
+      }
       if (unlistenError) {
         unlistenError();
       }

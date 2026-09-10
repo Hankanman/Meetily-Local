@@ -9,7 +9,21 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
+import { toast } from "sonner";
 import { recordingService } from "@/services/recordingService";
+import { isPostProcessingRef } from "@/hooks/useRecordingStop";
+
+// Watchdog (issue #17 gap): if we've been sitting in a stop-flow status
+// (STOPPING / PROCESSING_TRANSCRIPTS / SAVING) for longer than this while
+// the backend confirms it's fully idle (`is_recording=false`,
+// `is_finalising=false`) and no post-processing is actually running
+// locally, assume the frontend missed whatever event was supposed to move
+// it out of that status and force it back to IDLE rather than leaving the
+// Start button hidden forever. Kept long (30s) and gated on
+// `isPostProcessingRef` so it never fires during a legitimate save - the
+// full transcription-wait + DB-save flow can itself take tens of seconds,
+// but keeps that ref true the whole time.
+const WATCHDOG_STUCK_TIMEOUT_MS = 30000;
 
 /**
  * Recording state synchronized with backend
@@ -105,6 +119,20 @@ export function RecordingStateProvider({
   // rather than closing over syncWithBackend directly).
   const syncWithBackendRef = useRef<() => Promise<void>>(async () => {});
 
+  // Mirrors state.status for syncWithBackend's watchdog check below, which
+  // needs the latest status without taking a `state` dependency (that would
+  // recreate syncWithBackend, and therefore the polling interval, on every
+  // status change).
+  const statusRef = useRef(state.status);
+  useEffect(() => {
+    statusRef.current = state.status;
+  }, [state.status]);
+
+  // Timestamp of when the watchdog condition (stuck in a stop-flow status
+  // while the backend reports fully idle) was first observed; null while
+  // not currently stuck. Reset whenever the condition stops holding.
+  const watchdogStuckSinceRef = useRef<number | null>(null);
+
   // NEW: Status setter with logging
   const setStatus = useCallback(
     (status: RecordingStatus, message?: string) => {
@@ -168,6 +196,12 @@ export function RecordingStateProvider({
         isBackendFinalising: isFinalising,
       }));
 
+      const inStopFlow = [
+        RecordingStatus.STOPPING,
+        RecordingStatus.PROCESSING_TRANSCRIPTS,
+        RecordingStatus.SAVING,
+      ].includes(statusRef.current);
+
       // Keep polling alive through the finalising window even after
       // `recording-stopped` has already fired (backend is_recording flips
       // false ~100ms into a stop, well before the multi-second finalise
@@ -175,13 +209,54 @@ export function RecordingStateProvider({
       // and finalising have cleared. This is what lets a fresh window/tab
       // that mounts mid-finalise, or this window if it missed the
       // recording-stopped event's stopPolling() race, still observe the
-      // window (issue #35).
-      if (backendState.is_recording || isFinalising) {
+      // window (issue #35). Also keep polling while `status` itself is
+      // still in the stop-flow lifecycle even after the backend goes fully
+      // idle, so the watchdog below gets the repeated ticks it needs to
+      // measure how long it's been stuck (issue #17 gap) - it stops polling
+      // itself once it fires.
+      if (backendState.is_recording || isFinalising || inStopFlow) {
         if (!pollingIntervalRef.current) {
           startPolling();
         }
       } else {
         stopPolling();
+      }
+
+      // Watchdog: the frontend is sitting in a stop-flow status but the
+      // backend says recording+finalising are both done, and no
+      // post-processing is actually running locally to move it the rest of
+      // the way to COMPLETED/IDLE. If that holds for longer than the
+      // timeout, assume whatever event was supposed to drive that
+      // transition (recording-stop-complete, its fallback, ...) was lost
+      // and force IDLE ourselves rather than leaving the Start button
+      // hidden forever.
+      if (inStopFlow && !backendState.is_recording && !isFinalising && !isPostProcessingRef.current) {
+        if (watchdogStuckSinceRef.current === null) {
+          watchdogStuckSinceRef.current = Date.now();
+        } else if (
+          Date.now() - watchdogStuckSinceRef.current >
+          WATCHDOG_STUCK_TIMEOUT_MS
+        ) {
+          console.warn(
+            "[RecordingStateContext] Watchdog: stuck in",
+            statusRef.current,
+            "for over",
+            WATCHDOG_STUCK_TIMEOUT_MS,
+            "ms while backend reports idle and no post-processing is running - forcing IDLE",
+          );
+          watchdogStuckSinceRef.current = null;
+          setState((prev) => ({
+            ...prev,
+            status: RecordingStatus.IDLE,
+            statusMessage: undefined,
+          }));
+          toast.error(
+            "Recording finished; the transcript may need recovery from the Recoverable meetings dialog",
+          );
+          stopPolling();
+        }
+      } else {
+        watchdogStuckSinceRef.current = null;
       }
 
       console.log("[RecordingStateContext] Synced with backend:", backendState);

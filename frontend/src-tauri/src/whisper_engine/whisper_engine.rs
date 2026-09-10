@@ -25,6 +25,37 @@ pub enum ModelStatus {
     },
 }
 
+/// Per-call overrides for `transcribe_audio_with_confidence_opts`.
+///
+/// Defaults (`TranscribeOptions::default()`) reproduce the historical
+/// behavior of `transcribe_audio_with_confidence`: full adaptive thread
+/// budget, beam search at the hardware-adaptive beam size.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TranscribeOptions {
+    /// Upper bound on the number of whisper threads to use for this call.
+    /// The effective thread count is `min(adaptive_default, max_threads)`,
+    /// floored at 1 — see `effective_threads`. `None` uses the full
+    /// hardware-adaptive default.
+    pub max_threads: Option<i32>,
+    /// Use greedy (beam_size 1, no patience search) sampling instead of the
+    /// hardware-adaptive beam size. Intended for streaming partial decodes,
+    /// which are discarded previews, not the committed transcript — greedy
+    /// decoding is faster and the lower quality is acceptable there.
+    pub greedy: bool,
+}
+
+/// Cap `default` (the hardware-adaptive thread count) at `requested`, if
+/// given, flooring the result at 1 so a caller can never request zero or
+/// negative threads. Pure function so the cap logic is unit-testable
+/// without spinning up a whisper context.
+fn effective_threads(default: i32, requested: Option<i32>) -> i32 {
+    let capped = match requested {
+        Some(requested) => default.min(requested),
+        None => default,
+    };
+    capped.max(1)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelInfo {
     pub name: String,
@@ -643,6 +674,31 @@ impl WhisperEngine {
         language: Option<String>,
         context_prompt: Option<String>,
     ) -> Result<(String, f32, bool)> {
+        self.transcribe_audio_with_confidence_opts(
+            audio_data,
+            language,
+            context_prompt,
+            TranscribeOptions::default(),
+        )
+        .await
+    }
+
+    /// Same as `transcribe_audio_with_confidence`, with per-call overrides
+    /// (thread budget cap, greedy sampling) via `options`. See
+    /// `TranscribeOptions` for details.
+    ///
+    /// Added to give the streaming partial-decode worker
+    /// (`audio/transcription/partial_worker.rs`) a reduced thread budget so
+    /// it doesn't starve the authoritative final-transcription path on
+    /// CPU-only hardware, which runs concurrently on the same Whisper
+    /// context (issue #26).
+    pub async fn transcribe_audio_with_confidence_opts(
+        &self,
+        audio_data: Vec<f32>,
+        language: Option<String>,
+        context_prompt: Option<String>,
+        options: TranscribeOptions,
+    ) -> Result<(String, f32, bool)> {
         let ctx = {
             let ctx_lock = self.current_context.read().await;
             ctx_lock
@@ -672,11 +728,26 @@ impl WhisperEngine {
                 let hardware_profile = crate::audio::HardwareProfile::detect();
                 let adaptive_config = hardware_profile.get_whisper_config();
 
-                // ADAPTIVE parameters - optimized for current hardware
-                let mut params = FullParams::new(SamplingStrategy::BeamSearch {
-                    beam_size: adaptive_config.beam_size as i32,
-                    patience: 1.0,
-                });
+                // ADAPTIVE parameters - optimized for current hardware.
+                // `options.greedy` (set by the partial-decode worker) skips
+                // beam search entirely — partials are discarded previews,
+                // not the committed transcript, so the speed/quality
+                // tradeoff favors greedy decoding there.
+                let mut params = if options.greedy {
+                    FullParams::new(SamplingStrategy::Greedy { best_of: 1 })
+                } else {
+                    FullParams::new(SamplingStrategy::BeamSearch {
+                        beam_size: adaptive_config.beam_size as i32,
+                        patience: 1.0,
+                    })
+                };
+
+                // Thread budget: cap the hardware-adaptive default at the
+                // caller's requested `options.max_threads`, if any (issue
+                // #26 — lets the partial-decode worker run at half budget
+                // so it doesn't starve the final path on CPU-only hardware).
+                let default_threads = adaptive_config.max_threads.unwrap_or(4) as i32;
+                params.set_n_threads(effective_threads(default_threads, options.max_threads));
 
                 // Configure with adaptive settings
                 // If language is "auto" or None, use automatic language detection (pass None)
@@ -1155,5 +1226,46 @@ mod min_input_tests {
         let input = vec![0.25; 40_000];
         let out = pad_to_min_whisper_input(input.clone());
         assert_eq!(out, input);
+    }
+}
+
+#[cfg(test)]
+mod thread_budget_tests {
+    use super::effective_threads;
+
+    #[test]
+    fn no_request_keeps_default() {
+        assert_eq!(effective_threads(8, None), 8);
+    }
+
+    #[test]
+    fn request_below_default_is_honored() {
+        assert_eq!(effective_threads(8, Some(3)), 3);
+    }
+
+    #[test]
+    fn request_above_default_is_capped_at_default() {
+        assert_eq!(effective_threads(4, Some(100)), 4);
+    }
+
+    #[test]
+    fn zero_or_negative_request_floors_at_one() {
+        assert_eq!(effective_threads(8, Some(0)), 1);
+        assert_eq!(effective_threads(8, Some(-5)), 1);
+    }
+
+    #[test]
+    fn partial_worker_half_budget_example() {
+        // Mirrors partial_worker.rs: max(1, adaptive_threads / 2).
+        let adaptive_threads = 6;
+        let half = (adaptive_threads / 2).max(1);
+        assert_eq!(effective_threads(adaptive_threads, Some(half)), 3);
+    }
+
+    #[test]
+    fn low_tier_single_core_floor() {
+        // Low-tier hardware default is already 2; half-budget request of 1
+        // should not be crushed further than the floor.
+        assert_eq!(effective_threads(2, Some(1)), 1);
     }
 }

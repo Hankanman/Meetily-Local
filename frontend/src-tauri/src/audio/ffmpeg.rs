@@ -17,6 +17,7 @@ use ffmpeg_sidecar::download::{
     check_latest_version, download_ffmpeg_package, ffmpeg_download_url, unpack_ffmpeg,
 };
 use log::{debug, warn};
+use serde::Serialize;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -41,15 +42,49 @@ static FFMPEG_PATH: OnceLock<PathBuf> = OnceLock::new();
 /// app data dir, and finally `PATH`. Never downloads anything and never
 /// panics.
 pub fn find_ffmpeg_path() -> Option<PathBuf> {
+    find_ffmpeg_path_with_source().map(|(path, _source)| path)
+}
+
+/// Like [`find_ffmpeg_path`], but also reports which candidate matched.
+///
+/// `source` is one of `"env"` (the `MEETILY_FFMPEG_PATH` override),
+/// `"bundled"` (shipped next to the app executable), `"app-data"`
+/// (previously installed by [`ensure_ffmpeg_installed`]), or `"path"`
+/// (found on `PATH`). Note: when the result comes from the cache, the
+/// source reflects whichever candidate matched the first time this was
+/// resolved, not necessarily the one that would match a fresh scan.
+pub fn find_ffmpeg_path_with_source() -> Option<(PathBuf, &'static str)> {
     if let Some(cached) = FFMPEG_PATH.get() {
-        return Some(cached.clone());
+        return Some((cached.clone(), cached_source(cached)));
     }
 
-    let found = find_ffmpeg_path_uncached()?;
+    let (found, source) = find_ffmpeg_path_uncached()?;
     // Best-effort: if another thread already cached a (necessarily
     // equally valid) result, keep that one rather than erroring.
     let _ = FFMPEG_PATH.set(found.clone());
-    Some(found)
+    Some((found, source))
+}
+
+/// Best-effort re-derivation of which candidate a cached path came from,
+/// used only when reporting status for an already-cached path (the
+/// original source isn't stored alongside the cached `PathBuf`).
+fn cached_source(path: &Path) -> &'static str {
+    if let Ok(env_path) = std::env::var(FFMPEG_PATH_ENV_VAR) {
+        if Path::new(&env_path) == path {
+            return "env";
+        }
+    }
+    if path.starts_with(ffmpeg_install_dir()) {
+        return "app-data";
+    }
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_folder) = exe_path.parent() {
+            if path.parent() == Some(exe_folder) {
+                return "bundled";
+            }
+        }
+    }
+    "path"
 }
 
 /// True when `path` exists, is a regular file, and (on unix) has at
@@ -67,7 +102,7 @@ fn is_executable_file(path: &Path) -> bool {
     metadata.permissions().mode() & 0o111 != 0
 }
 
-fn find_ffmpeg_path_uncached() -> Option<PathBuf> {
+fn find_ffmpeg_path_uncached() -> Option<(PathBuf, &'static str)> {
     debug!("Starting search for ffmpeg executable");
 
     // ============================================================
@@ -80,7 +115,7 @@ fn find_ffmpeg_path_uncached() -> Option<PathBuf> {
                 "Using ffmpeg override from {}: {:?}",
                 FFMPEG_PATH_ENV_VAR, path
             );
-            return Some(path);
+            return Some((path, "env"));
         }
         warn!(
             "{} is set but is not an executable file: {:?}",
@@ -96,7 +131,7 @@ fn find_ffmpeg_path_uncached() -> Option<PathBuf> {
             let bundled = exe_folder.join(EXECUTABLE_NAME);
             if is_executable_file(&bundled) {
                 debug!("Found bundled ffmpeg: {:?}", bundled);
-                return Some(bundled);
+                return Some((bundled, "bundled"));
             }
         }
     }
@@ -107,7 +142,7 @@ fn find_ffmpeg_path_uncached() -> Option<PathBuf> {
     let installed = ffmpeg_install_dir().join(EXECUTABLE_NAME);
     if is_executable_file(&installed) {
         debug!("Found installed ffmpeg: {:?}", installed);
-        return Some(installed);
+        return Some((installed, "app-data"));
     }
 
     // ============================================================
@@ -116,7 +151,7 @@ fn find_ffmpeg_path_uncached() -> Option<PathBuf> {
     if let Ok(path) = which(EXECUTABLE_NAME) {
         if is_executable_file(&path) {
             debug!("Found ffmpeg in PATH: {:?}", path);
-            return Some(path);
+            return Some((path, "path"));
         }
     }
 
@@ -213,6 +248,36 @@ fn install_ffmpeg_blocking() -> anyhow::Result<PathBuf> {
 
     debug!("ffmpeg installed at {:?}", installed);
     Ok(installed)
+}
+
+/// Status payload for the `ffmpeg_status` Tauri command — cheap and
+/// synchronous, like [`find_ffmpeg_path`]; never downloads anything.
+#[derive(Debug, Clone, Serialize)]
+pub struct FfmpegStatus {
+    pub installed: bool,
+    pub path: Option<String>,
+    /// One of `"env"`, `"bundled"`, `"app-data"`, `"path"`; `None` when
+    /// `installed` is `false`.
+    pub source: Option<String>,
+}
+
+/// Report whether ffmpeg is currently available and, if so, where it was
+/// found. Used by the settings UI to show install status without
+/// triggering a download (see [`ensure_ffmpeg_installed`] for that).
+#[tauri::command]
+pub async fn ffmpeg_status() -> FfmpegStatus {
+    match find_ffmpeg_path_with_source() {
+        Some((path, source)) => FfmpegStatus {
+            installed: true,
+            path: Some(path.to_string_lossy().to_string()),
+            source: Some(source.to_string()),
+        },
+        None => FfmpegStatus {
+            installed: false,
+            path: None,
+            source: None,
+        },
+    }
 }
 
 #[cfg(test)]

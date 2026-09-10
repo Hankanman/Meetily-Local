@@ -136,6 +136,21 @@ class RecordingService {
       callback(event.payload);
     });
   }
+
+  /**
+   * Listen for transcription-warning events: non-fatal conditions the
+   * backend wants surfaced (a skipped segment, FFmpeg missing at start).
+   * The payload is a plain string.
+   * @param callback - Function to call with the warning message
+   * @returns Promise that resolves to unlisten function
+   */
+  async onTranscriptionWarning(
+    callback: (message: string) => void,
+  ): Promise<UnlistenFn> {
+    return listen<string>("transcription-warning", (event) => {
+      callback(String(event.payload));
+    });
+  }
 }
 
 // Export singleton instance

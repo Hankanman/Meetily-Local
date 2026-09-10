@@ -317,6 +317,17 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         .await
         .map_err(|e| format!("Failed to start recording: {}", e))?;
 
+    // Recording itself only needs raw PCM, but finalizing it into a
+    // playable file needs ffmpeg — warn (once, non-fatal) rather than
+    // blocking start on it.
+    if super::ffmpeg::find_ffmpeg_path().is_none() {
+        warn!("FFmpeg not found; recording will be kept as PCM checkpoints until it is installed");
+        let _ = app.emit(
+            "transcription-warning",
+            "FFmpeg is not installed; the recording will be kept as PCM checkpoints until it is.",
+        );
+    }
+
     // Claim the streaming-partial receiver before the manager is moved into
     // the global (None when partials are disabled).
     let partial_receiver = manager.take_partial_receiver();
@@ -522,6 +533,17 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         .start_recording(mic_device, system_device, auto_save, streaming_partials)
         .await
         .map_err(|e| format!("Failed to start recording: {}", e))?;
+
+    // Recording itself only needs raw PCM, but finalizing it into a
+    // playable file needs ffmpeg — warn (once, non-fatal) rather than
+    // blocking start on it.
+    if super::ffmpeg::find_ffmpeg_path().is_none() {
+        warn!("FFmpeg not found; recording will be kept as PCM checkpoints until it is installed");
+        let _ = app.emit(
+            "transcription-warning",
+            "FFmpeg is not installed; the recording will be kept as PCM checkpoints until it is.",
+        );
+    }
 
     // Claim the streaming-partial receiver before the manager is moved into
     // the global (None when partials are disabled).

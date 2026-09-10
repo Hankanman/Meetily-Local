@@ -797,6 +797,7 @@ pub fn run() {
             stop_audio_level_monitoring,
             is_audio_level_monitoring,
             ffmpeg_ensure_installed,
+            audio::ffmpeg::ffmpeg_status,
             // Recording pause/resume commands
             audio::recording_commands::pause_recording,
             audio::recording_commands::resume_recording,
