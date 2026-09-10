@@ -39,7 +39,8 @@ export default function Home() {
   const { modals, messages, showModal, hideModal } =
     useModalState(transcriptModelConfig);
 
-  const { status, isStopping, isProcessing, isSaving } = recordingState;
+  const { status, isStopping, isProcessing, isSaving, isStopFlowActive } =
+    recordingState;
 
   // Page-local mirror of `isRecording`. The cross-cutting hook below keeps
   // this in sync with the global recording-state context (the "page only
@@ -120,13 +121,12 @@ export default function Home() {
   // `isRecording=false` within ~100 ms of a stop while it is still draining
   // transcripts and merging audio for seconds). Starting during it would let
   // a second recording take over the backend's manager slot.
-  const isStopFlowActive =
-    status === RecordingStatus.STOPPING ||
-    status === RecordingStatus.PROCESSING_TRANSCRIPTS ||
-    status === RecordingStatus.SAVING ||
-    isStopping ||
-    isProcessing ||
-    isSaving;
+  //
+  // `isStopFlowActive` now comes straight from RecordingStateContext — the
+  // single source of truth shared with the sidebar toggle, the tray-driven
+  // auto-start effect below, and useRecordingStart's auto-start effect
+  // (issue #35). It already folds in the backend's `is_finalising` flag, so
+  // this stays correct even for a stop this window never locally saw.
 
   const handleStartClick = async () => {
     if (isRecordingDisabled || isRecording || isStarting || isStopFlowActive)

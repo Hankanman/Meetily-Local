@@ -39,7 +39,7 @@ export function useRecordingStart(
   const { clearTranscripts, setMeetingTitle } = useTranscripts();
   const { setIsMeetingActive } = useSidebar();
   const { selectedDevices } = useConfig();
-  const { setStatus } = useRecordingState();
+  const { setStatus, isStopFlowActive } = useRecordingState();
 
   // Check if a local Whisper transcription model is downloaded and ready.
   // Function name kept as `checkParakeetReady` for minimal call-site churn —
@@ -161,6 +161,18 @@ export function useRecordingStart(
       if (typeof window !== "undefined") {
         const shouldAutoStart = sessionStorage.getItem("autoStartRecording");
         if (shouldAutoStart === "true" && !isRecording && !isAutoStarting) {
+          // A previous recording's stop is still draining/finalising (local
+          // status or the backend's own is_finalising flag) — starting now
+          // would either be refused by the backend or race the in-flight
+          // save (issue #35). Leave the flag alone so this effect retries
+          // once isStopFlowActive clears, rather than starting a recording
+          // that's about to be rejected out from under the user.
+          if (isStopFlowActive) {
+            console.log(
+              "Deferring auto-start - previous recording still finalising",
+            );
+            return;
+          }
           console.log("Auto-starting recording from navigation...");
           setIsAutoStarting(true);
           sessionStorage.removeItem("autoStartRecording"); // Clear the flag
@@ -247,6 +259,7 @@ export function useRecordingStart(
   }, [
     isRecording,
     isAutoStarting,
+    isStopFlowActive,
     selectedDevices,
     setMeetingTitle,
     setIsRecording,

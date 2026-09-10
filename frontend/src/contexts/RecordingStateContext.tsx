@@ -42,6 +42,13 @@ interface RecordingState {
   // NEW: Lifecycle status
   status: RecordingStatus;
   statusMessage?: string; // Optional message for current status
+
+  // True while the Rust side reports a previous stop is still draining /
+  // finalising (recording_commands::is_stop_in_progress()), independent of
+  // this window's own local `status`. Lets a fresh window/tab, or a tray
+  // stop that this window never locally transitioned for, still see the
+  // stop-in-progress window.
+  isBackendFinalising: boolean;
 }
 
 interface RecordingStateContextType extends RecordingState {
@@ -52,6 +59,13 @@ interface RecordingStateContextType extends RecordingState {
   isStopping: boolean;
   isProcessing: boolean;
   isSaving: boolean;
+
+  // Single source of truth for "a stop is in flight and must not be
+  // interrupted by a new start": true whenever local status is in the
+  // STOPPING/PROCESSING_TRANSCRIPTS/SAVING lifecycle, OR the backend reports
+  // `is_finalising`. Every start entry point (sidebar toggle, tray toggle,
+  // auto-start effect, page.tsx) must honour this (issue #35).
+  isStopFlowActive: boolean;
 }
 
 const RecordingStateContext = createContext<RecordingStateContextType | null>(
@@ -81,9 +95,15 @@ export function RecordingStateProvider({
     activeDuration: null,
     status: RecordingStatus.IDLE, // NEW: Initialize with IDLE status
     statusMessage: undefined, // NEW: No message initially
+    isBackendFinalising: false,
   });
 
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  // Indirection to break the startPolling <-> syncWithBackend declaration
+  // cycle below without forward-referencing either useCallback before it's
+  // declared (startPolling schedules ticks by calling through this ref
+  // rather than closing over syncWithBackend directly).
+  const syncWithBackendRef = useRef<() => Promise<void>>(async () => {});
 
   // NEW: Status setter with logging
   const setStatus = useCallback(
@@ -103,29 +123,13 @@ export function RecordingStateProvider({
   );
 
   /**
-   * Sync recording state with backend
-   * Called on mount (fixes refresh desync) and periodically while recording
+   * Stop polling backend state (called when recording stops)
    */
-  const syncWithBackend = useCallback(async () => {
-    try {
-      const backendState = await recordingService.getRecordingState();
-
-      setState((prev) => ({
-        ...prev,
-        isRecording: backendState.is_recording,
-        isPaused: backendState.is_paused,
-        isActive: backendState.is_active,
-        recordingDuration: backendState.recording_duration,
-        activeDuration: backendState.active_duration,
-      }));
-
-      console.log("[RecordingStateContext] Synced with backend:", backendState);
-    } catch (error) {
-      console.error(
-        "[RecordingStateContext] Failed to sync with backend:",
-        error,
-      );
-      // Don't update state on error - keep current state
+  const stopPolling = useCallback(() => {
+    if (pollingIntervalRef.current) {
+      console.log("[RecordingStateContext] Stopping state polling");
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
     }
   }, []);
 
@@ -140,19 +144,59 @@ export function RecordingStateProvider({
     console.log(
       "[RecordingStateContext] Starting state polling (500ms interval)",
     );
-    pollingIntervalRef.current = setInterval(syncWithBackend, 500);
-  }, [syncWithBackend]);
+    pollingIntervalRef.current = setInterval(() => {
+      syncWithBackendRef.current();
+    }, 500);
+  }, []);
 
   /**
-   * Stop polling backend state (called when recording stops)
+   * Sync recording state with backend
+   * Called on mount (fixes refresh desync) and periodically while recording
    */
-  const stopPolling = () => {
-    if (pollingIntervalRef.current) {
-      console.log("[RecordingStateContext] Stopping state polling");
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
+  const syncWithBackend = useCallback(async () => {
+    try {
+      const backendState = await recordingService.getRecordingState();
+      const isFinalising = backendState.is_finalising ?? false;
+
+      setState((prev) => ({
+        ...prev,
+        isRecording: backendState.is_recording,
+        isPaused: backendState.is_paused,
+        isActive: backendState.is_active,
+        recordingDuration: backendState.recording_duration,
+        activeDuration: backendState.active_duration,
+        isBackendFinalising: isFinalising,
+      }));
+
+      // Keep polling alive through the finalising window even after
+      // `recording-stopped` has already fired (backend is_recording flips
+      // false ~100ms into a stop, well before the multi-second finalise
+      // completes) - and stop it once the backend confirms both recording
+      // and finalising have cleared. This is what lets a fresh window/tab
+      // that mounts mid-finalise, or this window if it missed the
+      // recording-stopped event's stopPolling() race, still observe the
+      // window (issue #35).
+      if (backendState.is_recording || isFinalising) {
+        if (!pollingIntervalRef.current) {
+          startPolling();
+        }
+      } else {
+        stopPolling();
+      }
+
+      console.log("[RecordingStateContext] Synced with backend:", backendState);
+    } catch (error) {
+      console.error(
+        "[RecordingStateContext] Failed to sync with backend:",
+        error,
+      );
+      // Don't update state on error - keep current state
     }
-  };
+  }, [startPolling, stopPolling]);
+
+  useEffect(() => {
+    syncWithBackendRef.current = syncWithBackend;
+  }, [syncWithBackend]);
 
   /**
    * Set up event listeners for backend state changes
@@ -211,7 +255,12 @@ export function RecordingStateProvider({
                 activeDuration: null,
               };
             });
-            stopPolling();
+            // Deliberately do NOT stop polling here: the backend keeps
+            // draining/finalising (transcription flush, audio merge) for
+            // seconds after `is_recording` flips false, and `is_finalising`
+            // must keep being observed through that window (issue #35).
+            // `syncWithBackend`'s own polling tick stops the interval once
+            // the backend confirms both recording and finalising are done.
           },
         );
         unsubscribers.push(unlistenStopped);
@@ -258,7 +307,7 @@ export function RecordingStateProvider({
       unsubscribers.forEach((unsub) => unsub());
       stopPolling();
     };
-  }, [startPolling]);
+  }, [startPolling, stopPolling]);
 
   /**
    * Initial sync on mount - CRITICAL for fixing refresh desync bug
@@ -272,16 +321,23 @@ export function RecordingStateProvider({
   }, [syncWithBackend]);
 
   // NEW: Computed helpers from status
-  const contextValue = useMemo(
-    () => ({
+  const contextValue = useMemo(() => {
+    const isStopping = state.status === RecordingStatus.STOPPING;
+    const isProcessing = state.status === RecordingStatus.PROCESSING_TRANSCRIPTS;
+    const isSaving = state.status === RecordingStatus.SAVING;
+    return {
       ...state,
       setStatus,
-      isStopping: state.status === RecordingStatus.STOPPING,
-      isProcessing: state.status === RecordingStatus.PROCESSING_TRANSCRIPTS,
-      isSaving: state.status === RecordingStatus.SAVING,
-    }),
-    [state, setStatus],
-  );
+      isStopping,
+      isProcessing,
+      isSaving,
+      // Single source of truth (issue #35): local stop-flow status OR the
+      // backend's own `is_finalising` flag, so every start entry point can
+      // gate on one value regardless of which window/tab drove the stop.
+      isStopFlowActive:
+        isStopping || isProcessing || isSaving || state.isBackendFinalising,
+    };
+  }, [state, setStatus]);
 
   return (
     <RecordingStateContext.Provider value={contextValue}>

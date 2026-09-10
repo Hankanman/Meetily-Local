@@ -299,12 +299,20 @@ impl RecordingSaver {
     /// Write transcripts.json to disk (atomic write with temp file).
     fn write_transcripts_json(&self, folder: &PathBuf) -> Result<()> {
         // Clone segments to avoid holding lock during I/O
-        let segments_clone = if let Ok(segments) = self.transcript_segments.lock() {
+        let mut segments_clone = if let Ok(segments) = self.transcript_segments.lock() {
             segments.clone()
         } else {
             error!("Failed to lock transcript segments for writing");
             return Err(anyhow::anyhow!("Failed to lock transcript segments"));
         };
+
+        // Segments arrive in completion order, not chronological order: with
+        // dual-VAD (mic + system) sources, a segment that started earlier can
+        // finish later (e.g. a long system-audio segment force-cut well after
+        // a short mic segment that started after it). Re-order chronologically
+        // by audio start time before persisting, with sequence_id as a
+        // tie-breaker for segments that share (or lack) a start time.
+        Self::sort_segments_chronologically(&mut segments_clone);
 
         info!(
             "Writing {} transcript segments to JSON",
@@ -482,10 +490,85 @@ impl RecordingSaver {
     pub fn get_meeting_name(&self) -> Option<String> {
         self.meeting_name.clone()
     }
+
+    /// Sort transcript segments chronologically by `audio_start_time`, using
+    /// `sequence_id` as a tie-breaker when the start time is equal or absent.
+    /// See `write_transcripts_json` for why this ordering matters.
+    fn sort_segments_chronologically(segments: &mut [TranscriptSegment]) {
+        segments.sort_by(|a, b| {
+            let a_time = a.audio_start_time.unwrap_or(f64::MAX);
+            let b_time = b.audio_start_time.unwrap_or(f64::MAX);
+            a_time
+                .partial_cmp(&b_time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    a.sequence_id
+                        .unwrap_or(u64::MAX)
+                        .cmp(&b.sequence_id.unwrap_or(u64::MAX))
+                })
+        });
+    }
 }
 
 impl Default for RecordingSaver {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn segment(id: &str, audio_start_time: Option<f64>, sequence_id: Option<u64>) -> TranscriptSegment {
+        TranscriptSegment {
+            id: id.to_string(),
+            text: id.to_string(),
+            timestamp: None,
+            audio_start_time,
+            audio_end_time: None,
+            duration: None,
+            display_time: None,
+            confidence: None,
+            sequence_id,
+            speaker: None,
+            voice_profile_id: None,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn sorts_out_of_arrival_order_segments_by_audio_start_time() {
+        // Mirrors issue #37: a system-audio segment starting at t=10s but
+        // finishing (and thus being appended) at t=22s must still land before
+        // a mic segment spanning 15-16s in the persisted transcript.
+        let mut segments = vec![
+            segment("mic-15-16", Some(15.0), Some(2)),
+            segment("system-10-22", Some(10.0), Some(1)),
+        ];
+
+        RecordingSaver::sort_segments_chronologically(&mut segments);
+
+        assert_eq!(
+            segments.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["system-10-22", "mic-15-16"]
+        );
+    }
+
+    #[test]
+    fn falls_back_to_sequence_id_when_start_times_tie_or_are_missing() {
+        let mut segments = vec![
+            segment("no-time-seq-3", None, Some(3)),
+            segment("t5-seq-1", Some(5.0), Some(1)),
+            segment("no-time-seq-2", None, Some(2)),
+            segment("t5-seq-0", Some(5.0), Some(0)),
+        ];
+
+        RecordingSaver::sort_segments_chronologically(&mut segments);
+
+        assert_eq!(
+            segments.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["t5-seq-0", "t5-seq-1", "no-time-seq-2", "no-time-seq-3"]
+        );
     }
 }

@@ -103,6 +103,18 @@ fn toggle_recording_handler<R: Runtime>(app: &AppHandle<R>) {
                     update_tray_menu_async(&app_clone).await;
                 }
             }
+        } else if crate::audio::recording_commands::is_stop_in_progress() {
+            // A previous recording is still draining/finalising on the Rust
+            // side (transcription flush, audio merge) even though
+            // `is_recording()` has already gone false. Navigating now would
+            // reload the page mid-save and abort the in-flight SQLite write
+            // (issue #35) - so do nothing and let the user retry once the
+            // finalise completes. `start_recording` itself would refuse this
+            // too, but we want to avoid the destructive `location.assign`
+            // reload entirely, not just fail the start after it.
+            log::info!(
+                "Tray toggle: ignoring start - previous recording still finalising"
+            );
         } else {
             // Immediately show starting state
             set_tray_state(&app_clone, RecordingState::Starting);

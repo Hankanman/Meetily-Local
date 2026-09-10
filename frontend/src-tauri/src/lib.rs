@@ -193,6 +193,18 @@ async fn is_audio_level_monitoring() -> bool {
     audio::simple_level_monitor::is_monitoring()
 }
 
+/// Explicitly trigger ffmpeg download/installation (e.g. from a
+/// first-run or settings screen). `find_ffmpeg_path()` never downloads
+/// on its own, so callers that need ffmpeg installed on demand call
+/// this instead. Idempotent — a no-op once ffmpeg is already found.
+#[tauri::command]
+async fn ffmpeg_ensure_installed() -> Result<String, String> {
+    audio::ffmpeg::ensure_ffmpeg_installed()
+        .await
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|e| format!("Failed to install FFmpeg: {}", e))
+}
+
 // Whisper commands are now handled by whisper_engine::commands module
 
 #[tauri::command]
@@ -784,6 +796,7 @@ pub fn run() {
             start_audio_level_monitoring,
             stop_audio_level_monitoring,
             is_audio_level_monitoring,
+            ffmpeg_ensure_installed,
             // Recording pause/resume commands
             audio::recording_commands::pause_recording,
             audio::recording_commands::resume_recording,

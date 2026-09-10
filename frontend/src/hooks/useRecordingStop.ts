@@ -130,6 +130,16 @@ export function useRecordingStop(
   // Main recording stop handler
   const handleRecordingStop = useCallback(
     async (isCallApi: boolean) => {
+      // Snapshot the transcripts accumulated so far, before this function's
+      // first await. The various start entry points now gate on
+      // isStopFlowActive so a new recording shouldn't be able to start (and
+      // call clearTranscripts()) while this stop is still in flight, but this
+      // snapshot is the defense-in-depth backstop: if transcriptsRef.current
+      // is ever found emptied out from under this flow by the time we reach
+      // the save below, we still have what was here when the stop began
+      // instead of saving the old meeting with zero transcripts (issue #35).
+      const transcriptsSnapshot = transcriptsRef.current;
+
       if (recordingStoppedDataRef.current) {
         await recordingStoppedDataRef.current;
       }
@@ -274,8 +284,15 @@ export function useRecordingStop(
         if (isCallApi && transcriptionComplete == true) {
           setStatus(RecordingStatus.SAVING, "Saving meeting to database...");
 
-          // Get fresh transcript state (ALL transcripts including late ones)
-          const freshTranscripts = [...transcriptsRef.current];
+          // Get fresh transcript state (ALL transcripts including late ones).
+          // Prefer the live ref, since it captures segments that arrived
+          // during the transcription wait/flush above - but never fall below
+          // the pre-await snapshot's count, which would mean something
+          // cleared transcriptsRef.current out from under this flow.
+          const freshTranscripts =
+            transcriptsRef.current.length >= transcriptsSnapshot.length
+              ? [...transcriptsRef.current]
+              : transcriptsSnapshot;
 
           // Get folder_path and meeting_name from recording-stopped event
           const folderPath = sessionStorage.getItem(

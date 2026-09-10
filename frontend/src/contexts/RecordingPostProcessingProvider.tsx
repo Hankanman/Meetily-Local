@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useCallback, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { useRecordingStop } from "@/hooks/useRecordingStop";
@@ -25,14 +25,32 @@ export function RecordingPostProcessingProvider({
   children: React.ReactNode;
 }) {
   // No-op functions since the global RecordingStateContext already handles state updates
-  // These are only needed for the hook's local component state management
-  const setIsRecording = () => {};
-  const setIsRecordingDisabled = () => {};
+  // These are only needed for the hook's local component state management.
+  // Stabilized with useCallback (issue #36): useRecordingStop's
+  // handleRecordingStop takes these as deps, so a fresh identity every
+  // render would otherwise cascade into recreating handleRecordingStop below
+  // on every render too.
+  const setIsRecording = useCallback(() => {}, []);
+  const setIsRecordingDisabled = useCallback(() => {}, []);
 
   const { handleRecordingStop } = useRecordingStop(
     setIsRecording,
     setIsRecordingDisabled,
   );
+
+  // Keep the latest handler in a ref instead of as an effect dependency, so
+  // the `listen("recording-stop-complete")` subscription below is set up
+  // exactly once per mount. Re-subscribing on every render (which happened
+  // here previously, since handleRecordingStop's identity used to change
+  // every render — at least every 500ms while recording) opens a real
+  // lost-event window: unlisten() runs synchronously on cleanup but the
+  // replacement listen() needs an IPC round trip, and a tray stop can emit
+  // recording-stop-complete right in that gap, silently skipping the DB
+  // save (issue #36).
+  const handleRecordingStopRef = useRef(handleRecordingStop);
+  useEffect(() => {
+    handleRecordingStopRef.current = handleRecordingStop;
+  });
 
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;
@@ -50,7 +68,7 @@ export function RecordingPostProcessingProvider({
 
             // Call the post-processing handler
             // event.payload is the callApi boolean (true for normal stops)
-            handleRecordingStop(event.payload);
+            handleRecordingStopRef.current(event.payload);
           },
         );
 
@@ -73,7 +91,7 @@ export function RecordingPostProcessingProvider({
         unlistenFn();
       }
     };
-  }, [handleRecordingStop]);
+  }, []);
 
   // Surface fatal recording errors (issue #24). The backend auto-stops via
   // the full stop flow when this fires, so the subsequent

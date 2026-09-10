@@ -49,6 +49,16 @@ fn session_slot() -> &'static Mutex<Option<MonitorSession>> {
     SESSION.get_or_init(|| Mutex::new(None))
 }
 
+/// Pure decision at the heart of the generation race fix: is a call that
+/// captured `call_generation` (at its start) still the most recent one,
+/// given the generation counter's current value `current_generation`?
+/// A call is current only on an exact match — any later start or stop
+/// bumps the counter past it, and a call can never see a generation from
+/// the future.
+fn is_generation_current(call_generation: u64, current_generation: u64) -> bool {
+    call_generation == current_generation
+}
+
 fn open_role_stream(
     role: &'static str,
     device_id: &str,
@@ -102,8 +112,11 @@ pub async fn start_monitoring<R: Runtime>(
         mic_device, system_device
     );
 
+    // Capture our generation *before* doing anything async. Any later
+    // `start_monitoring`/`stop_monitoring` call bumps GENERATION further,
+    // which is how we notice — after our (slow, blocking) stream-open
+    // completes — that we've been superseded and must not touch SESSION.
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    stop_current_session();
 
     let levels: Arc<Mutex<HashMap<&'static str, AudioLevelData>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -142,14 +155,43 @@ pub async fn start_monitoring<R: Runtime>(
         return Ok(());
     }
 
-    if let Ok(mut guard) = session_slot().lock() {
-        *guard = Some(MonitorSession { streams });
+    // Install the freshly opened streams as SESSION only if we are still
+    // the current generation — otherwise a newer `start_monitoring` (or a
+    // `stop_monitoring`) raced ahead of us while we were blocked opening
+    // streams, and installing now would silently replace its live streams
+    // with ours (freezing its meters) while ours leak, uncaptured by
+    // anything. Either way, whatever ends up discarded (our own streams if
+    // we're stale, or the previous session's streams if we win) is dropped
+    // off the async runtime below — dropping a `PwCaptureStream` joins its
+    // capture thread, which must never happen on the runtime.
+    let (installed, discarded) = {
+        let mut guard = session_slot()
+            .lock()
+            .map_err(|_| anyhow::anyhow!("level monitor: session mutex poisoned"))?;
+        if is_generation_current(generation, GENERATION.load(Ordering::SeqCst)) {
+            let old = guard.replace(MonitorSession { streams });
+            (true, old.map(|s| s.streams))
+        } else {
+            (false, Some(streams))
+        }
+    };
+
+    if let Some(streams) = discarded {
+        tokio::task::spawn_blocking(move || drop(streams)).await?;
+    }
+
+    if !installed {
+        debug!(
+            "level monitor: generation {} superseded before install",
+            generation
+        );
+        return Ok(());
     }
 
     let app = app_handle.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
-        while GENERATION.load(Ordering::SeqCst) == generation {
+        while is_generation_current(generation, GENERATION.load(Ordering::SeqCst)) {
             interval.tick().await;
 
             let snapshot: Vec<AudioLevelData> = match levels.lock() {
@@ -201,4 +243,30 @@ pub fn is_monitoring() -> bool {
         .lock()
         .map(|g| g.is_some())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_generation_current;
+
+    #[test]
+    fn current_generation_matches_exactly() {
+        assert!(is_generation_current(3, 3));
+    }
+
+    #[test]
+    fn superseded_by_a_later_generation() {
+        // A slow start_monitoring call captured generation 3, but by the
+        // time it finishes opening streams a newer start/stop call has
+        // bumped the counter to 4 (or beyond) — it must not install.
+        assert!(!is_generation_current(3, 4));
+        assert!(!is_generation_current(3, 10));
+    }
+
+    #[test]
+    fn stale_call_never_wins_even_against_generation_zero_reset() {
+        // Defensive: a call can never be "current" against a smaller
+        // counter value either (the counter only ever increases).
+        assert!(!is_generation_current(3, 2));
+    }
 }

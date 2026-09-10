@@ -483,7 +483,13 @@ fn build_centroid(
         ));
     }
 
-    let samples_16k = resample_audio(samples_48k_mono, CAPTURE_RATE, EMBED_RATE);
+    let samples_16k = resample_audio(samples_48k_mono, CAPTURE_RATE, EMBED_RATE).map_err(|e| {
+        anyhow!(
+            "Resampling enrollment audio to {}Hz failed: {}",
+            EMBED_RATE,
+            e
+        )
+    })?;
 
     // Trim to speech. The buffer already passed the RMS gate above, so it
     // demonstrably contains audio; if the VAD keeps too little (or is

@@ -637,27 +637,67 @@ pub fn resample(input: &[f32], from_sample_rate: u32, to_sample_rate: u32) -> Re
         1, // Mono
     )?;
 
+    // SincFixedIn has a fixed group delay of `sinc_len / 2` input frames
+    // (reported here, already converted to output frames, by
+    // `output_delay()`) that is never flushed by a single `process()` call:
+    // the trailing ~`delay` output samples that correspond to the tail of
+    // `input` are still "owed" by the filter and only come out if we feed it
+    // more (zero-padded) input. Without draining this, output is shifted
+    // early by `delay` samples and the last few milliseconds of audio are
+    // silently lost.
+    let delay = resampler.output_delay();
+
     let waves_in = vec![input.to_vec()];
-    let waves_out = resampler.process(&waves_in, None)?;
+    let mut waves_out = resampler.process(&waves_in, None)?;
+
+    // Drain the remaining group delay: feeding `None` zero-pads the input
+    // with the samples needed to complete the filter response for the tail
+    // of `input`.
+    let flush = resampler.process_partial::<Vec<f32>>(None, None)?;
+    waves_out[0].extend(flush.into_iter().next().unwrap_or_default());
+
+    let mut out = waves_out.into_iter().next().unwrap();
+
+    // Trim the leading `delay` samples (sinc filter warm-up) so the output
+    // is time-aligned with the input instead of shifted late by the group
+    // delay.
+    if delay >= out.len() {
+        out.clear();
+    } else {
+        out.drain(0..delay);
+    }
+
+    // The drain above can leave a few samples more than the ideal
+    // input.len() * ratio (the flush call rounds up to a full output
+    // block); trim to the expected length so callers get output whose
+    // duration matches the input's, not the resampler's internal block size.
+    let target_len = ((input.len() as f64) * ratio).round() as usize;
+    out.truncate(target_len);
 
     debug!(
-        "Resampling complete: {} samples → {} samples",
+        "Resampling complete: {} samples → {} samples (delay {} trimmed)",
         input.len(),
-        waves_out[0].len()
+        out.len(),
+        delay
     );
 
-    Ok(waves_out.into_iter().next().unwrap())
+    Ok(out)
 }
 
-// Alias for compatibility with existing code
-pub fn resample_audio(input: &[f32], from_sample_rate: u32, to_sample_rate: u32) -> Vec<f32> {
-    match resample(input, from_sample_rate, to_sample_rate) {
-        Ok(result) => result,
-        Err(e) => {
-            debug!("Resampling failed: {}, returning original audio", e);
-            input.to_vec()
-        }
-    }
+// Alias for compatibility with existing code.
+//
+// Returns `Result` (rather than silently falling back to the original,
+// wrong-sample-rate audio) because a caller that gets back samples at the
+// wrong rate has no way to detect it — e.g. audio meant for 16kHz Whisper
+// coming back still at 48kHz plays out ~3x slowed and produces garbage
+// transcriptions with no error surfaced anywhere. Callers must propagate or
+// explicitly log-and-fail instead of continuing with the input untouched.
+pub fn resample_audio(
+    input: &[f32],
+    from_sample_rate: u32,
+    to_sample_rate: u32,
+) -> Result<Vec<f32>> {
+    resample(input, from_sample_rate, to_sample_rate)
 }
 
 /// Fast resampling optimized for transcription preprocessing
@@ -871,5 +911,69 @@ mod mic_enhancement_tests {
             norm.gain_linear,
             norm.target_gain_linear
         );
+    }
+}
+
+#[cfg(test)]
+mod resample_tests {
+    //! Issue #38: SincFixedIn's group delay must be flushed (not just
+    //! truncated at the input's nominal length) so the last few
+    //! milliseconds of audio survive resampling and the output is time-
+    //! aligned with the input.
+    use super::*;
+
+    #[test]
+    fn resample_1khz_tone_48k_to_16k_is_aligned_and_complete() {
+        const FROM_RATE: u32 = 48_000;
+        const TO_RATE: u32 = 16_000;
+        let duration_secs = 1.0f32;
+        let freq = 1000.0f32;
+        let n = (FROM_RATE as f32 * duration_secs) as usize;
+        let input: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * freq * i as f32 / FROM_RATE as f32).sin())
+            .collect();
+
+        let output = resample(&input, FROM_RATE, TO_RATE).expect("resample should succeed");
+
+        // Length should be ~= input.len() * ratio (16000 samples for 1s @ 16kHz).
+        let expected_len = 16_000usize;
+        let len_diff = (output.len() as i64 - expected_len as i64).unsigned_abs();
+        assert!(
+            len_diff <= 2,
+            "expected ~{} samples, got {}",
+            expected_len,
+            output.len()
+        );
+
+        // RMS of a resampled full-cycle sine tone should closely match the
+        // RMS of the original (both sines of the same amplitude): within 3%.
+        let input_rms = (input.iter().map(|s| s * s).sum::<f32>() / input.len() as f32).sqrt();
+        let output_rms = (output.iter().map(|s| s * s).sum::<f32>() / output.len() as f32).sqrt();
+        let rel_diff = (output_rms - input_rms).abs() / input_rms;
+        assert!(
+            rel_diff < 0.03,
+            "RMS mismatch too large: input_rms={} output_rms={} rel_diff={}",
+            input_rms,
+            output_rms,
+            rel_diff
+        );
+
+        // The last 5ms (80 samples at 16kHz) must be non-zero — proof the
+        // group delay was flushed rather than silently truncating the tail.
+        let last_5ms = TO_RATE as usize * 5 / 1000;
+        let tail = &output[output.len() - last_5ms..];
+        assert!(
+            tail.iter().any(|s| s.abs() > 1e-4),
+            "expected non-zero samples in the last 5ms of output, got {:?}",
+            tail
+        );
+    }
+
+    #[test]
+    fn resample_audio_propagates_result() {
+        let input = vec![0.1f32; 4800];
+        let result = resample_audio(&input, 48_000, 16_000);
+        assert!(result.is_ok());
+        assert!(!result.unwrap().is_empty());
     }
 }

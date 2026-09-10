@@ -545,6 +545,44 @@ struct PartialEmitState {
 const PARTIAL_MIN_SAMPLES: usize = 12_800; // 0.8 s @ 16 kHz
 const PARTIAL_EMIT_INTERVAL_SAMPLES: usize = 19_200; // 1.2 s @ 16 kHz
 
+/// Decide whether a streaming-partial snapshot should be emitted for one
+/// source, using edge detection (silence→speech bumps the utterance id) and
+/// a new-audio interval throttle. Returns `Some(utterance_id)` when a
+/// snapshot should be sent, `None` otherwise.
+///
+/// Deliberately takes only the buffer *length* (not the buffer itself) so
+/// callers can run this cheap check before deciding whether the
+/// (potentially large) partial buffer is worth cloning — see the call site
+/// in [`AudioPipeline::run_vad_for_source`].
+fn partial_emit_decision(
+    state: &mut PartialEmitState,
+    active: bool,
+    partial_len: usize,
+) -> Option<u64> {
+    // Edge: silence → speech starts a new utterance.
+    if active && !state.was_active {
+        state.utterance_id += 1;
+        state.samples_at_last_emit = 0;
+    }
+    // Edge: speech → silence ends the utterance (the final path takes over).
+    if !active && state.was_active {
+        state.samples_at_last_emit = 0;
+    }
+    state.was_active = active;
+
+    if !active || partial_len < PARTIAL_MIN_SAMPLES {
+        return None;
+    }
+
+    let new_since_emit = partial_len.saturating_sub(state.samples_at_last_emit);
+    if new_since_emit < PARTIAL_EMIT_INTERVAL_SAMPLES {
+        return None;
+    }
+    state.samples_at_last_emit = partial_len;
+
+    Some(state.utterance_id)
+}
+
 impl AudioPipeline {
     pub fn new(
         receiver: mpsc::UnboundedReceiver<AudioChunk>,
@@ -885,61 +923,32 @@ impl AudioPipeline {
 
         // Streaming partial emission (best-effort, never blocks the final path).
         // Read speech-active + in-progress buffer BEFORE dispatch clears state.
+        //
+        // The throttle decision is evaluated first, using only the buffer's
+        // current *length* — the (potentially large) partial buffer itself is
+        // only cloned once we know a snapshot will actually be emitted.
+        // Previously the buffer was cloned on every ~50ms window while speech
+        // was active and then usually discarded by the throttle below.
         if self.partial_sender.is_some() {
             let active = processor.is_speech_active();
             let partial_len = processor.partial_samples().len();
-            let snapshot = if active && partial_len >= PARTIAL_MIN_SAMPLES {
-                Some(processor.partial_samples().to_vec())
-            } else {
-                None
+            let partial_state = match source {
+                DeviceType::Microphone => &mut self.mic_partial,
+                DeviceType::System => &mut self.system_partial,
             };
-            self.maybe_emit_partial(source, active, partial_len, snapshot);
+            if let Some(utterance_id) = partial_emit_decision(partial_state, active, partial_len) {
+                let snapshot = processor.partial_samples().to_vec();
+                if let Some(sender) = &self.partial_sender {
+                    let _ = sender.send(super::recording_state::PartialAudioChunk {
+                        samples: snapshot,
+                        source,
+                        utterance_id,
+                    });
+                }
+            }
         }
 
         self.dispatch_segments(segments, source_label(source));
-    }
-
-    /// Decide whether to send a streaming-partial snapshot for `source`, using
-    /// per-source edge detection (silence→speech bumps the utterance id) and a
-    /// new-audio interval throttle.
-    fn maybe_emit_partial(
-        &mut self,
-        source: DeviceType,
-        active: bool,
-        partial_len: usize,
-        snapshot: Option<Vec<f32>>,
-    ) {
-        let state = match source {
-            DeviceType::Microphone => &mut self.mic_partial,
-            DeviceType::System => &mut self.system_partial,
-        };
-
-        // Edge: silence → speech starts a new utterance.
-        if active && !state.was_active {
-            state.utterance_id += 1;
-            state.samples_at_last_emit = 0;
-        }
-        // Edge: speech → silence ends the utterance (the final path takes over).
-        if !active && state.was_active {
-            state.samples_at_last_emit = 0;
-        }
-        state.was_active = active;
-
-        let Some(snapshot) = snapshot else { return };
-        let new_since_emit = partial_len.saturating_sub(state.samples_at_last_emit);
-        if new_since_emit < PARTIAL_EMIT_INTERVAL_SAMPLES {
-            return;
-        }
-        state.samples_at_last_emit = partial_len;
-
-        let utterance_id = state.utterance_id;
-        if let Some(sender) = &self.partial_sender {
-            let _ = sender.send(super::recording_state::PartialAudioChunk {
-                samples: snapshot,
-                source,
-                utterance_id,
-            });
-        }
     }
 
     /// Send VAD segments to the transcription channel, preserving source identity

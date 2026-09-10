@@ -14,6 +14,10 @@ export interface RecordingState {
   is_active: boolean;
   recording_duration: number | null;
   active_duration: number | null;
+  /** True while a previous stop is still draining/finalising on the Rust
+   *  side (transcription flush, audio merge) even though `is_recording` has
+   *  already gone false. See `recording_commands::is_stop_in_progress()`. */
+  is_finalising?: boolean;
 }
 
 export interface RecordingStoppedPayload {

@@ -68,25 +68,34 @@ all in-process via `invoke()` commands and emitted events.
 
 ### Audio Processing Pipeline (Critical Understanding)
 
-The audio system has **two parallel paths** with different purposes:
+The pipeline runs as one tokio task fed by two PipeWire capture streams:
 
 ```
-Raw Audio (Mic + System)
-         ↓
-┌────────────────────────────────────────────────────────────┐
-│              Audio Pipeline Manager                         │
-│  (frontend/src-tauri/src/audio/pipeline.rs)                │
-└─────────────┬──────────────────────────┬───────────────────┘
-              ↓                          ↓
-    ┌─────────────────┐        ┌─────────────────────┐
-    │ Recording Path  │        │ Transcription Path  │
-    │ (Pre-mixed)     │        │ (VAD-filtered)      │
-    └─────────────────┘        └─────────────────────┘
-              ↓                          ↓
-    RecordingSaver.save()      WhisperEngine.transcribe()
+Mic stream (48 kHz)          System stream (48 kHz, sink monitor)
+      ↓ raw mono chunks             ↓ raw mono chunks
+┌────────────────────────────────────────────────────────────────┐
+│  AudioPipeline::run  (frontend/src-tauri/src/audio/pipeline.rs) │
+│   1. AudioMixerRingBuffer aligns both sources by absolute      │
+│      sample position into 50 ms windows                        │
+│   2. AEC3 (aec.rs) subtracts the system window from the mic    │
+│   3. Mic-only enhancement: 80 Hz high-pass → capped, smoothed  │
+│      EBU R128 loudness normalisation → soft clip               │
+│   4. Per-source VAD (vad.rs, sherpa silero) → 16 kHz speech    │
+│      segments tagged Microphone / System                        │
+│   5. Stereo interleave: mic = left, system = right             │
+└──────────┬───────────────────────────────┬─────────────────────┘
+           ↓                               ↓
+   Transcription worker            IncrementalAudioSaver
+   (transcription/worker.rs,       (raw f32 PCM checkpoints every
+    whisper-rs, serial, ordered)    30 s → single AAC encode at stop)
 ```
 
-**Key Insight**: The pipeline performs **professional audio mixing** (RMS-based ducking, clipping prevention) for recording, while simultaneously applying **Voice Activity Detection (VAD)** to send only speech segments to Whisper for transcription.
+**Key points**: there is no mixing or ducking; the two sources stay separable
+in the recording. The capture callback (`AudioCapture::process_audio_data`)
+runs on PipeWire's real-time thread and only downmixes and forwards — all DSP
+happens in the pipeline task. Whisper receives the VAD's 16 kHz output, which
+is produced by a stateful windowed-sinc downsampler and zero-padded to at
+least 1 s before decoding.
 
 ### Audio Architecture: Native PipeWire Capture
 
@@ -179,11 +188,15 @@ pub async fn load_model(&self, model_name: &str) -> Result<()> {
 
 ### 1. Audio Buffer Management
 
-**Ring Buffer Mixing** (pipeline.rs):
-- Mic and system audio arrive asynchronously at different rates
-- Ring buffer accumulates samples until both streams have aligned windows (50ms)
-- Professional mixing applies RMS-based ducking to prevent system audio from drowning out microphone
-- Uses `VecDeque` for efficient windowed processing
+**Ring Buffer Alignment** (pipeline.rs):
+- Mic and system chunks arrive asynchronously; each carries a per-source
+  sample position (`timestamp` = samples sent / 48 000)
+- `AudioMixerRingBuffer` pairs the two sources by absolute position into
+  50 ms windows; a source lagging more than 500 ms yields a zero gap and its
+  late data is dropped, so pairing never drifts
+- A never-opened source (mic-only or system-only recording) is treated as
+  permanent silence via `set_expected_sources`
+- The trailing partial window is zero-padded and flushed at stop
 
 ### 2. Thread Safety and Async Boundaries
 
@@ -250,9 +263,12 @@ macro_rules! perf_debug {
 **Location**: `frontend/src-tauri/src/audio/pipeline.rs`
 
 Key components:
-- `AudioMixerRingBuffer`: Manages mic + system audio synchronization
-- `ProfessionalAudioMixer`: RMS-based ducking and mixing
-- `AudioPipelineManager`: Orchestrates VAD, mixing, and distribution
+- `AudioCapture`: minimal real-time capture callback (downmix + forward only)
+- `AudioMixerRingBuffer`: positional mic + system alignment into 50 ms windows
+- `MicEchoCanceller` (aec.rs): WebRTC AEC3 on the aligned mic window
+- `HighPassFilter` / `LoudnessNormalizer` (audio_processing.rs): mic chain, after AEC
+- `ContinuousVadProcessor` (vad.rs): per-source VAD + 48→16 kHz downsampling
+- `AudioPipelineManager`: starts/stops the pipeline task and its channels
 
 **Testing Audio Changes**:
 ```bash
@@ -314,8 +330,11 @@ Linux is the only supported platform (see [Repository-Specific Conventions](#rep
 - **Model Selection**: Balance accuracy vs speed
   - Development: `base` or `small` (fast iteration)
   - Production: `medium` or `large-v3` (best quality)
-- **GPU Acceleration**: 5-10x faster than CPU
-- **Parallel Processing**: Available in `whisper_engine/parallel_processor.rs` for batch workloads
+- **GPU Acceleration**: 5-10x faster than CPU; the backend is chosen by the
+  compiled Cargo feature (`hardware_detector.rs`), not by probing libraries
+- **Live vs batch**: the transcription worker holds `whisper_engine::lease`
+  while recording; import / retranscription / auto-refine wait on it before
+  changing the loaded model
 
 ### Frontend Performance
 - React state updates batched via Sidebar context
