@@ -167,6 +167,15 @@ pub fn start_transcription_task<R: Runtime>(
     tokio::spawn(async move {
         info!("🚀 Starting transcription task (serial, ordered emission)");
 
+        // Hold the live-transcription lease for the entire lifetime of this
+        // task, so no batch job (import / retranscription / auto-refine) can
+        // swap or unload the shared Whisper engine's model out from under
+        // this live recording. Released automatically when this async block
+        // exits (loop break below, or an early return on init failure), i.e.
+        // once the receive loop has fully drained. See
+        // `whisper_engine::lease` for the full rationale.
+        let _live_engine_lease = crate::whisper_engine::LIVE_ENGINE_LEASE.acquire_live();
+
         let engine = match super::engine::get_or_init_transcription_engine(&app).await {
             Ok(engine) => engine,
             Err(e) => {
@@ -223,6 +232,10 @@ pub fn start_transcription_task<R: Runtime>(
                 Some(item) => item,
                 None => match receiver.recv().await {
                     Some(segment) => {
+                        // Segment left the transcription queue — see
+                        // transcription::queue for the accounting this feeds
+                        // (issue #26: queue-depth visibility).
+                        super::queue::dequeued();
                         pending.extend(split_chunk_by_speaker(segment).await);
                         match pending.pop_front() {
                             Some(item) => item,
@@ -523,6 +536,12 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
     // Convert to 16kHz mono for transcription
     let transcription_data = if chunk.sample_rate != 16000 {
         crate::audio::audio_processing::resample_audio(&chunk.data, chunk.sample_rate, 16000)
+            .map_err(|e| {
+                TranscriptionError::EngineFailed(format!(
+                    "Resampling chunk {} from {}Hz to 16000Hz failed: {}",
+                    chunk.chunk_id, chunk.sample_rate, e
+                ))
+            })?
     } else {
         chunk.data
     };
@@ -601,7 +620,18 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                         chunk.chunk_id, e
                     );
 
-                    let transcription_error = TranscriptionError::EngineFailed(e.to_string());
+                    // A missing model (batch job swapped it, or shutdown
+                    // unloaded it) is the quiet-skip case the caller handles
+                    // as `ModelNotLoaded`; anything else is a real engine
+                    // failure worth a toast.
+                    let transcription_error = if e.to_string().contains("No model loaded") {
+                        TranscriptionError::ModelNotLoaded
+                    } else {
+                        TranscriptionError::EngineFailed(e.to_string())
+                    };
+                    if matches!(transcription_error, TranscriptionError::ModelNotLoaded) {
+                        return Err(transcription_error);
+                    }
                     let _ = app.emit(
                         "transcription-error",
                         &serde_json::json!({
@@ -618,17 +648,11 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
     }
 }
 
-/// Format current timestamp (wall-clock time)
+/// Format the current wall-clock time in the user's local timezone
+/// (`HH:MM:SS`). Shown next to each transcript line, so it must match the
+/// clock the user is looking at, not UTC.
 fn format_current_timestamp() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-
-    let hours = (now.as_secs() / 3600) % 24;
-    let minutes = (now.as_secs() / 60) % 60;
-    let seconds = now.as_secs() % 60;
-
-    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+    chrono::Local::now().format("%H:%M:%S").to_string()
 }
 
 #[cfg(test)]

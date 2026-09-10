@@ -6,6 +6,7 @@
 use anyhow::Result;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::task::JoinHandle;
@@ -27,6 +28,68 @@ pub use super::transcription::TranscriptUpdate;
 static RECORDING_MANAGER: Mutex<Option<RecordingManager>> = Mutex::new(None);
 static TRANSCRIPTION_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
+/// Held from the first line of a `start_recording*` call until it returns.
+/// `is_recording()` only flips true once the manager is stored — after
+/// several awaits (model validation, preferences, device enumeration,
+/// PipeWire stream open) — so without this two overlapping starts both pass
+/// the "already recording" check and the second silently drops the first
+/// manager and its un-finalised audio.
+static START_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// Held for the whole of `stop_recording` — `is_recording()` reads false
+/// ~100 ms in (force-flush clears the state) while the transcription drain,
+/// model unload and audio merge run for seconds to minutes. A start that
+/// sneaks in during that window would take over the global manager slot and
+/// the tail of the stop would then finalise (and drop) the *new* recording.
+static STOP_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+/// RAII flag holder: clears the flag on every exit path, including `?`.
+struct PhaseGuard(&'static AtomicBool);
+
+impl PhaseGuard {
+    /// Atomically claim `flag`; `None` if it is already held.
+    fn try_acquire(flag: &'static AtomicBool) -> Option<Self> {
+        flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| PhaseGuard(flag))
+    }
+}
+
+impl Drop for PhaseGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+/// True while a stop is still draining / finalising a previous recording.
+pub fn is_stop_in_progress() -> bool {
+    STOP_IN_PROGRESS.load(Ordering::SeqCst)
+}
+
+/// Shared entry check for every start path. Refuses while another start is
+/// already running or a previous stop is still finalising, then re-checks the
+/// live recording flag. Returns the guard that must be held until the start
+/// call returns.
+async fn begin_start_phase() -> Result<PhaseGuard, String> {
+    let guard = PhaseGuard::try_acquire(&START_IN_PROGRESS)
+        .ok_or_else(|| "Recording start already in progress".to_string())?;
+
+    if is_stop_in_progress() {
+        return Err(
+            "The previous recording is still being finalised. Please wait a moment and try again."
+                .to_string(),
+        );
+    }
+
+    let current_recording_state = is_recording().await;
+    info!("🔍 recording state check: {}", current_recording_state);
+    if current_recording_state {
+        return Err("Recording already in progress".to_string());
+    }
+
+    Ok(guard)
+}
+
 /// Snapshot the transcript segments accumulated so far in the current recording
 /// session — in memory, before they're persisted on stop. Empty when nothing is
 /// recording. Used by the live action-item extractor, which has no `meeting_id`
@@ -41,6 +104,67 @@ pub fn snapshot_segments() -> Vec<crate::audio::common::TranscriptSegment> {
 
 // Listener ID for proper cleanup - prevents microphone from staying active after recording stops
 static TRANSCRIPT_LISTENER_ID: Mutex<Option<tauri::EventId>> = Mutex::new(None);
+
+/// Transcript segments that arrived via the `transcript-update` listener
+/// while `RECORDING_MANAGER` was briefly empty — e.g. during the
+/// `stop_streams_and_force_flush().await` call in `stop_recording`, which
+/// takes the manager out of the slot for its duration. Without this they'd
+/// be silently dropped (issue #25): buffered here instead, then replayed
+/// into the manager via `replay_buffered_segments` as soon as it's back.
+static PENDING_SEGMENT_BUFFER: Mutex<Vec<crate::audio::recording_saver::TranscriptSegment>> =
+    Mutex::new(Vec::new());
+
+/// Called from `RecordingState::report_error` (via `set_error_callback`)
+/// exactly once per session on a fatal error. Emits a user-facing
+/// `recording-error` event, then runs the exact same `stop_recording`
+/// command flow the Stop button runs — draining transcription, finalising
+/// audio, releasing the manager and emitting `recording-stopped` — so a
+/// fatal error can never leave streams/pipeline/worker dangling with the
+/// user's own Stop button reduced to a silent no-op (issue #24).
+fn spawn_fatal_error_stop<R: Runtime>(
+    app: &AppHandle<R>,
+    error: &super::recording_state::AudioError,
+) {
+    warn!(
+        "Fatal recording error ({}); auto-stopping via the full stop flow",
+        error.user_message()
+    );
+    let _ = app.emit("recording-error", error.user_message());
+
+    let app_for_stop = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // `stop_recording` doesn't actually use `save_path` for anything
+        // beyond ensuring its parent directory exists (see `lib::stop_recording`,
+        // which is the caller for a user-initiated stop); build one the same
+        // way the tray's stop handlers do.
+        let save_path = app_for_stop
+            .path()
+            .app_data_dir()
+            .map(|dir| {
+                let timestamp = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+                dir.join(format!("recording-error-{}.wav", timestamp))
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .unwrap_or_else(|_| "recording-error.wav".to_string());
+
+        if let Err(e) = stop_recording(app_for_stop.clone(), RecordingArgs { save_path }).await {
+            error!("Auto-stop after fatal recording error failed: {}", e);
+        }
+    });
+}
+
+/// Drain `buffer` into `manager`, in arrival order. Pure function (no
+/// statics touched) so it's unit-testable on its own — see the `tests`
+/// module at the bottom of this file.
+fn replay_buffered_segments(
+    buffer: &mut Vec<crate::audio::recording_saver::TranscriptSegment>,
+    manager: &RecordingManager,
+) {
+    for segment in buffer.drain(..) {
+        manager.add_transcript_segment(segment);
+    }
+}
 
 // ============================================================================
 // PUBLIC TYPES
@@ -77,12 +201,9 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         meeting_name
     );
 
-    // Check if already recording
-    let current_recording_state = is_recording().await;
-    info!("🔍 recording state check: {}", current_recording_state);
-    if current_recording_state {
-        return Err("Recording already in progress".to_string());
-    }
+    // Claim the start phase (rejects overlapping starts and starts during a
+    // still-finalising stop) and check the live recording flag.
+    let _start_phase = begin_start_phase().await?;
 
     // Validate that transcription models are available before starting recording
     info!("🔍 Validating transcription model availability before starting recording...");
@@ -180,10 +301,14 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     });
     manager.set_meeting_name(Some(effective_meeting_name));
 
-    // Set up error callback
+    // Set up error callback: on a fatal error (report_error only calls this
+    // once per session — see recording_state::report_error) tell the user
+    // and run the exact same full stop flow the Stop button runs, so
+    // streams/pipeline/worker/save/`recording-stopped` all still happen
+    // instead of leaving everything dangling (issue #24).
     let app_for_error = app.clone();
     manager.set_error_callback(move |error| {
-        let _ = app_for_error.emit("recording-error", error.user_message());
+        spawn_fatal_error_stop(&app_for_error, error);
     });
 
     // Start recording with resolved devices (replaces start_recording_with_defaults_and_auto_save call)
@@ -191,6 +316,17 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         .start_recording(microphone_device, system_device, auto_save, streaming_partials)
         .await
         .map_err(|e| format!("Failed to start recording: {}", e))?;
+
+    // Recording itself only needs raw PCM, but finalizing it into a
+    // playable file needs ffmpeg — warn (once, non-fatal) rather than
+    // blocking start on it.
+    if super::ffmpeg::find_ffmpeg_path().is_none() {
+        warn!("FFmpeg not found; recording will be kept as PCM checkpoints until it is installed");
+        let _ = app.emit(
+            "transcription-warning",
+            "FFmpeg is not installed; the recording will be kept as PCM checkpoints until it is.",
+        );
+    }
 
     // Claim the streaming-partial receiver before the manager is moved into
     // the global (None when partials are disabled).
@@ -257,12 +393,23 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                 if let Ok(manager_guard) = RECORDING_MANAGER.lock() {
                     if let Some(manager) = manager_guard.as_ref() {
                         manager.add_transcript_segment(segment);
+                    } else {
+                        // Manager is briefly out of the slot (e.g. mid
+                        // force-flush during stop) — buffer instead of
+                        // dropping; replayed once it's back (issue #25).
+                        PENDING_SEGMENT_BUFFER.lock().unwrap().push(segment);
                     }
                 }
             }
         });
-        let mut global_listener = TRANSCRIPT_LISTENER_ID.lock().unwrap();
-        *global_listener = Some(listener_id);
+        // A stale id here means a previous session never reached its unlisten
+        // (error-path stop, crash recovery); drop it or every segment would be
+        // persisted twice for the rest of the process lifetime.
+        let stale = TRANSCRIPT_LISTENER_ID.lock().unwrap().replace(listener_id);
+        if let Some(stale_id) = stale {
+            app.unlisten(stale_id);
+            warn!("⚠️ Removed a stale transcript-update listener from a previous session");
+        }
         info!("✅ Transcript-update event listener registered for history persistence");
     }
 
@@ -306,12 +453,9 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         mic_device_name, system_device_name, meeting_name
     );
 
-    // Check if already recording
-    let current_recording_state = is_recording().await;
-    info!("🔍 recording state check: {}", current_recording_state);
-    if current_recording_state {
-        return Err("Recording already in progress".to_string());
-    }
+    // Claim the start phase (rejects overlapping starts and starts during a
+    // still-finalising stop) and check the live recording flag.
+    let _start_phase = begin_start_phase().await?;
 
     // Validate that transcription models are available before starting recording
     info!("🔍 Validating transcription model availability before starting recording...");
@@ -374,10 +518,14 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     });
     manager.set_meeting_name(Some(effective_meeting_name));
 
-    // Set up error callback
+    // Set up error callback: on a fatal error (report_error only calls this
+    // once per session — see recording_state::report_error) tell the user
+    // and run the exact same full stop flow the Stop button runs, so
+    // streams/pipeline/worker/save/`recording-stopped` all still happen
+    // instead of leaving everything dangling (issue #24).
     let app_for_error = app.clone();
     manager.set_error_callback(move |error| {
-        let _ = app_for_error.emit("recording-error", error.user_message());
+        spawn_fatal_error_stop(&app_for_error, error);
     });
 
     // Start recording with specified devices and auto_save setting
@@ -385,6 +533,17 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         .start_recording(mic_device, system_device, auto_save, streaming_partials)
         .await
         .map_err(|e| format!("Failed to start recording: {}", e))?;
+
+    // Recording itself only needs raw PCM, but finalizing it into a
+    // playable file needs ffmpeg — warn (once, non-fatal) rather than
+    // blocking start on it.
+    if super::ffmpeg::find_ffmpeg_path().is_none() {
+        warn!("FFmpeg not found; recording will be kept as PCM checkpoints until it is installed");
+        let _ = app.emit(
+            "transcription-warning",
+            "FFmpeg is not installed; the recording will be kept as PCM checkpoints until it is.",
+        );
+    }
 
     // Claim the streaming-partial receiver before the manager is moved into
     // the global (None when partials are disabled).
@@ -451,12 +610,23 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                 if let Ok(manager_guard) = RECORDING_MANAGER.lock() {
                     if let Some(manager) = manager_guard.as_ref() {
                         manager.add_transcript_segment(segment);
+                    } else {
+                        // Manager is briefly out of the slot (e.g. mid
+                        // force-flush during stop) — buffer instead of
+                        // dropping; replayed once it's back (issue #25).
+                        PENDING_SEGMENT_BUFFER.lock().unwrap().push(segment);
                     }
                 }
             }
         });
-        let mut global_listener = TRANSCRIPT_LISTENER_ID.lock().unwrap();
-        *global_listener = Some(listener_id);
+        // A stale id here means a previous session never reached its unlisten
+        // (error-path stop, crash recovery); drop it or every segment would be
+        // persisted twice for the rest of the process lifetime.
+        let stale = TRANSCRIPT_LISTENER_ID.lock().unwrap().replace(listener_id);
+        if let Some(stale_id) = stale {
+            app.unlisten(stale_id);
+            warn!("⚠️ Removed a stale transcript-update listener from a previous session");
+        }
         info!("✅ Transcript-update event listener registered for history persistence");
     }
 
@@ -491,11 +661,27 @@ pub async fn stop_recording<R: Runtime>(
         "🛑 Starting optimized recording shutdown - ensuring ALL transcript chunks are preserved"
     );
 
-    // Check if recording is active
-    if !is_recording().await {
-        info!("Recording was not active");
-        return Ok(());
+    // "Nothing to stop" is decided by whether a manager is actually present
+    // (and no stop is already draining one) — NOT by `is_recording()`.
+    // `report_error` (see recording_state.rs) no longer force-stops on a
+    // fatal error, but even before that: `stop_streams_and_force_flush`
+    // itself calls `state.cleanup()`, so `is_recording()` already reads
+    // false while a manager is still present and mid-drain. Basing the
+    // early return on the atomic made the user's own Stop button a silent
+    // no-op in both cases (issue #24) — a manager in the slot, or a stop
+    // already in progress, always means there's real work to finish here.
+    {
+        let manager_present = RECORDING_MANAGER.lock().unwrap().is_some();
+        if !manager_present && !is_stop_in_progress() {
+            info!("Recording was not active");
+            return Ok(());
+        }
     }
+
+    // Hold the stop phase until this function returns so no start can take
+    // over the manager slot while the drain / save below is still running.
+    let _stop_phase = PhaseGuard::try_acquire(&STOP_IN_PROGRESS)
+        .ok_or_else(|| "Recording stop already in progress".to_string())?;
 
     // Emit shutdown progress to frontend
     let _ = app.emit(
@@ -523,6 +709,20 @@ pub async fn stop_recording<R: Runtime>(
         // Use FORCE FLUSH to immediately process all accumulated audio - eliminates 30s delay!
         info!("🚀 Using FORCE FLUSH to eliminate pipeline accumulation delays");
         let result = manager.stop_streams_and_force_flush().await;
+        // Replay any segments the transcript-update listener buffered while
+        // the manager was out of RECORDING_MANAGER during the await above
+        // (issue #25) — before putting the manager back, so nothing else
+        // can observe it as "present but missing tail segments".
+        {
+            let mut pending = PENDING_SEGMENT_BUFFER.lock().unwrap();
+            if !pending.is_empty() {
+                info!(
+                    "↩️ Replaying {} transcript segment(s) buffered during force-flush",
+                    pending.len()
+                );
+                replay_buffered_segments(&mut pending, &manager);
+            }
+        }
         // Return the manager to the global slot for the drain window so the
         // listener can persist the tail segments transcribed below.
         *RECORDING_MANAGER.lock().unwrap() = Some(manager);
@@ -567,54 +767,73 @@ pub async fn stop_recording<R: Runtime>(
         global_task.take()
     };
 
-    if let Some(task_handle) = transcription_task {
-        info!("⏳ Waiting for ALL transcription chunks to be processed (no timeout - preserving every chunk)");
+    if let Some(mut task_handle) = transcription_task {
+        info!("⏳ Waiting for ALL transcription chunks to be processed (draining the queue, no fixed cap)");
 
-        // Enhanced progress monitoring during shutdown
-        let progress_app = app.clone();
-        let progress_task = tokio::spawn(async move {
-            let last_update = std::time::Instant::now();
+        // Issue #26: there is no hard cap on drain time any more as long as
+        // the worker is making progress — only a *stall* (the queue depth
+        // hasn't shrunk at all for 10 minutes) aborts the wait. This avoids
+        // silently discarding a legitimate backlog just because it took
+        // longer than some fixed budget to transcribe.
+        const STALL_LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
+        let shutdown_start = std::time::Instant::now();
+        let mut last_progress_at = shutdown_start;
+        let mut last_depth = transcription::queue_depth();
 
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        let outcome = loop {
+            tokio::select! {
+                biased;
+                res = &mut task_handle => {
+                    break Some(res);
+                }
+                _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
+                    let depth = transcription::queue_depth();
+                    if depth < last_depth {
+                        last_progress_at = std::time::Instant::now();
+                    }
+                    last_depth = depth;
 
-                // Emit periodic progress updates during shutdown
-                let elapsed = last_update.elapsed().as_secs();
-                let _ = progress_app.emit(
-                    "recording-shutdown-progress",
-                    serde_json::json!({
-                        "stage": "processing_transcripts",
-                        "message": format!("Processing transcripts... ({}s elapsed)", elapsed),
-                        "progress": 40,
-                        "detailed": true,
-                        "elapsed_seconds": elapsed
-                    }),
-                );
+                    let elapsed = shutdown_start.elapsed().as_secs();
+                    let _ = app.emit(
+                        "recording-shutdown-progress",
+                        serde_json::json!({
+                            "stage": "processing_transcripts",
+                            "message": format!(
+                                "Processing transcripts... ({}s elapsed, {} chunk(s) queued)",
+                                elapsed, depth
+                            ),
+                            "progress": 40,
+                            "detailed": true,
+                            "elapsed_seconds": elapsed,
+                            "chunks_in_queue": depth
+                        }),
+                    );
+
+                    if last_progress_at.elapsed() >= STALL_LIMIT {
+                        warn!(
+                            "⏱️ Transcription queue stalled at {} chunk(s) for {}s with no progress, aborting to prevent indefinite hang",
+                            depth,
+                            STALL_LIMIT.as_secs()
+                        );
+                        task_handle.abort();
+                        break None;
+                    }
+                }
             }
-        });
+        };
 
-        // Wait up to 10 minutes for transcription completion to prevent indefinite hangs
-        match tokio::time::timeout(
-            tokio::time::Duration::from_secs(600), // 10 minutes max
-            task_handle,
-        )
-        .await
-        {
-            Ok(Ok(())) => {
+        match outcome {
+            Some(Ok(())) => {
                 info!("✅ ALL transcription chunks processed successfully - no data lost");
             }
-            Ok(Err(e)) => {
+            Some(Err(e)) => {
                 warn!("⚠️ Transcription task completed with error: {:?}", e);
                 // Continue anyway - the worker may have processed most chunks
             }
-            Err(_) => {
-                warn!("⏱️ Transcription timeout (10 minutes) reached, continuing shutdown to prevent indefinite hang");
-                // Continue shutdown even on timeout - better to lose some chunks than hang forever
+            None => {
+                warn!("⏱️ Transcription drain stalled and was aborted, continuing shutdown (some chunks may be unprocessed)");
             }
         }
-
-        // Stop progress monitoring
-        progress_task.abort();
     } else {
         info!("ℹ️ No transcription task found to wait for");
     }
@@ -629,6 +848,17 @@ pub async fn stop_recording<R: Runtime>(
         if let Some(listener_id) = TRANSCRIPT_LISTENER_ID.lock().unwrap().take() {
             app.unlisten(listener_id);
             info!("✅ Transcript-update listener removed (after transcription drain)");
+        }
+    }
+
+    // The streaming-partial task ends on its own once the pipeline drops its
+    // sender (it clears the overlay as it exits). Give it a moment, then
+    // abort anything still running so a late partial can never re-populate
+    // the overlay after `recording-stopped`.
+    if let Some(partial_task) = transcription::take_partial_task_handle() {
+        match tokio::time::timeout(tokio::time::Duration::from_secs(5), partial_task).await {
+            Ok(_) => info!("✅ Streaming-partial task finished"),
+            Err(_) => warn!("⏱️ Streaming-partial task still running after drain; aborting"),
         }
     }
 
@@ -805,7 +1035,7 @@ pub async fn is_recording() -> bool {
 /// Get recording statistics
 pub async fn get_transcription_status() -> TranscriptionStatus {
     TranscriptionStatus {
-        chunks_in_queue: 0,
+        chunks_in_queue: transcription::queue_depth(),
         is_processing: is_recording().await,
         last_activity_ms: 0,
     }
@@ -898,6 +1128,7 @@ pub async fn get_recording_state() -> serde_json::Value {
     if let Some(manager) = manager_guard.as_ref() {
         serde_json::json!({
             "is_recording": manager.is_recording(),
+            "is_finalising": is_stop_in_progress(),
             "is_paused": manager.is_paused(),
             "is_active": manager.is_active(),
             "recording_duration": manager.get_recording_duration(),
@@ -908,6 +1139,7 @@ pub async fn get_recording_state() -> serde_json::Value {
     } else {
         serde_json::json!({
             "is_recording": false,
+            "is_finalising": is_stop_in_progress(),
             "is_paused": false,
             "is_active": false,
             "recording_duration": null,
@@ -1023,4 +1255,54 @@ pub async fn trigger_post_meeting_refine<R: Runtime>(
         super::retranscription::spawn_auto_refine(app, meeting_id, meeting_folder_path);
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::recording_saver::TranscriptSegment;
+
+    fn segment(id: &str, sequence_id: u64) -> TranscriptSegment {
+        TranscriptSegment {
+            id: id.to_string(),
+            text: format!("text for {}", id),
+            timestamp: None,
+            audio_start_time: None,
+            audio_end_time: None,
+            duration: None,
+            display_time: None,
+            confidence: None,
+            sequence_id: Some(sequence_id),
+            speaker: None,
+            voice_profile_id: None,
+            source: None,
+        }
+    }
+
+    // Issue #25: segments buffered while the manager was out of
+    // RECORDING_MANAGER must be replayed into it, in arrival order, and the
+    // buffer must end up empty so nothing is replayed twice.
+    #[test]
+    fn replay_buffered_segments_drains_in_order_into_manager() {
+        let manager = RecordingManager::new();
+        let mut buffer = vec![segment("seg_1", 1), segment("seg_2", 2), segment("seg_3", 3)];
+
+        replay_buffered_segments(&mut buffer, &manager);
+
+        assert!(buffer.is_empty(), "buffer should be fully drained");
+        let stored = manager.get_transcript_segments();
+        let ids: Vec<&str> = stored.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["seg_1", "seg_2", "seg_3"]);
+    }
+
+    #[test]
+    fn replay_buffered_segments_is_a_noop_on_empty_buffer() {
+        let manager = RecordingManager::new();
+        let mut buffer: Vec<TranscriptSegment> = Vec::new();
+
+        replay_buffered_segments(&mut buffer, &manager);
+
+        assert!(buffer.is_empty());
+        assert!(manager.get_transcript_segments().is_empty());
+    }
 }

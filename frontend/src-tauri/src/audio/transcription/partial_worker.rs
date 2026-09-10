@@ -9,13 +9,57 @@
 // the committed transcript is unaffected.
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use log::{debug, info};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use crate::audio::recording_state::{DeviceType, PartialAudioChunk};
+
+/// Sliding-window size for partial decoding: only the trailing 6s of an
+/// in-progress utterance is re-decoded on each tick, instead of the whole
+/// (up to 12s) buffer. Redecoding the full buffer every ~1.2s of new audio
+/// is O(n^2) over the utterance's lifetime and, run concurrently with the
+/// final worker on the same Whisper context, can push CPU-only hardware
+/// past real time (issue #26).
+const PARTIAL_WINDOW_SAMPLES: usize = 6 * 16_000;
+
+/// Skip a partial decode entirely once the final-path backlog passes this
+/// depth — partials are best-effort preview only, and burning CPU on them
+/// while the authoritative path is already behind makes the backlog worse.
+const SKIP_PARTIAL_QUEUE_DEPTH: usize = 2;
+
+/// Handle to the currently-running partial-decode task, so the command
+/// layer (which owns recording stop/start sequencing) can await or abort it
+/// instead of leaving it detached. A detached task can otherwise emit a
+/// late `transcript-partial` after `recording-stopped` has already fired,
+/// re-populating an overlay the frontend believes is done with.
+static PARTIAL_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+
+/// Take (and clear) the stored handle for the currently-running (or most
+/// recently started) partial-decode task. Returns `None` if no task has
+/// been started, or it was already taken.
+pub fn take_partial_task_handle() -> Option<JoinHandle<()>> {
+    PARTIAL_TASK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+}
+
+/// Return the last `window` samples of `samples` (or all of them, if
+/// shorter). Used to bound partial-decode work to a fixed-size sliding
+/// window instead of the whole growing utterance buffer.
+fn sliding_window(samples: &[f32], window: usize) -> &[f32] {
+    let len = samples.len();
+    if len <= window {
+        samples
+    } else {
+        &samples[len - window..]
+    }
+}
 
 #[derive(Debug, Serialize, Clone)]
 struct PartialUpdate {
@@ -52,12 +96,40 @@ fn source_str(source: DeviceType) -> &'static str {
 
 /// Spawn the streaming partial-decode task. It owns the receiver end of the
 /// pipeline's partial channel and emits `transcript-partial` events.
+///
+/// The task's `JoinHandle` is stashed in a module-level slot
+/// (`take_partial_task_handle`) rather than returned, so the command layer
+/// can retrieve it later — e.g. at recording stop — to await or abort it
+/// instead of leaving it fully detached. A fully-detached task could
+/// otherwise emit a late `transcript-partial` after `recording-stopped` has
+/// already fired, re-populating an overlay the frontend believes is done
+/// with.
 pub fn start_partial_decode_task<R: Runtime>(
     app: AppHandle<R>,
     mut receiver: mpsc::UnboundedReceiver<PartialAudioChunk>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
+) {
+    let handle = tokio::spawn(async move {
         info!("🎬 Streaming partial-decode task started");
+
+        // This task decodes off the same shared Whisper engine as the final
+        // worker (start_transcription_task), independently and concurrently.
+        // Hold the live-transcription lease for its whole lifetime too, so a
+        // batch job can't swap/unload the model mid-decode here either. See
+        // `whisper_engine::lease`.
+        let _live_engine_lease = crate::whisper_engine::LIVE_ENGINE_LEASE.acquire_live();
+
+        // Reduced thread budget for partial decodes (issue #26): partials
+        // run concurrently with the final worker on the same Whisper
+        // context, so on CPU-only hardware giving them the full adaptive
+        // thread count starves the authoritative path. Computed once here
+        // (hardware doesn't change mid-recording) and applied to every
+        // decode via `TranscribeOptions::max_threads`.
+        let adaptive_threads = crate::audio::HardwareProfile::detect()
+            .get_whisper_config()
+            .max_threads
+            .unwrap_or(4) as i32;
+        let partial_max_threads = (adaptive_threads / 2).max(1);
+
         let mut states: HashMap<DeviceType, SourceState> = HashMap::new();
 
         while let Some(mut chunk) = receiver.recv().await {
@@ -73,14 +145,53 @@ pub fn start_partial_decode_task<R: Runtime>(
             }
             let _ = chunk; // last value already captured in `latest`
 
+            // Best-effort: if the final (authoritative) transcription path
+            // already has a meaningful backlog, skip partial decoding this
+            // tick entirely rather than adding more CPU contention on the
+            // same Whisper context (issue #26).
+            if super::queue::queue_depth() > SKIP_PARTIAL_QUEUE_DEPTH {
+                debug!(
+                    "Skipping partial decode tick: transcription backlog is {} segments",
+                    super::queue::queue_depth()
+                );
+                continue;
+            }
+
             for (source, chunk) in latest {
-                if let Err(e) = decode_and_emit(&app, &mut states, source, chunk).await {
+                if let Err(e) =
+                    decode_and_emit(&app, &mut states, source, chunk, partial_max_threads).await
+                {
                     debug!("partial decode skipped for {:?}: {}", source, e);
                 }
             }
         }
+
+        // Channel closed: the pipeline dropped its partial sender (recording
+        // stopped). Emit an explicit empty-text update for every source that
+        // still had a non-empty preview showing, so the frontend's "empty
+        // text clears" contract is actually exercised instead of leaving a
+        // stale overlay up until the next recording overwrites it.
+        for (source, state) in states {
+            if !state.committed.is_empty() {
+                let update = PartialUpdate {
+                    source: source_str(source).to_string(),
+                    text: String::new(),
+                    utterance_id: state.utterance_id,
+                };
+                let _ = app.emit("transcript-partial", &update);
+            }
+        }
+
         info!("🎬 Streaming partial-decode task exiting");
-    })
+    });
+
+    // Stash the handle so the command layer can retrieve it later (e.g. at
+    // recording stop) via `take_partial_task_handle` to await or abort it,
+    // instead of the task staying fully detached. Any previous handle left
+    // here is stale (that task has either finished or was already taken) —
+    // dropping a finished JoinHandle is a no-op, and dropping a still-running
+    // one just detaches it rather than aborting it.
+    *PARTIAL_TASK.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
 }
 
 async fn decode_and_emit<R: Runtime>(
@@ -88,6 +199,7 @@ async fn decode_and_emit<R: Runtime>(
     states: &mut HashMap<DeviceType, SourceState>,
     source: DeviceType,
     chunk: PartialAudioChunk,
+    max_threads: i32,
 ) -> Result<(), String> {
     // Grab the shared whisper engine (same instance the final worker uses).
     let engine = {
@@ -104,10 +216,30 @@ async fn decode_and_emit<R: Runtime>(
     }
 
     let language = crate::get_language_preference_internal();
+    // Only re-decode the trailing PARTIAL_WINDOW_SAMPLES of the utterance
+    // (issue #26) instead of the whole up-to-12s buffer the pipeline hands
+    // us in `chunk.samples` — decoding the full buffer on every ~1.2s tick
+    // is O(n^2) over an utterance's lifetime.
+    //
+    // Thread budget (issue #26): partials run concurrently with the final
+    // worker on the same Whisper context, so they're capped at half the
+    // hardware-adaptive thread count (computed once by the caller) — this
+    // leaves the authoritative final path headroom on CPU-only hardware.
+    // The queue-depth skip above (`SKIP_PARTIAL_QUEUE_DEPTH`) is the other
+    // half of the mitigation: once the final path is behind, partials stop
+    // competing with it for CPU entirely.
+    let windowed: Vec<f32> = sliding_window(&chunk.samples, PARTIAL_WINDOW_SAMPLES).to_vec();
     // No context prompt: a partial is a fresh best-effort decode of the
     // in-progress utterance; cross-segment context is a final-path concern.
+    // `greedy: true` skips beam search — partials are discarded previews,
+    // not the committed transcript, so the speed win is worth the lower
+    // per-decode quality here.
+    let options = crate::whisper_engine::TranscribeOptions {
+        max_threads: Some(max_threads),
+        greedy: true,
+    };
     let (text, _conf, _partial) = engine
-        .transcribe_audio_with_confidence(chunk.samples, language, None)
+        .transcribe_audio_with_confidence_opts(windowed, language, None, options)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -148,10 +280,29 @@ async fn decode_and_emit<R: Runtime>(
 
 #[cfg(test)]
 mod tests {
-    use super::common_prefix_len;
+    use super::{common_prefix_len, sliding_window};
 
     fn words(s: &str) -> Vec<String> {
         s.split_whitespace().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn sliding_window_passes_short_buffers_through() {
+        let samples = vec![1.0_f32, 2.0, 3.0];
+        assert_eq!(sliding_window(&samples, 10), &samples[..]);
+        assert_eq!(sliding_window(&samples, 3), &samples[..]);
+    }
+
+    #[test]
+    fn sliding_window_trims_to_the_tail() {
+        let samples: Vec<f32> = (0..10).map(|i| i as f32).collect();
+        assert_eq!(sliding_window(&samples, 4), &[6.0, 7.0, 8.0, 9.0]);
+    }
+
+    #[test]
+    fn sliding_window_zero_window_yields_empty() {
+        let samples = vec![1.0_f32, 2.0, 3.0];
+        assert_eq!(sliding_window(&samples, 0), &[] as &[f32]);
     }
 
     #[test]

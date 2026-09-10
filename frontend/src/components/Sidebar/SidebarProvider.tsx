@@ -9,6 +9,7 @@ import React, {
 } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
 import { getErrorMessage } from "@/lib/utils";
 
@@ -92,7 +93,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   >(new Map());
 
   // Use recording state from RecordingStateContext (single source of truth)
-  const { isRecording } = useRecordingState();
+  const { isRecording, isStopFlowActive } = useRecordingState();
 
   const pathname = usePathname();
   const router = useRouter();
@@ -155,6 +156,20 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   // Function to handle recording toggle from sidebar
   const handleRecordingToggle = () => {
     if (!isRecording) {
+      // A previous recording's stop is still draining/finalising (or this
+      // window's local stop flow is mid-flight) — starting now would race
+      // the backend's own start-refusal and either abort the in-flight save
+      // (navigate-away) or, worse, appear to succeed while stomping over it
+      // (issue #35). Bail out with feedback instead of dispatching/navigating.
+      if (isStopFlowActive) {
+        console.log(
+          "Ignoring recording toggle from sidebar - previous recording still finalising",
+        );
+        toast.info("Finishing previous recording…", {
+          description: "Please wait a moment before starting a new one.",
+        });
+        return;
+      }
       // Check if already on home page
       if (pathname === "/") {
         // Already on home - trigger recording directly via custom event

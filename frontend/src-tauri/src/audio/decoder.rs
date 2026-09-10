@@ -107,6 +107,7 @@ impl DecodedAudio {
                     WHISPER_SAMPLE_RATE
                 );
                 resample_audio(&mono_samples, self.sample_rate, WHISPER_SAMPLE_RATE)
+                    .map_err(|e| anyhow!("Resampling to {}Hz failed: {}", WHISPER_SAMPLE_RATE, e))?
             };
 
             // Clamp after resampling: the sinc resampler can overshoot
@@ -206,13 +207,15 @@ fn chunked_resample_with_progress(
                 }
             }
             Err(e) => {
-                warn!(
-                    "Resampling failed on chunk {}/{}: {}, falling back to single-pass sinc resampler",
+                error!(
+                    "Resampling failed on chunk {}/{}: {} — aborting rather than falling back to \
+                     a whole-file single-pass resample (which risked returning wrong-rate audio \
+                     to the caller)",
                     chunk_idx + 1,
                     total_chunks,
                     e
                 );
-                return Ok(resample_audio(input, from_rate, to_rate));
+                return Err(e);
             }
         }
 
@@ -745,7 +748,7 @@ mod tests {
             .map(|i| (2.0 * std::f32::consts::PI * 300.0 * i as f32 / 48000.0).sin() * 0.5)
             .collect();
 
-        let single_pass = resample_audio(&input, 48000, 16000);
+        let single_pass = resample_audio(&input, 48000, 16000).unwrap();
         let chunked = chunked_resample_with_progress(&input, 48000, 16000, None).unwrap();
 
         // Lengths should be very close

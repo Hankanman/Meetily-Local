@@ -42,7 +42,7 @@ use audio::{list_audio_devices, trigger_audio_permission};
 use log::{error as log_error, info as log_info};
 use notifications::commands::NotificationManagerState;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::RwLock;
 
 // Global language preference storage (default to "auto-translate" for automatic translation to English)
@@ -125,10 +125,10 @@ async fn is_recording() -> bool {
 }
 
 #[tauri::command]
-fn get_transcription_status() -> TranscriptionStatus {
+async fn get_transcription_status() -> TranscriptionStatus {
     TranscriptionStatus {
-        chunks_in_queue: 0,
-        is_processing: false,
+        chunks_in_queue: audio::transcription::queue_depth(),
+        is_processing: audio::recording_commands::is_recording().await,
         last_activity_ms: 0,
     }
 }
@@ -191,6 +191,18 @@ async fn stop_audio_level_monitoring() -> Result<(), String> {
 #[tauri::command]
 async fn is_audio_level_monitoring() -> bool {
     audio::simple_level_monitor::is_monitoring()
+}
+
+/// Explicitly trigger ffmpeg download/installation (e.g. from a
+/// first-run or settings screen). `find_ffmpeg_path()` never downloads
+/// on its own, so callers that need ffmpeg installed on demand call
+/// this instead. Idempotent — a no-op once ffmpeg is already found.
+#[tauri::command]
+async fn ffmpeg_ensure_installed() -> Result<String, String> {
+    audio::ffmpeg::ensure_ffmpeg_installed()
+        .await
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|e| format!("Failed to install FFmpeg: {}", e))
 }
 
 // Whisper commands are now handled by whisper_engine::commands module
@@ -514,6 +526,69 @@ async fn download_file_to(url: &str, dest: &std::path::Path) -> anyhow::Result<(
     Ok(())
 }
 
+/// Guards against handling a close/exit request more than once (issue #30):
+/// both `WindowEvent::CloseRequested` and `RunEvent::ExitRequested` can fire
+/// for the same user action (e.g. closing the last window), and each of them
+/// can themselves recur if the user mashes the close button while the first
+/// stop is still draining.
+static SHUTDOWN_STOP_STARTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Closing the app mid-recording used to perform no stop or flush at all —
+/// `RunEvent::Exit` went straight to DB/sidecar cleanup and `libc::_exit(0)`,
+/// discarding whatever the pipeline/transcription worker hadn't already
+/// flushed to disk. This intercepts the close/exit request, prevents it,
+/// runs the exact same full `stop_recording` flow a user-initiated Stop
+/// runs (only when a recording is actually active or a stop is already
+/// draining one), and only then asks the app to exit for real — which lets
+/// the existing `RunEvent::Exit` cleanup above run unchanged.
+fn begin_shutdown_stop<R: Runtime>(app_handle: &AppHandle<R>) {
+    if SHUTDOWN_STOP_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        // Already stopping/exiting from a previous close/exit request.
+        return;
+    }
+
+    let app = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        let recording_active =
+            audio::recording_commands::is_recording().await || audio::recording_commands::is_stop_in_progress();
+
+        if recording_active {
+            log::info!("App close requested mid-recording — finishing recording before exit...");
+            let _ = app.emit(
+                "recording-shutdown-progress",
+                serde_json::json!({
+                    "stage": "app_closing",
+                    "message": "Finishing recording before closing...",
+                    "progress": 0
+                }),
+            );
+
+            let save_path = app
+                .path()
+                .app_data_dir()
+                .map(|dir| {
+                    let timestamp = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+                    dir.join(format!("recording-{}.wav", timestamp))
+                        .to_string_lossy()
+                        .to_string()
+                })
+                .unwrap_or_else(|_| "recording.wav".to_string());
+
+            if let Err(e) = audio::recording_commands::stop_recording(
+                app.clone(),
+                audio::recording_commands::RecordingArgs { save_path },
+            )
+            .await
+            {
+                log::error!("Failed to stop recording during app close: {}", e);
+            }
+        }
+
+        app.exit(0);
+    });
+}
+
 pub fn run() {
     log::set_max_level(log::LevelFilter::Info);
 
@@ -721,6 +796,8 @@ pub fn run() {
             start_audio_level_monitoring,
             stop_audio_level_monitoring,
             is_audio_level_monitoring,
+            ffmpeg_ensure_installed,
+            audio::ffmpeg::ffmpeg_status,
             // Recording pause/resume commands
             audio::recording_commands::pause_recording,
             audio::recording_commands::resume_recording,
@@ -867,6 +944,21 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
+            match &event {
+                tauri::RunEvent::WindowEvent {
+                    event: tauri::WindowEvent::CloseRequested { api, .. },
+                    ..
+                } => {
+                    api.prevent_close();
+                    begin_shutdown_stop(_app_handle);
+                }
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    api.prevent_exit();
+                    begin_shutdown_stop(_app_handle);
+                }
+                _ => {}
+            }
+
             if let tauri::RunEvent::Exit = event {
                 log::info!("Application exiting, cleaning up resources...");
                 tauri::async_runtime::block_on(async {

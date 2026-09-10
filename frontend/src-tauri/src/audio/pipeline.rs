@@ -1,29 +1,62 @@
-use super::batch_processor::AudioMetricsBatcher;
-use crate::batch_audio_metric;
 use anyhow::Result;
 use log::{debug, error, info, warn};
-use rubato::{
-    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
-};
 use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use super::audio_processing::{
-    audio_to_mono, HighPassFilter, LoudnessNormalizer, NoiseSuppressionProcessor,
-};
+use super::audio_processing::{audio_to_mono, HighPassFilter, LoudnessNormalizer};
 use super::devices::AudioDevice;
-use super::recording_state::{AudioChunk, AudioError, DeviceType, RecordingState};
+use super::recording_state::{AudioChunk, DeviceType, RecordingState};
 use super::vad::ContinuousVadProcessor;
 
-/// Ring buffer for synchronized audio mixing
-/// Accumulates samples from mic and system streams until we have aligned windows
+/// Per-source bookkeeping for `AudioMixerRingBuffer`.
+///
+/// `raw_next_pos` is the source's true, contiguous incoming-sample position
+/// on the *aligned* (common) timeline — it only ever advances by exactly the
+/// length of samples actually received, and is never rewritten by windowing
+/// decisions. `buf_start_pos` is the aligned position of `buffer.front()`
+/// and is purely a windowing/extraction cursor: it can jump forward when the
+/// window cursor gives up waiting on this source (see `forced_gap` in
+/// `AudioMixerRingBuffer::take_window`) or when the safety cap drops old
+/// samples. Keeping these separate is what lets late data for an
+/// already-emitted range be recognized and dropped (via `discard_before`)
+/// without corrupting the position of genuinely new data.
+#[derive(Default)]
+struct SourceState {
+    expected: bool,
+    seen: bool,
+    buffer: VecDeque<f32>,
+    buf_start_pos: u64,
+    raw_next_pos: u64,
+    discard_before: u64,
+}
+
+/// Ring buffer for synchronized audio mixing.
+///
+/// Aligns the asynchronously-arriving mic and system streams by *sample
+/// position* on a common timeline, not by arrival order (issue #22). Each
+/// source's absolute position is anchored once, the first time it delivers
+/// data: the first source to appear anchors at 0, and the second anchors at
+/// whatever position the first source had already reached at that moment —
+/// capturing the real inter-stream startup skew instead of always treating
+/// "first sample from each source" as simultaneous.
+///
+/// Windows are then extracted at a shared cursor (`window_pos`): window `k`
+/// covers common-timeline positions `[k*W, (k+1)*W)` for BOTH sources. If a
+/// source has not yet delivered data covering that range we wait, unless the
+/// other source has pulled more than `max_lag_samples` ahead — in which case
+/// we give up on that range for the lagging source (emit zeros) and advance;
+/// any data for that range that arrives later is recognized as late (via
+/// `discard_before`) and dropped rather than shifting alignment.
 struct AudioMixerRingBuffer {
-    mic_buffer: VecDeque<f32>,
-    system_buffer: VecDeque<f32>,
+    mic: SourceState,
+    system: SourceState,
     window_size_samples: usize, // Fixed mixing window (e.g., 50ms)
-    max_buffer_size: usize,     // Safety limit (e.g., 100ms)
+    max_buffer_size: usize,     // Safety limit, sized in absolute time (see `new`)
+    max_lag_samples: u64,       // How far one source may lead before we give up waiting
+    window_pos: u64,            // Shared aligned-timeline cursor (samples)
+    sample_counter: u64,        // Diagnostics only; replaces the old `static mut` counter
 }
 
 impl AudioMixerRingBuffer {
@@ -34,153 +67,337 @@ impl AudioMixerRingBuffer {
 
         // CRITICAL FIX: Size the safety buffer in absolute time, independent of
         // the mixing window, so shrinking the window (for latency) doesn't also
-        // shrink our jitter tolerance. System audio (especially Core Audio on
-        // macOS) can have significant jitter due to sample-by-sample streaming
-        // → batching → channel transmission. Accounts for: RNNoise buffering +
-        // Core Audio jitter + processing delays.
+        // shrink our jitter tolerance. The PipeWire graph delivers mic and
+        // system audio as two independently-scheduled streams, so they can
+        // drift apart by tens of milliseconds under scheduling pressure
+        // before arriving here via channel. Accounts for that jitter plus
+        // the processing delay of the mic enhancement chain (HPF + loudness
+        // normalization, run AFTER AEC — see `AudioPipeline::run`).
         let max_buffer_ms = 4800.0;
         let max_buffer_size = (sample_rate as f32 * max_buffer_ms / 1000.0) as usize;
 
+        // How far ahead one source may run before we stop waiting on the
+        // other and emit a zero gap instead (issue #22).
+        let max_lag_ms = 500.0;
+        let max_lag_samples = (sample_rate as f32 * max_lag_ms / 1000.0) as u64;
+
         info!(
-            "🔊 Ring buffer initialized: window={}ms ({} samples), max={}ms ({} samples)",
-            window_ms, window_size_samples, max_buffer_ms, max_buffer_size
+            "🔊 Ring buffer initialized: window={}ms ({} samples), max={}ms ({} samples), max_lag={}ms",
+            window_ms, window_size_samples, max_buffer_ms, max_buffer_size, max_lag_ms
         );
 
         Self {
-            mic_buffer: VecDeque::with_capacity(max_buffer_size),
-            system_buffer: VecDeque::with_capacity(max_buffer_size),
+            mic: SourceState {
+                expected: true,
+                buffer: VecDeque::with_capacity(max_buffer_size),
+                ..Default::default()
+            },
+            system: SourceState {
+                expected: true,
+                buffer: VecDeque::with_capacity(max_buffer_size),
+                ..Default::default()
+            },
             window_size_samples,
             max_buffer_size,
+            max_lag_samples,
+            window_pos: 0,
+            sample_counter: 0,
         }
+    }
+
+    /// Declare which sources this recording actually has. A source that was
+    /// never opened (single-source recording) is treated as permanently
+    /// silent rather than something we wait on.
+    fn set_expected_sources(&mut self, mic: bool, system: bool) {
+        self.mic.expected = mic;
+        self.system.expected = system;
     }
 
     fn add_samples(&mut self, device_type: DeviceType, samples: Vec<f32>) {
-        // Log buffer health periodically for diagnostics
-        static mut SAMPLE_COUNTER: u64 = 0;
-        unsafe {
-            SAMPLE_COUNTER += 1;
-            if SAMPLE_COUNTER % 200 == 0 {
-                debug!(
-                    "📊 Ring buffer status: mic={} samples, sys={} samples (max={})",
-                    self.mic_buffer.len(),
-                    self.system_buffer.len(),
-                    self.max_buffer_size
+        self.sample_counter += 1;
+        if self.sample_counter % 200 == 0 {
+            debug!(
+                "📊 Ring buffer status: mic={} samples (pos={}), sys={} samples (pos={}), window_pos={}",
+                self.mic.buffer.len(),
+                self.mic.buf_start_pos,
+                self.system.buffer.len(),
+                self.system.buf_start_pos,
+                self.window_pos
+            );
+        }
+
+        let max_buffer_size = self.max_buffer_size;
+        match device_type {
+            DeviceType::Microphone => {
+                let (other_expected, other_seen, other_raw_next_pos) = (
+                    self.system.expected,
+                    self.system.seen,
+                    self.system.raw_next_pos,
+                );
+                Self::ingest(
+                    &mut self.mic,
+                    max_buffer_size,
+                    other_expected,
+                    other_seen,
+                    other_raw_next_pos,
+                    samples,
+                    "microphone",
+                );
+            }
+            DeviceType::System => {
+                let (other_expected, other_seen, other_raw_next_pos) =
+                    (self.mic.expected, self.mic.seen, self.mic.raw_next_pos);
+                Self::ingest(
+                    &mut self.system,
+                    max_buffer_size,
+                    other_expected,
+                    other_seen,
+                    other_raw_next_pos,
+                    samples,
+                    "system",
                 );
             }
         }
+    }
 
-        match device_type {
-            DeviceType::Microphone => self.mic_buffer.extend(samples),
-            DeviceType::System => self.system_buffer.extend(samples),
+    /// Absorb newly-arrived samples for one source: establish its alignment
+    /// anchor on first arrival, drop any portion that lands before
+    /// `discard_before` (data the window cursor already gave up on), and
+    /// enforce the absolute-size safety cap.
+    fn ingest(
+        src: &mut SourceState,
+        max_buffer_size: usize,
+        other_expected: bool,
+        other_seen: bool,
+        other_raw_next_pos: u64,
+        samples: Vec<f32>,
+        label: &str,
+    ) {
+        if !src.expected || samples.is_empty() {
+            return;
         }
 
-        // CRITICAL FIX: Add warnings before dropping samples
-        // This helps diagnose timing issues in production
-        if self.mic_buffer.len() > self.max_buffer_size {
+        if !src.seen {
+            // Anchor: the first source ever seen starts at 0; a source seen
+            // later starts wherever the other source's true stream position
+            // already is. `.max(discard_before)` guards against the (rare)
+            // case where the window cursor already gave up waiting on this
+            // still-unseen source before its first chunk showed up.
+            let anchor = if other_expected && other_seen {
+                other_raw_next_pos
+            } else {
+                0
+            }
+            .max(src.discard_before);
+            src.seen = true;
+            src.buf_start_pos = anchor;
+            src.raw_next_pos = anchor;
+        }
+
+        let len = samples.len() as u64;
+        let incoming_start = src.raw_next_pos;
+        src.raw_next_pos = incoming_start + len;
+
+        if incoming_start + len <= src.discard_before {
+            // Entirely late — the window cursor already emitted zeros for
+            // this whole range and moved on.
+            return;
+        }
+
+        let drop_prefix = src.discard_before.saturating_sub(incoming_start) as usize;
+        if drop_prefix >= samples.len() {
+            return;
+        }
+        let keep = if drop_prefix > 0 {
+            samples[drop_prefix..].to_vec()
+        } else {
+            samples
+        };
+        if src.buffer.is_empty() {
+            src.buf_start_pos = incoming_start + drop_prefix as u64;
+        }
+        src.buffer.extend(keep);
+
+        if src.buffer.len() > max_buffer_size {
+            let excess = src.buffer.len() - max_buffer_size;
             warn!(
-                "⚠️ Microphone buffer overflow: {} > {} samples, dropping oldest {} samples",
-                self.mic_buffer.len(),
-                self.max_buffer_size,
-                self.mic_buffer.len() - self.max_buffer_size
+                "⚠️ {} buffer overflow: {} > {} samples, dropping oldest {} samples (position preserved)",
+                label,
+                src.buffer.len(),
+                max_buffer_size,
+                excess
             );
-        }
-        if self.system_buffer.len() > self.max_buffer_size {
-            error!("🔴 SYSTEM AUDIO BUFFER OVERFLOW: {} > {} samples, dropping {} samples - THIS CAUSES DISTORTION!",
-                  self.system_buffer.len(), self.max_buffer_size,
-                  self.system_buffer.len() - self.max_buffer_size);
-        }
-
-        // Safety: prevent buffer overflow (keep only last 200ms)
-        while self.mic_buffer.len() > self.max_buffer_size {
-            self.mic_buffer.pop_front();
-        }
-        while self.system_buffer.len() > self.max_buffer_size {
-            self.system_buffer.pop_front();
+            for _ in 0..excess {
+                src.buffer.pop_front();
+            }
+            src.buf_start_pos += excess as u64;
         }
     }
 
-    fn can_mix(&self) -> bool {
-        self.mic_buffer.len() >= self.window_size_samples
-            || self.system_buffer.len() >= self.window_size_samples
+    /// How much real data a source can vouch for, on the common timeline —
+    /// `u64::MAX`-free stand-in for "never blocks": a source we don't expect
+    /// tracks the cursor exactly (always available as silence, never forces
+    /// the other side into a gap).
+    fn frontier(src: &SourceState, window_pos: u64) -> u64 {
+        if !src.expected {
+            window_pos
+        } else if !src.seen {
+            0
+        } else {
+            src.raw_next_pos
+        }
+    }
+
+    /// Decide whether the window at the current cursor can be extracted, and
+    /// if so, whether either source must be force-filled with zeros because
+    /// it has fallen more than `max_lag_samples` behind the other.
+    /// Returns `None` when we should keep waiting for more data.
+    fn plan_window(&self) -> Option<(bool, bool)> {
+        if !self.mic.expected && !self.system.expected {
+            return None; // Nothing to mix; avoid spinning forever.
+        }
+
+        let wp = self.window_pos;
+        let window_end = wp + self.window_size_samples as u64;
+        let mic_frontier = Self::frontier(&self.mic, wp);
+        let sys_frontier = Self::frontier(&self.system, wp);
+        let mic_covered = !self.mic.expected || mic_frontier >= window_end;
+        let sys_covered = !self.system.expected || sys_frontier >= window_end;
+
+        if mic_covered && sys_covered {
+            return Some((false, false));
+        }
+
+        let mut mic_gap = false;
+        let mut sys_gap = false;
+        if !mic_covered {
+            if sys_frontier.saturating_sub(wp) > self.max_lag_samples {
+                mic_gap = true;
+            } else {
+                return None;
+            }
+        }
+        if !sys_covered {
+            if mic_frontier.saturating_sub(wp) > self.max_lag_samples {
+                sys_gap = true;
+            } else {
+                return None;
+            }
+        }
+        Some((mic_gap, sys_gap))
+    }
+
+    /// Build one source's window at `[wp, wp+w)`, draining and repositioning
+    /// its buffer as needed. `forced_gap` means the shared cursor gave up
+    /// waiting on this source for this range: emit zeros and mark the range
+    /// as late (dropped) if it arrives after all.
+    fn take_window(src: &mut SourceState, forced_gap: bool, wp: u64, w: usize) -> Vec<f32> {
+        let window_end = wp + w as u64;
+
+        if !src.expected {
+            return vec![0.0; w];
+        }
+
+        if forced_gap {
+            src.discard_before = src.discard_before.max(window_end);
+            src.buffer.clear();
+            src.buf_start_pos = window_end;
+            return vec![0.0; w];
+        }
+
+        if !src.seen || src.buf_start_pos >= window_end {
+            return vec![0.0; w];
+        }
+
+        // Defensive: realign if stale leftover sits before the window start
+        // (shouldn't happen given the bookkeeping above, but never emit
+        // samples for the wrong position).
+        if src.buf_start_pos < wp {
+            let stale = (wp - src.buf_start_pos) as usize;
+            for _ in 0..stale.min(src.buffer.len()) {
+                src.buffer.pop_front();
+            }
+            src.buf_start_pos = wp;
+        }
+
+        let zeros_prefix = (src.buf_start_pos - wp) as usize;
+        let mut out = vec![0.0f32; zeros_prefix.min(w)];
+        let remaining = w - out.len();
+        let take = remaining.min(src.buffer.len());
+        for _ in 0..take {
+            out.push(src.buffer.pop_front().unwrap_or(0.0));
+        }
+        out.resize(w, 0.0);
+        src.buf_start_pos += take as u64;
+        out
     }
 
     fn extract_window(&mut self) -> Option<(Vec<f32>, Vec<f32>)> {
-        if !self.can_mix() {
-            return None;
+        let (mic_gap, sys_gap) = self.plan_window()?;
+        let wp = self.window_pos;
+        let w = self.window_size_samples;
+        let mic_window = Self::take_window(&mut self.mic, mic_gap, wp, w);
+        let sys_window = Self::take_window(&mut self.system, sys_gap, wp, w);
+        self.window_pos += w as u64;
+        Some((mic_window, sys_window))
+    }
+
+    /// Called once at shutdown: drain every window the normal path would
+    /// eventually resolve, then force out any partial remainder
+    /// (zero-padded) so the last <1 window of audio isn't silently dropped
+    /// (issue #41 part 1).
+    fn flush_final(&mut self) -> Vec<(Vec<f32>, Vec<f32>)> {
+        let mut windows = Vec::new();
+        while let Some(window) = self.extract_window() {
+            windows.push(window);
         }
 
-        // Extract mic window with zero-padding for incomplete buffers
-        // Zero-padding (silence) is preferred over last-sample-hold to prevent artifacts
+        if !self.mic.buffer.is_empty() || !self.system.buffer.is_empty() {
+            let w = self.window_size_samples;
+            let mut mic_window: Vec<f32> = self.mic.buffer.drain(..).collect();
+            mic_window.resize(w, 0.0);
+            let mut sys_window: Vec<f32> = self.system.buffer.drain(..).collect();
+            sys_window.resize(w, 0.0);
+            self.window_pos += w as u64;
+            windows.push((mic_window, sys_window));
+        }
 
-        // Extract mic window (or pad with zeros if insufficient data)
-        let mic_window = if self.mic_buffer.len() >= self.window_size_samples {
-            // Enough mic data - drain window
-            self.mic_buffer.drain(0..self.window_size_samples).collect()
-        } else if !self.mic_buffer.is_empty() {
-            // Some mic data but not enough - consume all + pad with zeros
-            let available: Vec<f32> = self.mic_buffer.drain(..).collect();
-            let mut padded = Vec::with_capacity(self.window_size_samples);
-            padded.extend_from_slice(&available);
-
-            // Use zero-padding (silence) to prevent repetition artifacts
-            // Zero-padding is inaudible at 48kHz sample rate
-            padded.resize(self.window_size_samples, 0.0);
-
-            padded
-        } else {
-            // No mic data - return silence
-            vec![0.0; self.window_size_samples]
-        };
-
-        // Extract system window (or pad with zeros if insufficient data)
-        let sys_window = if self.system_buffer.len() >= self.window_size_samples {
-            // Enough system data - drain window
-            self.system_buffer
-                .drain(0..self.window_size_samples)
-                .collect()
-        } else if !self.system_buffer.is_empty() {
-            // Some system data but not enough - consume all + pad with zeros
-            let available: Vec<f32> = self.system_buffer.drain(..).collect();
-            let mut padded = Vec::with_capacity(self.window_size_samples);
-            padded.extend_from_slice(&available);
-
-            // Use zero-padding (silence) to prevent repetition artifacts
-            // Zero-padding is inaudible at 48kHz sample rate
-            padded.resize(self.window_size_samples, 0.0);
-
-            padded
-        } else {
-            // No system data - return silence
-            vec![0.0; self.window_size_samples]
-        };
-
-        Some((mic_window, sys_window))
+        windows
     }
 }
 
-/// Simplified audio capture without broadcast channels
-#[derive(Clone)]
+/// Captures raw audio from one PipeWire stream (mic or system) and forwards
+/// it to the pipeline task.
+///
+/// PERFORMANCE (issue #28): `process_audio_data` runs directly on PipeWire's
+/// real-time data thread (`pw/mod.rs` connects with `RT_PROCESS`), so it is
+/// intentionally minimal: one allocation for the mono downmix, no mutexes,
+/// no DSP, and no per-call logging. Everything else the old implementation
+/// did here — resampling, RNNoise, the high-pass filter, loudness
+/// normalization, and the EBU/RMS diagnostic logging — has moved off this
+/// thread: PipeWire always negotiates 48 kHz for this app's capture streams
+/// (see `pw::CAPTURE_RATE`), so the resampler path was dead code; the mic
+/// enhancement chain now runs in `AudioPipeline::run` (see issue #21, on the
+/// tokio pipeline task, after AEC).
 pub struct AudioCapture {
-    // Kept for logging/diagnostics context on the capture path.
-    #[allow(dead_code)]
-    device: Arc<AudioDevice>,
     state: Arc<RecordingState>,
-    sample_rate: u32, // Original device sample rate
+    sample_rate: u32,
     channels: u16,
-    chunk_counter: Arc<std::sync::atomic::AtomicU64>,
     device_type: DeviceType,
-    needs_resampling: bool, // Flag if resampling is required
-    // CRITICAL FIX: Persistent resampler to preserve energy across chunks
-    resampler: Arc<std::sync::Mutex<Option<SincFixedIn<f32>>>>,
-    // Buffering for variable-size chunks → fixed-size resampler input
-    resampler_input_buffer: Arc<std::sync::Mutex<Vec<f32>>>,
-    resampler_chunk_size: usize, // Fixed chunk size for resampler (512 samples)
-    // Audio enhancement processors (microphone only)
-    noise_suppressor: Arc<std::sync::Mutex<Option<NoiseSuppressionProcessor>>>,
-    high_pass_filter: Arc<std::sync::Mutex<Option<HighPassFilter>>>,
-    // EBU R128 normalizer for microphone audio (per-device, stateful)
-    normalizer: Arc<std::sync::Mutex<Option<LoudnessNormalizer>>>,
-    // Note: Using global recording timestamp for synchronization
+    /// Cloned once here, at construction time, instead of locking
+    /// `RecordingState`'s sender mutex on every quantum. `RecordingManager`
+    /// starts the pipeline (which installs this sender) before it creates
+    /// any streams, so this is normally `Some` by the time real audio
+    /// arrives; if a stream somehow starts first this is `None` and chunks
+    /// are silently dropped, matching the previous "pipeline not ready"
+    /// behavior.
+    sender: Option<mpsc::UnboundedSender<AudioChunk>>,
+    /// Samples sent so far. Used to derive each chunk's timestamp as
+    /// `samples_sent / sample_rate` instead of calling
+    /// `RecordingState::get_recording_duration()` (a mutex) from the RT
+    /// thread.
+    samples_sent: u64,
+    chunk_counter: u64,
 }
 
 impl AudioCapture {
@@ -191,459 +408,79 @@ impl AudioCapture {
         channels: u16,
         device_type: DeviceType,
     ) -> Self {
-        // CRITICAL FIX: Detect if resampling is needed
-        // Pipeline expects 48kHz, but Bluetooth devices often report 8kHz, 16kHz, or 44.1kHz
-        const TARGET_SAMPLE_RATE: u32 = 48000;
-        let needs_resampling = sample_rate != TARGET_SAMPLE_RATE;
-
-        // Detect device kind (Bluetooth vs Wired) for adaptive processing
-        // Use reasonable defaults for buffer size (512 samples is typical)
-        let device_kind =
-            super::device_detection::InputDeviceKind::detect(&device.name, 512, sample_rate);
-
-        if needs_resampling {
-            warn!("⚠️ SAMPLE RATE MISMATCH DETECTED ⚠️");
+        if sample_rate != 48_000 {
+            // PipeWire negotiates the capture format for us (see
+            // `pw::CAPTURE_RATE`), so every stream should already be 48 kHz;
+            // this is a configuration bug, not something to resample around.
             warn!(
-                "🔄 [{:?}] Audio device '{}' ({:?}) reports {} Hz (pipeline expects {} Hz)",
-                device_type, device.name, device_kind, sample_rate, TARGET_SAMPLE_RATE
-            );
-            warn!(
-                "🔄 Automatic resampling will be applied: {} Hz → {} Hz",
-                sample_rate, TARGET_SAMPLE_RATE
-            );
-
-            // Log which resampling strategy will be used
-            let ratio = TARGET_SAMPLE_RATE as f64 / sample_rate as f64;
-            let strategy = if ratio >= 2.0 {
-                "High-quality upsampling (sinc_len=512, Cubic interpolation)"
-            } else if ratio >= 1.5 {
-                "Moderate upsampling (sinc_len=384, Cubic)"
-            } else if ratio > 1.0 {
-                "Small upsampling (sinc_len=256, Linear)"
-            } else if ratio <= 0.5 {
-                "Anti-aliased downsampling (sinc_len=512, Cubic)"
-            } else {
-                "Moderate downsampling (sinc_len=384, Linear)"
-            };
-            info!("   Resampling strategy: {}", strategy);
-        } else {
-            info!(
-                "✅ [{:?}] Audio device '{}' ({:?}) uses {} Hz (matches pipeline)",
-                device_type, device.name, device_kind, sample_rate
+                "[{:?}] Audio device '{}' opened at {} Hz, not the expected 48 kHz",
+                device_type, device.name, sample_rate
             );
         }
 
-        // Initialize audio enhancement processors for MICROPHONE ONLY
-        // System audio doesn't need enhancement (already clean)
-        let (noise_suppressor, high_pass_filter, normalizer) = if matches!(
-            device_type,
-            DeviceType::Microphone
-        ) {
-            // Initialize noise suppression (RNNoise) at 48kHz - CONDITIONAL based on flag
-            let ns = if super::ffmpeg_mixer::RNNOISE_APPLY_ENABLED {
-                match NoiseSuppressionProcessor::new(TARGET_SAMPLE_RATE) {
-                    Ok(processor) => {
-                        info!("✅ RNNoise noise suppression ENABLED for microphone '{}' (10-15 dB reduction)", device.name);
-                        Some(processor)
-                    }
-                    Err(e) => {
-                        warn!("⚠️ Failed to create noise suppressor: {}, continuing without noise suppression", e);
-                        None
-                    }
-                }
-            } else {
-                info!("ℹ️ RNNoise noise suppression DISABLED for microphone '{}' (flag: RNNOISE_APPLY_ENABLED=false)", device.name);
-                info!("   Whisper handles noise well internally - RNNoise is optional");
-                None
-            };
-
-            // Initialize high-pass filter (removes rumble below 80 Hz)
-            let hpf = {
-                let filter = HighPassFilter::new(TARGET_SAMPLE_RATE, 80.0);
-                info!(
-                    "✅ High-pass filter initialized for microphone '{}' (cutoff: 80 Hz)",
-                    device.name
-                );
-                Some(filter)
-            };
-
-            // Initialize EBU R128 normalizer (professional loudness standard)
-            let norm = match LoudnessNormalizer::new(1, TARGET_SAMPLE_RATE) {
-                Ok(normalizer) => {
-                    info!(
-                        "✅ EBU R128 normalizer initialized for microphone '{}' (target: -23 LUFS)",
-                        device.name
-                    );
-                    Some(normalizer)
-                }
-                Err(e) => {
-                    warn!(
-                        "⚠️ Failed to create normalizer for microphone: {}, normalization disabled",
-                        e
-                    );
-                    None
-                }
-            };
-
-            (ns, hpf, norm)
-        } else {
-            // System audio: no enhancement needed
-            info!(
-                "ℹ️ System audio '{}' captured raw (no enhancement)",
-                device.name
+        let sender = state.cloned_audio_sender();
+        if sender.is_none() {
+            warn!(
+                "[{:?}] AudioCapture for '{}' created before the pipeline sender was ready",
+                device_type, device.name
             );
-            (None, None, None)
-        };
-
-        // CRITICAL FIX: Initialize persistent resampler to preserve energy across chunks
-        // Creating a new resampler per chunk causes energy amplification and incorrect output sizes
-        // Use fixed chunk size of 512 samples with buffering for variable-size input
-        const RESAMPLER_CHUNK_SIZE: usize = 512;
-
-        let resampler = if needs_resampling {
-            let ratio = TARGET_SAMPLE_RATE as f64 / sample_rate as f64;
-
-            // Adaptive parameters based on sample rate ratio (same logic as resample_audio)
-            let (sinc_len, interpolation_type, oversampling) = if ratio >= 2.0 {
-                (512, SincInterpolationType::Cubic, 512)
-            } else if ratio >= 1.5 {
-                (384, SincInterpolationType::Cubic, 384)
-            } else if ratio > 1.0 {
-                (256, SincInterpolationType::Linear, 256)
-            } else if ratio <= 0.5 {
-                (512, SincInterpolationType::Cubic, 512)
-            } else {
-                (384, SincInterpolationType::Linear, 384)
-            };
-
-            let params = SincInterpolationParameters {
-                sinc_len,
-                f_cutoff: 0.95,
-                interpolation: interpolation_type,
-                oversampling_factor: oversampling,
-                window: WindowFunction::BlackmanHarris2,
-            };
-
-            match SincFixedIn::<f32>::new(
-                ratio,
-                2.0, // Maximum relative deviation
-                params,
-                RESAMPLER_CHUNK_SIZE,
-                1, // Mono
-            ) {
-                Ok(resampler) => {
-                    info!(
-                        "✅ Persistent resampler initialized for '{}' ({}Hz → {}Hz, chunk_size={})",
-                        device.name, sample_rate, TARGET_SAMPLE_RATE, RESAMPLER_CHUNK_SIZE
-                    );
-                    info!("   Buffering enabled for variable-size chunks (e.g., 320, 512, 1024, etc.)");
-                    Some(resampler)
-                }
-                Err(e) => {
-                    warn!(
-                        "⚠️ Failed to create persistent resampler: {}, will use fallback",
-                        e
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        }
 
         Self {
-            device,
             state,
             sample_rate,
             channels,
-            chunk_counter: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             device_type,
-            needs_resampling,
-            resampler: Arc::new(std::sync::Mutex::new(resampler)),
-            resampler_input_buffer: Arc::new(std::sync::Mutex::new(Vec::with_capacity(
-                RESAMPLER_CHUNK_SIZE * 2,
-            ))),
-            resampler_chunk_size: RESAMPLER_CHUNK_SIZE,
-            noise_suppressor: Arc::new(std::sync::Mutex::new(noise_suppressor)),
-            high_pass_filter: Arc::new(std::sync::Mutex::new(high_pass_filter)),
-            normalizer: Arc::new(std::sync::Mutex::new(normalizer)),
-            // Using global recording time for sync
+            sender,
+            samples_sent: 0,
+            chunk_counter: 0,
         }
     }
 
-    /// Process audio data directly from callback
-    pub fn process_audio_data(&self, data: &[f32]) {
-        // Check if still recording
-        if !self.state.is_recording() {
+    /// Called directly from the PipeWire real-time thread for every
+    /// quantum. Keep this on the fast path: no mutexes, no DSP, no
+    /// allocation beyond the mono downmix.
+    pub fn process_audio_data(&mut self, data: &[f32]) {
+        // Both checks are atomics, not mutexes — safe on the RT thread.
+        // `is_paused` mirrors the discard-while-paused behavior the old
+        // `RecordingState::send_audio_chunk` used to provide.
+        if !self.state.is_recording() || self.state.is_paused() {
             return;
         }
 
-        // Convert to mono if needed
-        let mut mono_data = if self.channels > 1 {
+        let Some(sender) = &self.sender else {
+            return;
+        };
+
+        // One allocation per quantum for the mono downmix — unavoidable
+        // since ownership of the samples has to move through the channel to
+        // the pipeline task.
+        let mono_data = if self.channels > 1 {
             audio_to_mono(data, self.channels)
         } else {
             data.to_vec()
         };
 
-        // CRITICAL FIX: Resample to 48kHz if device uses different sample rate
-        // This fixes Bluetooth devices (like Sony WH-1000XM4) that report 16kHz or 44.1kHz
-        // Without this, audio is sped up 3x and VAD fails
-        //
-        // IMPORTANT: Uses PERSISTENT resampler with BUFFERING to preserve energy across chunks
-        // Creating a new resampler per chunk causes energy amplification (173.5% RMS)
-        // Buffering handles variable chunk sizes (320, 512, 1024, etc.) by accumulating to fixed 512-sample chunks
-        const TARGET_SAMPLE_RATE: u32 = 48000;
-        if self.needs_resampling {
-            let before_len = mono_data.len();
-            let before_rms = if !mono_data.is_empty() {
-                (mono_data.iter().map(|&x| x * x).sum::<f32>() / mono_data.len() as f32).sqrt()
-            } else {
-                0.0
-            };
+        let timestamp = self.samples_sent as f64 / self.sample_rate as f64;
+        self.samples_sent += mono_data.len() as u64;
 
-            // Use persistent resampler with buffering to handle variable chunk sizes
-            let mut resampled_output = Vec::new();
-            let mut used_persistent_resampler = false;
+        let chunk_id = self.chunk_counter;
+        self.chunk_counter += 1;
 
-            if let Ok(mut buffer_lock) = self.resampler_input_buffer.lock() {
-                // Add new samples to buffer
-                buffer_lock.extend_from_slice(&mono_data);
-
-                // Process complete chunks through the resampler
-                if let Ok(mut resampler_lock) = self.resampler.lock() {
-                    if let Some(ref mut resampler) = *resampler_lock {
-                        used_persistent_resampler = true;
-
-                        // Process as many complete chunks as we have
-                        while buffer_lock.len() >= self.resampler_chunk_size {
-                            // Extract exactly chunk_size samples
-                            let chunk: Vec<f32> =
-                                buffer_lock.drain(0..self.resampler_chunk_size).collect();
-
-                            // Rubato expects input as Vec<Vec<f32>> (one Vec per channel)
-                            let waves_in = vec![chunk];
-
-                            match resampler.process(&waves_in, None) {
-                                Ok(mut waves_out) => {
-                                    if let Some(output) = waves_out.pop() {
-                                        resampled_output.extend_from_slice(&output);
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("⚠️ Persistent resampler processing failed: {}", e);
-                                    used_persistent_resampler = false;
-                                    break;
-                                }
-                            }
-                        }
-                        // Remaining samples in buffer will be processed in next iteration
-                    }
-                }
-            }
-
-            // CRITICAL: Only update mono_data if we got output from persistent resampler
-            // If buffer is accumulating (< 512 samples), skip this chunk - data is safely buffered
-            // and will be processed in next iteration with proper resampling
-            let has_resampled_output = !resampled_output.is_empty();
-
-            if has_resampled_output {
-                mono_data = resampled_output;
-            } else if !used_persistent_resampler {
-                // Only fallback if persistent resampler is not available at all
-                mono_data = super::audio_processing::resample_audio(
-                    &mono_data,
-                    self.sample_rate,
-                    TARGET_SAMPLE_RATE,
-                );
-            } else {
-                // Buffering: samples are accumulating in buffer, waiting for 512-sample chunk
-                // Don't send partial/unprocessed data - return early
-                // Audio is NOT lost - it's in the buffer and will be processed next iteration
-                return;
-            }
-
-            // Log resampling only occasionally to avoid spam
-            let chunk_id = self.chunk_counter.load(std::sync::atomic::Ordering::SeqCst);
-            if chunk_id % 100 == 0 && has_resampled_output {
-                let after_len = mono_data.len();
-                let after_rms = if !mono_data.is_empty() {
-                    (mono_data.iter().map(|&x| x * x).sum::<f32>() / mono_data.len() as f32).sqrt()
-                } else {
-                    0.0
-                };
-                let ratio = TARGET_SAMPLE_RATE as f64 / self.sample_rate as f64;
-                let rms_preservation = if before_rms > 0.0 {
-                    (after_rms / before_rms) * 100.0
-                } else {
-                    100.0
-                };
-
-                let buffer_size = if let Ok(buf) = self.resampler_input_buffer.lock() {
-                    buf.len()
-                } else {
-                    0
-                };
-
-                info!(
-                    "🔄 [{:?}] Persistent buffered resampler: {}Hz → {}Hz (ratio: {:.2}x)",
-                    self.device_type, self.sample_rate, TARGET_SAMPLE_RATE, ratio
-                );
-                info!(
-                    "   Chunk {}: {} → {} samples, RMS preservation: {:.1}%, buffer: {}",
-                    chunk_id, before_len, after_len, rms_preservation, buffer_size
-                );
-            }
-        }
-
-        // AUDIO ENHANCEMENT PIPELINE (Microphone Only)
-        // Processing order is critical: high-pass → noise suppression → normalization
-        // This ensures noise is removed before being amplified by the normalizer
-        if matches!(self.device_type, DeviceType::Microphone) {
-            // STEP 1: Apply high-pass filter to remove low-frequency rumble (< 80 Hz)
-            if let Ok(mut hpf_lock) = self.high_pass_filter.lock() {
-                if let Some(ref mut filter) = *hpf_lock {
-                    mono_data = filter.process(&mono_data);
-                }
-            }
-
-            // STEP 2: Apply RNNoise noise suppression (10-15 dB reduction) - CONDITIONAL
-            if super::ffmpeg_mixer::RNNOISE_APPLY_ENABLED {
-                if let Ok(mut ns_lock) = self.noise_suppressor.lock() {
-                    if let Some(ref mut suppressor) = *ns_lock {
-                        let before_len = mono_data.len();
-                        mono_data = suppressor.process(&mono_data);
-                        let after_len = mono_data.len();
-
-                        // CRITICAL MONITORING: Track buffer health
-                        let chunk_id = self.chunk_counter.load(std::sync::atomic::Ordering::SeqCst);
-                        if chunk_id % 100 == 0 {
-                            let buffered = suppressor.buffered_samples();
-                            let length_delta = (before_len as i32 - after_len as i32).abs();
-
-                            debug!("🔇 Noise suppression health: in={}, out={}, delta={}, buffered={}, RMS={:.4}",
-                                   before_len, after_len, length_delta, buffered,
-                                   if !mono_data.is_empty() {
-                                       (mono_data.iter().map(|&x| x * x).sum::<f32>() / mono_data.len() as f32).sqrt()
-                                   } else { 0.0 });
-
-                            // WARN if accumulating samples (potential latency buildup)
-                            if buffered > 1000 {
-                                warn!("⚠️ RNNoise accumulating samples: {} buffered (potential latency issue!)",
-                                      buffered);
-                            }
-
-                            // WARN if significant length mismatch
-                            if length_delta > 50 {
-                                warn!(
-                                    "⚠️ RNNoise length mismatch: input={} output={} (delta={})",
-                                    before_len, after_len, length_delta
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            // STEP 3: Apply EBU R128 normalization (professional loudness standard)
-            if let Ok(mut normalizer_lock) = self.normalizer.lock() {
-                if let Some(ref mut normalizer) = *normalizer_lock {
-                    mono_data = normalizer.normalize_loudness(&mono_data);
-
-                    // Log normalization occasionally for debugging
-                    let chunk_id = self.chunk_counter.load(std::sync::atomic::Ordering::SeqCst);
-                    if chunk_id % 200 == 0 && !mono_data.is_empty() {
-                        let rms = (mono_data.iter().map(|&x| x * x).sum::<f32>()
-                            / mono_data.len() as f32)
-                            .sqrt();
-                        let peak = mono_data.iter().map(|&x| x.abs()).fold(0.0f32, f32::max);
-                        debug!(
-                            "🎤 After normalization chunk {}: RMS={:.4}, Peak={:.4}",
-                            chunk_id, rms, peak
-                        );
-                    }
-                }
-            }
-        }
-
-        // Create audio chunk with stream-specific timestamp (get ID first for logging)
-        let chunk_id = self
-            .chunk_counter
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-        // RAW AUDIO: No gain applied here - will be applied AFTER mixing
-        // This prevents amplifying system audio bleed-through in the microphone
-
-        // DIAGNOSTIC: Log audio levels for debugging (especially mic issues)
-        // if chunk_id % 100 == 0 && !mono_data.is_empty() {
-        //     let raw_rms = (mono_data.iter().map(|&x| x * x).sum::<f32>() / mono_data.len() as f32).sqrt();
-        //     let raw_peak = mono_data.iter().map(|&x| x.abs()).fold(0.0f32, f32::max);
-
-        //         info!("🎙️ [{:?}] Chunk {} - Raw: RMS={:.6}, Peak={:.6}",
-        //               self.device_type, chunk_id, raw_rms, raw_peak);
-
-        //     // Warn if microphone is completely silent
-        //     if matches!(self.device_type, DeviceType::Microphone) && raw_rms == 0.0 && raw_peak == 0.0 {
-        //         warn!("⚠️ Microphone producing ZERO audio - check permissions or hardware!");
-        //     }
-        // }
-        // else if chunk_id % 100 == 0 && matches!(self.device_type, DeviceType::System) {
-        //     let raw_rms = (mono_data.iter().map(|&x| x * x).sum::<f32>() / mono_data.len() as f32).sqrt();
-        //     let raw_peak = mono_data.iter().map(|&x| x.abs()).fold(0.0f32, f32::max);
-        //     info!("🔊 [{:?}] Chunk {} - Raw: RMS={:.6}, Peak={:.6}",
-        //       self.device_type, chunk_id, raw_rms, raw_peak);
-
-        //     // Warn if system audio is completely silent
-        //     if raw_rms == 0.0 && raw_peak == 0.0 {
-        //         warn!("⚠️ System audio producing ZERO audio - check permissions or hardware!");
-        //     }
-        // }
-
-        // Use global recording timestamp for proper synchronization
-        let timestamp = self.state.get_recording_duration().unwrap_or(0.0);
-
-        // RAW AUDIO CHUNK: No gain applied - will be mixed and gained downstream
-        // Use 48kHz if we resampled, otherwise use original rate
         let audio_chunk = AudioChunk {
-            data: mono_data, // Raw audio (resampled if needed), no gain yet
-            sample_rate: if self.needs_resampling {
-                48000
-            } else {
-                self.sample_rate
-            },
+            data: mono_data,
+            sample_rate: self.sample_rate,
             timestamp,
             chunk_id,
             device_type: self.device_type,
         };
 
-        // NOTE: Raw audio is NOT sent to recording saver to prevent echo
-        // Only the mixed audio (from AudioPipeline) is saved to file (see pipeline.rs:726-736)
-        // This ensures we only record once: mic + system properly mixed
-        // Individual raw streams go only to the transcription pipeline below
-
-        // Send to processing pipeline for transcription
-        if let Err(e) = self.state.send_audio_chunk(audio_chunk) {
-            // Check if this is the "pipeline not ready" error
-            if e.to_string().contains("Audio pipeline not ready") {
-                // This is expected during initialization, just log it as debug
-                debug!("Audio pipeline not ready yet, skipping chunk {}", chunk_id);
-                return;
-            }
-
-            warn!("Failed to send audio chunk: {}", e);
-            // More specific error handling based on failure reason
-            let error = if e.to_string().contains("channel closed") {
-                AudioError::ChannelClosed
-            } else if e.to_string().contains("full") {
-                AudioError::BufferOverflow
-            } else {
-                AudioError::ProcessingFailed
-            };
-            self.state.report_error(error);
-        } else {
-            debug!("Sent audio chunk {} ({} samples)", chunk_id, data.len());
-        }
+        // Best-effort: a closed channel just means the pipeline has shut
+        // down (e.g. stop_recording already cleared it). No logging here —
+        // this runs on the RT thread — the pipeline shutdown path already
+        // logs the transition.
+        let _ = sender.send(audio_chunk);
     }
-
 }
 
 /// VAD-driven audio processing pipeline
@@ -663,14 +500,20 @@ pub struct AudioPipeline {
     // Performance optimization: reduce logging frequency
     last_summary_time: std::time::Instant,
     processed_chunks: u64,
-    // Smart batching for audio metrics
-    metrics_batcher: Option<AudioMetricsBatcher>,
     // Aligns the async mic + system streams into equal-length windows.
     ring_buffer: AudioMixerRingBuffer,
     // Acoustic echo canceller: removes the system audio the mic picks up from
     // the speakers, using the aligned system window as the far-end reference.
     // `None` when AEC couldn't initialize — recording continues without it.
     echo_canceller: Option<super::aec::MicEchoCanceller>,
+    // Mic enhancement chain (issue #21): runs AFTER `echo_canceller.cancel`,
+    // never before it. AEC3 assumes a linear, time-invariant near-end path;
+    // running the high-pass filter and loudness normalizer on the mic
+    // upstream of AEC (as the old per-stream `AudioCapture` did) fed AEC a
+    // time-varying, gain-boosted, clipped signal and broke its convergence.
+    // Mic-only — system audio is left raw.
+    mic_high_pass: Option<HighPassFilter>,
+    mic_normalizer: Option<LoudnessNormalizer>,
     // Sender for the interleaved stereo recording chunks (mic L, system R).
     recording_sender_for_mixed: Option<mpsc::UnboundedSender<AudioChunk>>,
     // Streaming partials: snapshots of in-progress utterances sent to the
@@ -698,6 +541,44 @@ struct PartialEmitState {
 const PARTIAL_MIN_SAMPLES: usize = 12_800; // 0.8 s @ 16 kHz
 const PARTIAL_EMIT_INTERVAL_SAMPLES: usize = 19_200; // 1.2 s @ 16 kHz
 
+/// Decide whether a streaming-partial snapshot should be emitted for one
+/// source, using edge detection (silence→speech bumps the utterance id) and
+/// a new-audio interval throttle. Returns `Some(utterance_id)` when a
+/// snapshot should be sent, `None` otherwise.
+///
+/// Deliberately takes only the buffer *length* (not the buffer itself) so
+/// callers can run this cheap check before deciding whether the
+/// (potentially large) partial buffer is worth cloning — see the call site
+/// in [`AudioPipeline::run_vad_for_source`].
+fn partial_emit_decision(
+    state: &mut PartialEmitState,
+    active: bool,
+    partial_len: usize,
+) -> Option<u64> {
+    // Edge: silence → speech starts a new utterance.
+    if active && !state.was_active {
+        state.utterance_id += 1;
+        state.samples_at_last_emit = 0;
+    }
+    // Edge: speech → silence ends the utterance (the final path takes over).
+    if !active && state.was_active {
+        state.samples_at_last_emit = 0;
+    }
+    state.was_active = active;
+
+    if !active || partial_len < PARTIAL_MIN_SAMPLES {
+        return None;
+    }
+
+    let new_since_emit = partial_len.saturating_sub(state.samples_at_last_emit);
+    if new_since_emit < PARTIAL_EMIT_INTERVAL_SAMPLES {
+        return None;
+    }
+    state.samples_at_last_emit = partial_len;
+
+    Some(state.utterance_id)
+}
+
 impl AudioPipeline {
     pub fn new(
         receiver: mpsc::UnboundedReceiver<AudioChunk>,
@@ -705,33 +586,16 @@ impl AudioPipeline {
         target_chunk_duration_ms: u32,
         sample_rate: u32,
         mic_device_name: String,
-        mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
-        system_device_kind: super::device_detection::InputDeviceKind,
+        mic_present: bool,
+        system_present: bool,
     ) -> Self {
-        // Log device characteristics for adaptive buffering
-        info!("🎛️ AudioPipeline initializing with device characteristics:");
         info!(
-            "   Mic: '{}' ({:?}) - Buffer: {:?}",
-            mic_device_name,
-            mic_device_kind,
-            mic_device_kind.buffer_timeout()
-        );
-        info!(
-            "   System: '{}' ({:?}) - Buffer: {:?}",
-            system_device_name,
-            system_device_kind,
-            system_device_kind.buffer_timeout()
+            "🎛️ AudioPipeline initializing: mic='{}' system='{}'",
+            mic_device_name, system_device_name
         );
 
-        // Device kind information can be used for adaptive buffering in the future
-        // For now, we log it for monitoring and potential optimization
-        let _ = (
-            mic_device_name,
-            mic_device_kind,
-            system_device_name,
-            system_device_kind,
-        );
+        let _ = (mic_device_name, system_device_name);
 
         // Redemption time = the trailing-silence gap that ends a segment.
         // Per-source, because the two streams have different needs:
@@ -778,10 +642,32 @@ impl AudioPipeline {
         };
 
         // Ring buffer aligns the asynchronously-arriving mic and system
-        // streams into equal-length windows for interleaving.
-        let ring_buffer = AudioMixerRingBuffer::new(sample_rate);
+        // streams into equal-length windows for interleaving. Tell it which
+        // sources actually exist for this recording (issue #22): a source
+        // that was never opened (mic-only or system-only recording) is
+        // permanently silent rather than something to wait on.
+        let mut ring_buffer = AudioMixerRingBuffer::new(sample_rate);
+        ring_buffer.set_expected_sources(mic_present, system_present);
         // Echo canceller for the mic (uses the system window as reference).
         let echo_canceller = super::aec::MicEchoCanceller::new(sample_rate);
+
+        // Mic enhancement chain (issue #21) — see the field docs on
+        // `mic_high_pass` / `mic_normalizer` for why this now lives here,
+        // downstream of AEC, instead of in the per-stream `AudioCapture`.
+        let mic_high_pass = Some(HighPassFilter::new(sample_rate, 80.0));
+        let mic_normalizer = match LoudnessNormalizer::new(1, sample_rate) {
+            Ok(normalizer) => {
+                info!("✅ EBU R128 normalizer initialized for microphone (target: -23 LUFS, capped +18/-12 dB)");
+                Some(normalizer)
+            }
+            Err(e) => {
+                warn!(
+                    "⚠️ Failed to create mic loudness normalizer: {}, normalization disabled",
+                    e
+                );
+                None
+            }
+        };
 
         // Note: target_chunk_duration_ms is ignored - VAD controls segmentation now
         let _ = target_chunk_duration_ms;
@@ -796,11 +682,11 @@ impl AudioPipeline {
             // Performance optimization: reduce logging frequency
             last_summary_time: std::time::Instant::now(),
             processed_chunks: 0,
-            // Initialize metrics batcher for smart batching
-            metrics_batcher: Some(AudioMetricsBatcher::new()),
             // Ring buffer for aligning mic + system into interleaved windows
             ring_buffer,
             echo_canceller,
+            mic_high_pass,
+            mic_normalizer,
             recording_sender_for_mixed: None, // Will be set by manager
             partial_sender: None,             // Will be set by manager if enabled
             mic_partial: PartialEmitState::default(),
@@ -841,33 +727,24 @@ impl AudioPipeline {
                     // Logging in hot paths causes severe performance degradation
                     self.processed_chunks += 1;
 
-                    // Smart batching: collect metrics instead of logging every chunk
-                    if let Some(ref batcher) = self.metrics_batcher {
-                        let avg_level = chunk.data.iter().map(|&x| x.abs()).sum::<f32>()
-                            / chunk.data.len() as f32;
-                        let duration_ms =
-                            chunk.data.len() as f64 / chunk.sample_rate as f64 * 1000.0;
-
-                        batch_audio_metric!(
-                            Some(batcher),
-                            chunk.chunk_id,
-                            chunk.data.len(),
-                            duration_ms,
-                            avg_level
-                        );
-                    }
-
                     // CRITICAL: Log summary only every 200 chunks OR every 60 seconds (99.5% reduction)
                     // This eliminates I/O overhead in the audio processing hot path
                     // Use performance-optimized debug macro that compiles to nothing in release builds
                     if self.processed_chunks % 200 == 0
                         || self.last_summary_time.elapsed().as_secs() >= 60
                     {
+                        let avg_level = if chunk.data.is_empty() {
+                            0.0
+                        } else {
+                            chunk.data.iter().map(|&x| x.abs()).sum::<f32>()
+                                / chunk.data.len() as f32
+                        };
                         perf_debug!(
-                            "Pipeline processed {} chunks, current chunk: {} ({} samples)",
+                            "Pipeline processed {} chunks, current chunk: {} ({} samples, avg level {:.4})",
                             self.processed_chunks,
                             chunk.chunk_id,
-                            chunk.data.len()
+                            chunk.data.len(),
+                            avg_level
                         );
                         self.last_summary_time = std::time::Instant::now();
                     }
@@ -880,52 +757,8 @@ impl AudioPipeline {
                     // STEP 2: Process audio in fixed windows when streams have sufficient data.
                     // Each window yields un-mixed mic + system slices used for source-tagged
                     // VAD, plus a mixed slice used only for the recording WAV.
-                    while self.ring_buffer.can_mix() {
-                        if let Some((mut mic_window, sys_window)) = self.ring_buffer.extract_window()
-                        {
-                            // STEP 2.5: Acoustic echo cancellation. Subtract the
-                            // system audio (played through the user's speakers)
-                            // from the mic, using the aligned system window as
-                            // the far-end reference. Runs before VAD and the
-                            // recording split, so the cleaned mic flows to both
-                            // transcription and the mic recording channel — a
-                            // remote speaker no longer bleeds in as a duplicate
-                            // "Me", and mic-side playback loses its echo.
-                            if let Some(ref mut aec) = self.echo_canceller {
-                                aec.cancel(&mut mic_window, &sys_window);
-                            }
-
-                            // STEP 3: Source-tagged VAD on each stream independently
-                            self.run_vad_for_source(&mic_window, DeviceType::Microphone);
-                            self.run_vad_for_source(&sys_window, DeviceType::System);
-
-                            // STEP 4: Interleave the two sources into a stereo
-                            // frame for the recording — mic = left, system =
-                            // right — so playback and downstream processing can
-                            // keep them apart (source-aware per-segment
-                            // playback, echo cancellation, …). The mono downmix
-                            // is derived on demand (the decoder averages
-                            // channels) rather than stored.
-                            let frames = mic_window.len().max(sys_window.len());
-                            let mut stereo = Vec::with_capacity(frames * 2);
-                            for i in 0..frames {
-                                stereo.push(mic_window.get(i).copied().unwrap_or(0.0)); // L: mic
-                                stereo.push(sys_window.get(i).copied().unwrap_or(0.0)); // R: system
-                            }
-
-                            if let Some(ref sender) = self.recording_sender_for_mixed {
-                                let recording_chunk = AudioChunk {
-                                    data: stereo,
-                                    sample_rate: self.sample_rate,
-                                    timestamp: chunk.timestamp,
-                                    chunk_id: self.chunk_id_counter,
-                                    // device_type is unused by the saver for the
-                                    // stereo recording chunk; left as Microphone.
-                                    device_type: DeviceType::Microphone,
-                                };
-                                let _ = sender.send(recording_chunk);
-                            }
-                        }
+                    while let Some((mic_window, sys_window)) = self.ring_buffer.extract_window() {
+                        self.process_window(mic_window, sys_window, chunk.timestamp);
                     }
                 }
                 Ok(None) => {
@@ -949,11 +782,83 @@ impl AudioPipeline {
         Ok(())
     }
 
+    /// Run one aligned mic/system window through AEC, mic enhancement,
+    /// source-tagged VAD, and the stereo recording split. Shared by the main
+    /// receive loop and `flush_remaining_audio` (issue #22/#41), so the
+    /// zero-padded tail window emitted at shutdown gets identical treatment
+    /// to every window processed during recording.
+    fn process_window(&mut self, mut mic_window: Vec<f32>, sys_window: Vec<f32>, timestamp: f64) {
+        // STEP 2.5: Acoustic echo cancellation. Subtract the
+        // system audio (played through the user's speakers)
+        // from the mic, using the aligned system window as
+        // the far-end reference. Runs before VAD and the
+        // recording split, so the cleaned mic flows to both
+        // transcription and the mic recording channel — a
+        // remote speaker no longer bleeds in as a duplicate
+        // "Me", and mic-side playback loses its echo.
+        if let Some(ref mut aec) = self.echo_canceller {
+            aec.cancel(&mut mic_window, &sys_window);
+        }
+
+        // STEP 2.7: Mic enhancement (issue #21) — high-pass
+        // then loudness normalization, mic only, and
+        // deliberately AFTER AEC (see field docs on
+        // `mic_high_pass`/`mic_normalizer`). System audio
+        // is left untouched.
+        if let Some(ref mut hpf) = self.mic_high_pass {
+            mic_window = hpf.process(&mic_window);
+        }
+        if let Some(ref mut normalizer) = self.mic_normalizer {
+            mic_window = normalizer.normalize_loudness(&mic_window);
+        }
+
+        // STEP 3: Source-tagged VAD on each stream independently
+        self.run_vad_for_source(&mic_window, DeviceType::Microphone);
+        self.run_vad_for_source(&sys_window, DeviceType::System);
+
+        // STEP 4: Interleave the two sources into a stereo
+        // frame for the recording — mic = left, system =
+        // right — so playback and downstream processing can
+        // keep them apart (source-aware per-segment
+        // playback, echo cancellation, …). The mono downmix
+        // is derived on demand (the decoder averages
+        // channels) rather than stored.
+        let frames = mic_window.len().max(sys_window.len());
+        let mut stereo = Vec::with_capacity(frames * 2);
+        for i in 0..frames {
+            stereo.push(mic_window.get(i).copied().unwrap_or(0.0)); // L: mic
+            stereo.push(sys_window.get(i).copied().unwrap_or(0.0)); // R: system
+        }
+
+        if let Some(ref sender) = self.recording_sender_for_mixed {
+            let recording_chunk = AudioChunk {
+                data: stereo,
+                sample_rate: self.sample_rate,
+                timestamp,
+                chunk_id: self.chunk_id_counter,
+                // device_type is unused by the saver for the
+                // stereo recording chunk; left as Microphone.
+                device_type: DeviceType::Microphone,
+            };
+            let _ = sender.send(recording_chunk);
+        }
+    }
+
     fn flush_remaining_audio(&mut self) -> Result<()> {
         info!(
             "Flushing remaining audio from pipeline (processed {} chunks)",
             self.processed_chunks
         );
+
+        // Drain any windows the ring buffer still owes us, including a final
+        // zero-padded partial window for the last <1 window of audio (issue
+        // #41 part 1), before flushing the VAD processors below.
+        let sample_rate = self.sample_rate as f64;
+        let final_windows = self.ring_buffer.flush_final();
+        for (mic_window, sys_window) in final_windows {
+            let timestamp = self.ring_buffer.window_pos as f64 / sample_rate;
+            self.process_window(mic_window, sys_window, timestamp);
+        }
 
         // Flush both VAD processors so any in-flight speech is emitted with its source tag.
         match self.mic_vad_processor.flush() {
@@ -984,61 +889,32 @@ impl AudioPipeline {
 
         // Streaming partial emission (best-effort, never blocks the final path).
         // Read speech-active + in-progress buffer BEFORE dispatch clears state.
+        //
+        // The throttle decision is evaluated first, using only the buffer's
+        // current *length* — the (potentially large) partial buffer itself is
+        // only cloned once we know a snapshot will actually be emitted.
+        // Previously the buffer was cloned on every ~50ms window while speech
+        // was active and then usually discarded by the throttle below.
         if self.partial_sender.is_some() {
             let active = processor.is_speech_active();
             let partial_len = processor.partial_samples().len();
-            let snapshot = if active && partial_len >= PARTIAL_MIN_SAMPLES {
-                Some(processor.partial_samples().to_vec())
-            } else {
-                None
+            let partial_state = match source {
+                DeviceType::Microphone => &mut self.mic_partial,
+                DeviceType::System => &mut self.system_partial,
             };
-            self.maybe_emit_partial(source, active, partial_len, snapshot);
+            if let Some(utterance_id) = partial_emit_decision(partial_state, active, partial_len) {
+                let snapshot = processor.partial_samples().to_vec();
+                if let Some(sender) = &self.partial_sender {
+                    let _ = sender.send(super::recording_state::PartialAudioChunk {
+                        samples: snapshot,
+                        source,
+                        utterance_id,
+                    });
+                }
+            }
         }
 
         self.dispatch_segments(segments, source_label(source));
-    }
-
-    /// Decide whether to send a streaming-partial snapshot for `source`, using
-    /// per-source edge detection (silence→speech bumps the utterance id) and a
-    /// new-audio interval throttle.
-    fn maybe_emit_partial(
-        &mut self,
-        source: DeviceType,
-        active: bool,
-        partial_len: usize,
-        snapshot: Option<Vec<f32>>,
-    ) {
-        let state = match source {
-            DeviceType::Microphone => &mut self.mic_partial,
-            DeviceType::System => &mut self.system_partial,
-        };
-
-        // Edge: silence → speech starts a new utterance.
-        if active && !state.was_active {
-            state.utterance_id += 1;
-            state.samples_at_last_emit = 0;
-        }
-        // Edge: speech → silence ends the utterance (the final path takes over).
-        if !active && state.was_active {
-            state.samples_at_last_emit = 0;
-        }
-        state.was_active = active;
-
-        let Some(snapshot) = snapshot else { return };
-        let new_since_emit = partial_len.saturating_sub(state.samples_at_last_emit);
-        if new_since_emit < PARTIAL_EMIT_INTERVAL_SAMPLES {
-            return;
-        }
-        state.samples_at_last_emit = partial_len;
-
-        let utterance_id = state.utterance_id;
-        if let Some(sender) = &self.partial_sender {
-            let _ = sender.send(super::recording_state::PartialAudioChunk {
-                samples: snapshot,
-                source,
-                utterance_id,
-            });
-        }
     }
 
     /// Send VAD segments to the transcription channel, preserving source identity
@@ -1118,20 +994,14 @@ impl AudioPipelineManager {
         recording_sender: Option<mpsc::UnboundedSender<AudioChunk>>,
         partial_sender: Option<mpsc::UnboundedSender<super::recording_state::PartialAudioChunk>>,
         mic_device_name: String,
-        mic_device_kind: super::device_detection::InputDeviceKind,
         system_device_name: String,
-        system_device_kind: super::device_detection::InputDeviceKind,
+        mic_present: bool,
+        system_present: bool,
     ) -> Result<()> {
-        // Log device information for adaptive buffering
+        // Log device information
         info!("🎙️ Starting pipeline with device info:");
-        info!(
-            "   Microphone: '{}' ({:?})",
-            mic_device_name, mic_device_kind
-        );
-        info!(
-            "   System Audio: '{}' ({:?})",
-            system_device_name, system_device_kind
-        );
+        info!("   Microphone: '{}'", mic_device_name);
+        info!("   System Audio: '{}'", system_device_name);
 
         // Create audio processing channel
         let (audio_sender, audio_receiver) = mpsc::unbounded_channel::<AudioChunk>();
@@ -1146,9 +1016,9 @@ impl AudioPipelineManager {
             target_chunk_duration_ms,
             sample_rate,
             mic_device_name,
-            mic_device_kind,
             system_device_name,
-            system_device_kind,
+            mic_present,
+            system_present,
         );
 
         // CRITICAL FIX: Connect recording sender to receive pre-mixed audio
@@ -1236,5 +1106,242 @@ impl AudioPipelineManager {
 impl Default for AudioPipelineManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod ring_buffer_tests {
+    use super::*;
+
+    const SR: u32 = 48_000;
+    // window_size_samples for 48kHz/50ms.
+    const W: usize = 2_400;
+
+    fn buf() -> AudioMixerRingBuffer {
+        let mut b = AudioMixerRingBuffer::new(SR);
+        b.set_expected_sources(true, true);
+        b
+    }
+
+    fn pattern(start: usize, len: usize) -> Vec<f32> {
+        (start..start + len).map(|i| i as f32).collect()
+    }
+
+    /// 1) Both sources in lockstep: windows pair identical positions.
+    ///
+    /// The very first call from each source establishes its anchor — the
+    /// first-ever source anchors at 0, the second anchors wherever the
+    /// first's position already is. Sending mic-then-system each round means
+    /// system's fixed anchor is exactly one window behind mic's; from then
+    /// on every subsequent round holds that SAME fixed skew rather than
+    /// drifting further — that stability is what this test checks.
+    #[test]
+    fn lockstep_pairs_matching_positions() {
+        let mut b = buf();
+        let mic_base = 0;
+        let sys_base = 1_000_000;
+        for k in 0..4 {
+            b.add_samples(DeviceType::Microphone, pattern(mic_base + k * W, W));
+            b.add_samples(DeviceType::System, pattern(sys_base + k * W, W));
+        }
+        for k in 0..4 {
+            let (mic, sys) = b.extract_window().expect("window ready");
+            assert_eq!(mic, pattern(mic_base + k * W, W), "mic window {k}");
+            if k == 0 {
+                // System's anchor (established on its first-ever call) is
+                // one window behind mic's — window 0 is entirely before it.
+                assert!(sys.iter().all(|&s| s == 0.0), "system window 0");
+            } else {
+                assert_eq!(
+                    sys,
+                    pattern(sys_base + (k - 1) * W, W),
+                    "system window {k}"
+                );
+            }
+        }
+        assert!(b.extract_window().is_none());
+    }
+
+    /// 2) System starts 120ms late: first windows are zero on the system
+    /// side, later windows align by position (not arrival).
+    #[test]
+    fn late_starting_source_aligns_by_position() {
+        let mut b = buf();
+        // Mic delivers 120ms (5760 samples) in 480-sample chunks before
+        // system ever shows up.
+        let late_start = (SR as usize * 120) / 1000; // 5760
+        let mut sent = 0;
+        while sent < late_start {
+            b.add_samples(DeviceType::Microphone, pattern(sent, 480));
+            sent += 480;
+        }
+        assert_eq!(sent, late_start);
+        // Now system arrives — its raw position 0 anchors at `late_start`.
+        b.add_samples(DeviceType::System, pattern(0, 480));
+        // Keep mic flowing well past window 2 (7200 samples) and system
+        // flowing too, so nothing here is gated on waiting for more data.
+        while sent < 3 * W {
+            b.add_samples(DeviceType::Microphone, pattern(sent, 480));
+            sent += 480;
+        }
+        b.add_samples(DeviceType::System, vec![7.0; 4 * 480]); // plenty of system data
+
+        // Window 0 [0, W): mic has real data, system hasn't started yet -> zero.
+        let (mic0, sys0) = b.extract_window().expect("window 0 ready");
+        assert_eq!(mic0, pattern(0, W));
+        assert!(sys0.iter().all(|&s| s == 0.0));
+
+        // Window 1 [W, 2W) = [2400, 4800): still entirely before system's
+        // anchor (5760) -> zero.
+        let (_, sys1) = b.extract_window().expect("window 1 ready");
+        assert!(sys1.iter().all(|&s| s == 0.0));
+
+        // Window 2 [4800, 7200): system's anchor (5760) falls inside this
+        // window -> zero prefix, then system's first chunk (pattern(0,480)),
+        // then the follow-on 7.0 chunk — all positioned correctly.
+        let (_, sys2) = b.extract_window().expect("window 2 ready");
+        let zero_prefix = late_start - 2 * W; // 5760 - 4800 = 960
+        assert!(sys2[..zero_prefix].iter().all(|&s| s == 0.0));
+        assert_eq!(sys2[zero_prefix..zero_prefix + 480], pattern(0, 480)[..]);
+        assert_eq!(
+            sys2[zero_prefix + 480..],
+            vec![7.0; W - zero_prefix - 480][..]
+        );
+    }
+
+    /// 3) A burst (several windows at once) from one source doesn't shift
+    /// pairing relative to the steadily-delivered other source.
+    #[test]
+    fn burst_does_not_shift_alignment() {
+        let mut b = buf();
+        let sys_base = 500_000;
+        // Mic sends one window first, establishing the shared anchor (mic=0).
+        b.add_samples(DeviceType::Microphone, pattern(0, W));
+        // System then delivers 3 windows' worth in a single burst call. Its
+        // anchor is mic's position at that moment (W), so its burst covers
+        // aligned windows 1..4, not 0..3.
+        b.add_samples(DeviceType::System, pattern(sys_base, 3 * W));
+        // Mic keeps delivering steadily, one window at a time.
+        for k in 1..4 {
+            b.add_samples(DeviceType::Microphone, pattern(k * W, W));
+        }
+
+        for k in 0..4 {
+            let (mic, sys) = b.extract_window().expect("window ready");
+            assert_eq!(mic, pattern(k * W, W), "mic window {k} shifted");
+            if k == 0 {
+                assert!(sys.iter().all(|&s| s == 0.0), "system window 0");
+            } else {
+                // The burst is drained one window at a time regardless of
+                // having arrived as a single call — no shift between windows.
+                assert_eq!(
+                    sys,
+                    pattern(sys_base + (k - 1) * W, W),
+                    "system window {k} shifted by the burst"
+                );
+            }
+        }
+    }
+
+    /// 4) A source lagging more than MAX_LAG produces zero gaps for the
+    /// laggard, and its late data (once it finally arrives) is dropped.
+    #[test]
+    fn lag_beyond_max_produces_gaps_and_drops_late_data() {
+        let mut b = buf();
+        // Two windows in lockstep to get both sources seen and aligned.
+        b.add_samples(DeviceType::Microphone, pattern(0, 2 * W));
+        b.add_samples(DeviceType::System, pattern(0, 2 * W));
+        let (_, _) = b.extract_window().unwrap();
+        let (_, _) = b.extract_window().unwrap();
+        assert_eq!(b.window_pos, (2 * W) as u64);
+
+        // Mic races ahead by well over MAX_LAG (500ms = 24_000 samples);
+        // system sends nothing more.
+        b.add_samples(DeviceType::Microphone, pattern(2 * W, 30_000));
+
+        let mut windows = 0;
+        let mut saw_system_gap = false;
+        while let Some((_, sys)) = b.extract_window() {
+            windows += 1;
+            if sys.iter().all(|&s| s == 0.0) {
+                saw_system_gap = true;
+            }
+            if windows > 50 {
+                break; // safety net against a runaway loop in a broken impl
+            }
+        }
+        assert!(windows > 0, "expected forced-gap windows to be emitted");
+        assert!(saw_system_gap, "lagging system side should be zero-filled");
+
+        // The discard threshold has moved forward; system's real (but
+        // stale) continuation data — still starting at its true position,
+        // 2*W — must now be dropped rather than accepted.
+        let discard_before = b.system.discard_before;
+        assert!(discard_before > (2 * W) as u64);
+        b.add_samples(DeviceType::System, pattern(2 * W, W));
+        assert!(
+            b.system.buffer.is_empty(),
+            "late system data should have been dropped, not buffered"
+        );
+    }
+
+    /// 5) Overflow drops from the front but advances the buffer's start
+    /// position so alignment is preserved.
+    #[test]
+    fn overflow_preserves_position() {
+        let mut b = AudioMixerRingBuffer::new(SR);
+        b.set_expected_sources(true, false); // system not present this recording
+
+        let max = b.max_buffer_size;
+        let total = max + 10_000;
+        b.add_samples(DeviceType::Microphone, pattern(0, total));
+
+        assert_eq!(b.mic.buffer.len(), max);
+        assert_eq!(b.mic.buf_start_pos, (total - max) as u64);
+        // The retained tail must still hold the correct (unshifted) values.
+        assert_eq!(b.mic.buffer.front().copied(), Some((total - max) as f32));
+        assert_eq!(b.mic.raw_next_pos, total as u64);
+    }
+
+    /// 6) Shutdown flush emits the zero-padded tail instead of dropping it.
+    /// Single-source setup keeps the arithmetic focused on the flush
+    /// mechanism itself rather than on cross-source anchor skew (covered by
+    /// the other tests).
+    #[test]
+    fn shutdown_flush_emits_padded_tail() {
+        let mut b = AudioMixerRingBuffer::new(SR);
+        b.set_expected_sources(true, false);
+        let leftover = 600usize;
+        b.add_samples(DeviceType::Microphone, pattern(0, W + leftover));
+
+        // Drain the one full window normally.
+        let (mic, sys) = b.extract_window().expect("full window ready");
+        assert_eq!(mic, pattern(0, W));
+        assert!(sys.iter().all(|&s| s == 0.0));
+
+        // Nothing else is a full window yet, and the lag is well under
+        // MAX_LAG, so the normal path won't emit it.
+        assert!(b.extract_window().is_none());
+
+        let tail = b.flush_final();
+        assert_eq!(tail.len(), 1, "exactly one padded tail window expected");
+        let (mic_tail, sys_tail) = &tail[0];
+        assert_eq!(mic_tail.len(), W);
+        assert_eq!(sys_tail.len(), W);
+        assert_eq!(mic_tail[..leftover], pattern(W, leftover)[..]);
+        assert!(mic_tail[leftover..].iter().all(|&s| s == 0.0));
+        assert!(sys_tail.iter().all(|&s| s == 0.0));
+    }
+
+    /// A single-source recording (system never opened) treats system as
+    /// permanently silent instead of blocking on it.
+    #[test]
+    fn single_source_recording_never_waits_on_absent_source() {
+        let mut b = AudioMixerRingBuffer::new(SR);
+        b.set_expected_sources(true, false);
+        b.add_samples(DeviceType::Microphone, pattern(0, W));
+        let (mic, sys) = b.extract_window().expect("mic-only window ready");
+        assert_eq!(mic, pattern(0, W));
+        assert!(sys.iter().all(|&s| s == 0.0));
     }
 }

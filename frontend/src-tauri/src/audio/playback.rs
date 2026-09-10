@@ -35,39 +35,57 @@ struct Player {
     current: Mutex<Option<Arc<Sink>>>,
 }
 
-/// Lazily bring up the audio output thread. Returns a shared error (cloned)
-/// when no output device is available, so callers surface a clean message.
+/// Lazily bring up the audio output thread. Only a successful outcome is
+/// cached: a failure (no output device available at the time, e.g. a
+/// Bluetooth sink not yet connected) is returned as an error but NOT
+/// memoized, so the next call retries device creation from scratch instead
+/// of repeating the same stale error forever.
 fn player() -> Result<&'static Player, String> {
-    static PLAYER: OnceLock<Result<Player, String>> = OnceLock::new();
-    PLAYER
-        .get_or_init(|| {
-            let (tx, rx) = mpsc::channel();
-            std::thread::Builder::new()
-                .name("meetily-audio-out".into())
-                .spawn(move || match OutputStream::try_default() {
-                    Ok((stream, handle)) => {
-                        let _ = tx.send(Ok(handle));
-                        // `stream` is `!Send` and must outlive every sink built
-                        // from its handle; keep it alive here for the app's life.
-                        let _keep_alive = stream;
-                        loop {
-                            std::thread::park();
-                        }
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Err(format!("No audio output device: {e}")));
-                    }
-                })
-                .map_err(|e| format!("Failed to start audio thread: {e}"))?;
-            rx.recv()
-                .map_err(|_| "Audio output thread exited".to_string())?
-                .map(|handle| Player {
-                    handle,
-                    current: Mutex::new(None),
-                })
+    static PLAYER: OnceLock<Player> = OnceLock::new();
+    // Serializes concurrent init attempts so we don't spawn multiple output
+    // threads racing to win `PLAYER.set(..)`.
+    static INIT_LOCK: Mutex<()> = Mutex::new(());
+
+    if let Some(p) = PLAYER.get() {
+        return Ok(p);
+    }
+
+    let _guard = INIT_LOCK.lock().unwrap();
+    // Another thread may have finished initializing while we waited for the lock.
+    if let Some(p) = PLAYER.get() {
+        return Ok(p);
+    }
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("meetily-audio-out".into())
+        .spawn(move || match OutputStream::try_default() {
+            Ok((stream, handle)) => {
+                let _ = tx.send(Ok(handle));
+                // `stream` is `!Send` and must outlive every sink built
+                // from its handle; keep it alive here for the app's life.
+                let _keep_alive = stream;
+                loop {
+                    std::thread::park();
+                }
+            }
+            Err(e) => {
+                let _ = tx.send(Err(format!("No audio output device: {e}")));
+            }
         })
-        .as_ref()
-        .map_err(|e| e.clone())
+        .map_err(|e| format!("Failed to start audio thread: {e}"))?;
+
+    let handle = rx
+        .recv()
+        .map_err(|_| "Audio output thread exited".to_string())??;
+
+    // If another thread beat us to it (shouldn't happen under INIT_LOCK, but
+    // set() only fails if already-initialized), fall back to that instance.
+    let _ = PLAYER.set(Player {
+        handle,
+        current: Mutex::new(None),
+    });
+    Ok(PLAYER.get().expect("just set above"))
 }
 
 /// Play interleaved 16-bit PCM natively, replacing any clip already playing.
@@ -86,8 +104,8 @@ pub fn play_pcm_i16<R: Runtime>(
         prev.stop();
     }
 
-    let sink = Sink::try_new(&active.handle)
-        .map_err(|e| format!("Failed to create audio sink: {e}"))?;
+    let sink =
+        Sink::try_new(&active.handle).map_err(|e| format!("Failed to create audio sink: {e}"))?;
     sink.append(SamplesBuffer::new(channels, sample_rate, samples));
     let sink = Arc::new(sink);
     *active.current.lock().unwrap() = Some(sink.clone());

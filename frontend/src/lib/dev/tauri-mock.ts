@@ -160,6 +160,14 @@ const COMMAND_DEFAULTS: Record<string, Default> = {
   whisper_get_models_directory: "/tmp/parley-dev/models",
   get_default_recordings_folder_path: "/tmp/parley-dev/recordings",
 
+  // --- FFmpeg status/install (Settings → Recordings) ------------------------
+  ffmpeg_status: () => ({
+    installed: true,
+    path: "/usr/bin/ffmpeg",
+    source: "path",
+  }),
+  ffmpeg_ensure_installed: "/usr/bin/ffmpeg",
+
   // --- Meetings / lists (.map()/.length) -----------------------------------
   // Seeded with sample data (dev-only) so the sidebar + home-screen meeting and
   // task summaries render with content instead of empty states.

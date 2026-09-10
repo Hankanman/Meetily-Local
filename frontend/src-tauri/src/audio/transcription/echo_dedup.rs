@@ -35,6 +35,29 @@ const SIMILARITY_THRESHOLD: f64 = 0.85;
 /// system copy.
 const OVERLAP_TOLERANCE_SECS: f64 = 1.5;
 
+/// Minimum word count a segment's normalized text must have to be eligible
+/// for echo dedup at all. Short backchannel acknowledgements ("yeah",
+/// "okay", "right") normalize identically across speakers and commonly land
+/// within [`OVERLAP_TOLERANCE_SECS`] of each other purely because both
+/// parties are reacting to the same moment in conversation — not because
+/// one is an acoustic echo of the other. Below this word count (or below
+/// [`MIN_MATCH_DURATION_SECS`]) we never treat the pair as an echo,
+/// regardless of similarity.
+const MIN_MATCH_WORD_COUNT: usize = 3;
+
+/// Minimum audio duration (seconds) a segment must span to be eligible for
+/// echo dedup. Companion floor to [`MIN_MATCH_WORD_COUNT`] — a very short
+/// utterance is a backchannel even if it happens to tokenize to 3+ words.
+const MIN_MATCH_DURATION_SECS: f64 = 1.0;
+
+/// For texts that clear the length floor above but are still short (3-5
+/// words), require a tighter similarity than [`SIMILARITY_THRESHOLD`]: at
+/// this length a couple of shared common words is enough to hit 0.85 by
+/// coincidence, so genuine echoes (near-identical) are distinguished from
+/// merely-similar-length short phrases by demanding near-exact agreement.
+const SHORT_TEXT_WORD_COUNT_MAX: usize = 5;
+const SHORT_TEXT_SIMILARITY_THRESHOLD: f64 = 0.95;
+
 /// Hard cap on the number of recently-accepted segments retained for
 /// cross-source comparison. This is a safety bound; the time-based prune in
 /// [`EchoDedup::prune`] is the primary bound and normally keeps the buffer
@@ -305,9 +328,41 @@ fn is_cross_source_match(
     end_b: f64,
     text_b: &str,
 ) -> bool {
-    source_a != source_b
-        && intervals_overlap(start_a, end_a, start_b, end_b, OVERLAP_TOLERANCE_SECS)
-        && similarity_ratio(text_a, text_b) >= SIMILARITY_THRESHOLD
+    if source_a == source_b {
+        return false;
+    }
+    if !intervals_overlap(start_a, end_a, start_b, end_b, OVERLAP_TOLERANCE_SECS) {
+        return false;
+    }
+
+    // Length floor: short backchannel acknowledgements ("yeah", "okay",
+    // "right") are never treated as echoes, no matter how similar or
+    // well-timed — see MIN_MATCH_WORD_COUNT / MIN_MATCH_DURATION_SECS docs.
+    let word_count_a = word_count(text_a);
+    let word_count_b = word_count(text_b);
+    let duration_a = end_a - start_a;
+    let duration_b = end_b - start_b;
+    if word_count_a < MIN_MATCH_WORD_COUNT
+        || word_count_b < MIN_MATCH_WORD_COUNT
+        || duration_a < MIN_MATCH_DURATION_SECS
+        || duration_b < MIN_MATCH_DURATION_SECS
+    {
+        return false;
+    }
+
+    let threshold =
+        if word_count_a <= SHORT_TEXT_WORD_COUNT_MAX || word_count_b <= SHORT_TEXT_WORD_COUNT_MAX {
+            SHORT_TEXT_SIMILARITY_THRESHOLD
+        } else {
+            SIMILARITY_THRESHOLD
+        };
+
+    similarity_ratio(text_a, text_b) >= threshold
+}
+
+/// Word count of already-normalized text (whitespace-separated tokens).
+fn word_count(text: &str) -> usize {
+    text.split_whitespace().count()
 }
 
 #[cfg(test)]
@@ -552,6 +607,42 @@ mod tests {
                 43.0
             ),
             EchoDecision::Accept
+        );
+    }
+
+    #[test]
+    fn short_backchannel_pair_is_kept_on_both_sides() {
+        // Both parties say a one-word acknowledgement within the overlap
+        // tolerance — this must never be treated as an echo, regardless of
+        // how similar (here, identical) the normalized text is.
+        let mut dedup = EchoDedup::new();
+        assert_eq!(
+            dedup.check(DeviceType::System, "yeah", 10.0, 10.3),
+            EchoDecision::Accept
+        );
+        dedup.record(DeviceType::System, "yeah", 10.0, 10.3);
+
+        assert_eq!(
+            dedup.check(DeviceType::Microphone, "yeah", 10.1, 10.4),
+            EchoDecision::Accept
+        );
+    }
+
+    #[test]
+    fn genuine_long_echo_is_still_dropped() {
+        // A real 8-word echo comfortably clears both the length floor and
+        // the (relaxed, since >5 words) SIMILARITY_THRESHOLD.
+        let mut dedup = EchoDedup::new();
+        let text = "we should definitely try to ship this friday";
+        assert_eq!(
+            dedup.check(DeviceType::System, text, 10.0, 13.0),
+            EchoDecision::Accept
+        );
+        dedup.record(DeviceType::System, text, 10.0, 13.0);
+
+        assert_eq!(
+            dedup.check(DeviceType::Microphone, text, 10.3, 13.4),
+            EchoDecision::DropAsMicEcho
         );
     }
 

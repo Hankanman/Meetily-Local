@@ -10,12 +10,39 @@ use crate::speaker_diarization::Diarizer;
 use crate::whisper_engine::WhisperEngine;
 
 /// Unload the Whisper model after a batch job (import or retranscription).
-/// Skips unloading if a live recording is currently in progress, since recording
-/// uses the same global engine instance.
+///
+/// Two guards, because `is_recording()` alone isn't enough: on
+/// `stop_streams_and_force_flush`, `RecordingState::cleanup()` (and so
+/// `is_recording() == false`) happens *before* the transcription worker has
+/// drained its queued chunks (see `whisper_engine::lease` doc comment for the
+/// full scenario) — a batch job finishing in that window would otherwise slip
+/// past the `is_recording()` check and unload the model the live worker is
+/// still using for its tail segments.
+///
+/// So: skip immediately if a recording is in progress (fast path, avoids
+/// waiting at all for the common case), then also wait (bounded) for the live
+/// engine lease to be free before actually unloading — this is the real
+/// guard against the drain-race above. If the wait times out, the model is
+/// left loaded rather than unloaded out from under a still-draining worker.
 pub(crate) async fn unload_engine_after_batch() {
     if crate::audio::recording_commands::is_recording().await {
         log::info!("Skipping model unload after batch: recording in progress");
         return;
+    }
+
+    if crate::whisper_engine::LIVE_ENGINE_LEASE.is_live_leased() {
+        log::info!(
+            "Live transcription worker still holds the Whisper engine lease; waiting before unloading model after batch"
+        );
+        if !crate::whisper_engine::LIVE_ENGINE_LEASE
+            .wait_until_free(std::time::Duration::from_secs(30 * 60))
+            .await
+        {
+            log::warn!(
+                "Timed out waiting for live transcription to release the Whisper engine; skipping unload after batch"
+            );
+            return;
+        }
     }
 
     use crate::whisper_engine::commands::WHISPER_ENGINE;

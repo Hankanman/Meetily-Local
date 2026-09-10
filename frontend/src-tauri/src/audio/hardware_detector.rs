@@ -16,7 +16,6 @@ pub enum GpuType {
     None,
     Cuda,   // NVIDIA
     Vulkan, // AMD/Intel
-    OpenCL, // Generic GPU compute
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,32 +78,83 @@ impl HardwareProfile {
             .unwrap_or(4) // Default to 4 cores
     }
 
-    /// Detect GPU acceleration capabilities
+    /// Detect GPU acceleration capabilities.
+    ///
+    /// The compiled Cargo feature (`cuda` / `vulkan` / `hipblas`, see
+    /// `Cargo.toml` `[features]`) is the source of truth: it determines
+    /// whether whisper-rs was actually built with GPU support linked in.
+    /// Filesystem/env heuristics are unrelated to what got compiled (e.g. a
+    /// CPU-only build can still have `/usr/local/cuda` installed for other
+    /// tooling, and a Vulkan build's runtime-only `libvulkan.so.1` doesn't
+    /// match the dev-package-only unversioned `libvulkan.so` path we used to
+    /// probe for) so they are used only as a secondary sanity check — logged
+    /// as a warning, never as the decision itself. A CPU-only build must
+    /// never report a GPU.
     fn detect_gpu() -> (bool, GpuType) {
-        // Check for CUDA (NVIDIA)
-        if Self::has_cuda_support() {
+        #[cfg(feature = "cuda")]
+        {
+            if !Self::has_cuda_support() {
+                log::warn!(
+                    "Built with the 'cuda' feature but no CUDA installation was found \
+                     via CUDA_PATH/CUDA_HOME or /usr/local/cuda; GPU init may fail at runtime."
+                );
+            }
             return (true, GpuType::Cuda);
         }
 
-        // Check for Vulkan (AMD/Intel/others)
-        if Self::has_vulkan_support() {
+        #[cfg(feature = "hipblas")]
+        {
+            // AMD ROCm HIP - treated as the Vulkan-equivalent GPU tier since
+            // there is no dedicated HIP variant of `GpuType`.
             return (true, GpuType::Vulkan);
         }
 
-        // Fallback to CPU-only
+        #[cfg(feature = "vulkan")]
+        {
+            if !Self::has_vulkan_support() {
+                log::warn!(
+                    "Built with the 'vulkan' feature but no Vulkan runtime library was found \
+                     under the probed paths; GPU init may fail at runtime."
+                );
+            }
+            return (true, GpuType::Vulkan);
+        }
+
+        // No GPU-accelerated backend was compiled in - CPU-only build.
+        #[allow(unreachable_code)]
         (false, GpuType::None)
     }
 
-    /// Detect available system memory in GB
+    /// Detect available system memory in GB.
+    ///
+    /// Reads physical memory from `/proc/meminfo` (`MemTotal`) on Linux. The
+    /// `MEMORY_GB` env var can still be set to override this (useful for
+    /// testing/tuning); it takes precedence when present. Falls back to a
+    /// conservative 8 GB only when neither source is available/parseable.
     fn detect_memory_gb() -> u8 {
-        // Simple memory detection - could be enhanced with system-specific calls
-        match std::env::var("MEMORY_GB") {
-            Ok(mem_str) => mem_str.parse().unwrap_or(8),
-            Err(_) => {
-                // Default estimates based on common configurations
-                8 // Conservative default
+        if let Ok(mem_str) = std::env::var("MEMORY_GB") {
+            if let Ok(gb) = mem_str.parse() {
+                return gb;
             }
         }
+
+        match std::fs::read_to_string("/proc/meminfo") {
+            Ok(contents) => Self::parse_meminfo_total_gb(&contents).unwrap_or(8),
+            Err(_) => 8, // Conservative default when /proc/meminfo is unreadable
+        }
+    }
+
+    /// Parse the `MemTotal:` line out of `/proc/meminfo` content (kB) and
+    /// convert it to whole gigabytes (rounded to the nearest GB, minimum 1).
+    fn parse_meminfo_total_gb(meminfo: &str) -> Option<u8> {
+        let kb: u64 = meminfo
+            .lines()
+            .find(|line| line.starts_with("MemTotal:"))
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|value| value.parse().ok())?;
+
+        let gb = (kb as f64 / 1024.0 / 1024.0).round() as u64;
+        Some(gb.max(1).min(255) as u8)
     }
 
     /// Calculate performance tier based on hardware
@@ -121,7 +171,7 @@ impl HardwareProfile {
                     PerformanceTier::High
                 }
             }
-            GpuType::Vulkan | GpuType::OpenCL => {
+            GpuType::Vulkan => {
                 if memory_gb >= 12 && cpu_cores >= 6 {
                     PerformanceTier::High
                 } else {
@@ -129,7 +179,12 @@ impl HardwareProfile {
                 }
             }
             GpuType::None => {
-                if cpu_cores >= 8 && memory_gb >= 16 {
+                // No compiled GPU backend: still avoid dumping every
+                // reasonably-specced CPU-only machine into the lowest tier.
+                // A stock 8GB/4-core box is "Medium" (decent beam size),
+                // and it takes genuinely low-spec hardware (few cores and/or
+                // little memory) to land in "Low".
+                if cpu_cores >= 4 && memory_gb >= 8 {
                     PerformanceTier::Medium
                 } else {
                     PerformanceTier::Low
@@ -138,6 +193,9 @@ impl HardwareProfile {
         }
     }
 
+    /// Secondary sanity check only (see `detect_gpu`), not used to decide
+    /// `GpuType` - only consulted when the `cuda` feature is compiled in.
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
     fn has_cuda_support() -> bool {
         // Check for CUDA environment or libraries
         std::env::var("CUDA_PATH").is_ok()
@@ -145,11 +203,27 @@ impl HardwareProfile {
             || std::path::Path::new("/usr/local/cuda").exists()
     }
 
+    /// Secondary sanity check only (see `detect_gpu`), not used to decide
+    /// `GpuType` - only consulted when the `vulkan` feature is compiled in.
+    ///
+    /// Probes for the *runtime* loader library (`libvulkan.so.1`), which is
+    /// what actually ships on end-user machines - the unversioned
+    /// `libvulkan.so` symlink is only installed by `-dev`/`-devel` packages.
+    /// Covers Debian/Ubuntu multiarch, plain `/usr/lib`, and Fedora/RHEL's
+    /// `/usr/lib64` layout.
+    #[cfg_attr(not(feature = "vulkan"), allow(dead_code))]
     fn has_vulkan_support() -> bool {
-        // Basic Vulkan detection - could be enhanced
         std::env::var("VULKAN_SDK").is_ok()
-            || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libvulkan.so").exists()
-            || std::path::Path::new("/usr/lib/libvulkan.so").exists()
+            || [
+                "/usr/lib/x86_64-linux-gnu/libvulkan.so.1",
+                "/usr/lib/x86_64-linux-gnu/libvulkan.so",
+                "/usr/lib64/libvulkan.so.1",
+                "/usr/lib64/libvulkan.so",
+                "/usr/lib/libvulkan.so.1",
+                "/usr/lib/libvulkan.so",
+            ]
+            .iter()
+            .any(|p| std::path::Path::new(p).exists())
     }
 
     /// Generate adaptive Whisper configuration based on hardware
@@ -186,27 +260,6 @@ impl HardwareProfile {
         }
     }
 
-    /// Get recommended chunk duration in milliseconds based on performance tier
-    pub fn get_recommended_chunk_duration_ms(&self) -> u32 {
-        match self.performance_tier {
-            PerformanceTier::Ultra => 25000,  // 25 seconds for maximum accuracy
-            PerformanceTier::High => 20000,   // 20 seconds for high quality
-            PerformanceTier::Medium => 15000, // 15 seconds for balance
-            PerformanceTier::Low => 10000,    // 10 seconds for responsiveness
-        }
-    }
-
-    /// Check if hardware can handle real-time processing of given sample rate
-    pub fn can_handle_realtime(&self, sample_rate: u32, channels: u16) -> bool {
-        let data_rate = sample_rate * channels as u32;
-
-        match self.performance_tier {
-            PerformanceTier::Ultra => data_rate <= 192000, // Up to 192kHz stereo
-            PerformanceTier::High => data_rate <= 96000,   // Up to 96kHz stereo or 192kHz mono
-            PerformanceTier::Medium => data_rate <= 48000, // Up to 48kHz stereo
-            PerformanceTier::Low => data_rate <= 22050,    // Up to 22kHz stereo or 48kHz mono
-        }
-    }
 }
 
 #[cfg(test)]
@@ -241,5 +294,63 @@ mod tests {
 
         let high_tier = HardwareProfile::calculate_performance_tier(8, &GpuType::Cuda, 16);
         assert_eq!(high_tier, PerformanceTier::Ultra);
+    }
+
+    #[test]
+    fn test_cpu_only_stock_hardware_is_not_lowest_tier() {
+        // Regression test for issue #20: a stock CPU-only machine (8GB RAM,
+        // 4 cores) used to land in PerformanceTier::Low (beam_size 1,
+        // temperature 0.4) because the old logic required >= 16GB to reach
+        // Medium. It should now land in Medium.
+        let tier = HardwareProfile::calculate_performance_tier(4, &GpuType::None, 8);
+        assert_eq!(tier, PerformanceTier::Medium);
+
+        // Genuinely low-spec hardware should still be Low.
+        let tier = HardwareProfile::calculate_performance_tier(2, &GpuType::None, 4);
+        assert_eq!(tier, PerformanceTier::Low);
+
+        // Low core count but plenty of memory is still Low.
+        let tier = HardwareProfile::calculate_performance_tier(2, &GpuType::None, 32);
+        assert_eq!(tier, PerformanceTier::Low);
+    }
+
+    #[test]
+    fn test_gpu_tier_never_below_medium() {
+        // A compiled-in GPU feature (Vulkan/hipblas-mapped-to-Vulkan) should
+        // never be shoved down to the Low tier, even on weak CPU/memory,
+        // since Low forces use_gpu: false and beam_size: 1.
+        let tier = HardwareProfile::calculate_performance_tier(1, &GpuType::Vulkan, 1);
+        assert_ne!(tier, PerformanceTier::Low);
+
+        let tier = HardwareProfile::calculate_performance_tier(1, &GpuType::Cuda, 1);
+        assert_ne!(tier, PerformanceTier::Low);
+    }
+
+    #[test]
+    fn test_parse_meminfo_total_gb() {
+        let sample = "MemTotal:       16384000 kB\n\
+                       MemFree:         1234567 kB\n\
+                       MemAvailable:    8765432 kB\n";
+        // 16384000 kB / 1024 / 1024 = ~15.625 GB, rounds to 16.
+        assert_eq!(HardwareProfile::parse_meminfo_total_gb(sample), Some(16));
+    }
+
+    #[test]
+    fn test_parse_meminfo_total_gb_small_and_odd_spacing() {
+        let sample = "MemTotal:   8000000 kB\n";
+        // 8000000 kB / 1024 / 1024 = ~7.629 GB, rounds to 8.
+        assert_eq!(HardwareProfile::parse_meminfo_total_gb(sample), Some(8));
+    }
+
+    #[test]
+    fn test_parse_meminfo_total_gb_missing_field() {
+        let sample = "MemFree: 1234 kB\nMemAvailable: 5678 kB\n";
+        assert_eq!(HardwareProfile::parse_meminfo_total_gb(sample), None);
+    }
+
+    #[test]
+    fn test_parse_meminfo_total_gb_malformed() {
+        let sample = "MemTotal: not-a-number kB\n";
+        assert_eq!(HardwareProfile::parse_meminfo_total_gb(sample), None);
     }
 }

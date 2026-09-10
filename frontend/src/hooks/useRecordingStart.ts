@@ -39,7 +39,7 @@ export function useRecordingStart(
   const { clearTranscripts, setMeetingTitle } = useTranscripts();
   const { setIsMeetingActive } = useSidebar();
   const { selectedDevices } = useConfig();
-  const { setStatus } = useRecordingState();
+  const { setStatus, isStopFlowActive } = useRecordingState();
 
   // Check if a local Whisper transcription model is downloaded and ready.
   // Function name kept as `checkParakeetReady` for minimal call-site churn —
@@ -161,6 +161,18 @@ export function useRecordingStart(
       if (typeof window !== "undefined") {
         const shouldAutoStart = sessionStorage.getItem("autoStartRecording");
         if (shouldAutoStart === "true" && !isRecording && !isAutoStarting) {
+          // A previous recording's stop is still draining/finalising (local
+          // status or the backend's own is_finalising flag) — starting now
+          // would either be refused by the backend or race the in-flight
+          // save (issue #35). Leave the flag alone so this effect retries
+          // once isStopFlowActive clears, rather than starting a recording
+          // that's about to be rejected out from under the user.
+          if (isStopFlowActive) {
+            console.log(
+              "Deferring auto-start - previous recording still finalising",
+            );
+            return;
+          }
           console.log("Auto-starting recording from navigation...");
           setIsAutoStarting(true);
           sessionStorage.removeItem("autoStartRecording"); // Clear the flag
@@ -247,6 +259,7 @@ export function useRecordingStart(
   }, [
     isRecording,
     isAutoStarting,
+    isStopFlowActive,
     selectedDevices,
     setMeetingTitle,
     setIsRecording,
@@ -258,112 +271,12 @@ export function useRecordingStart(
     setStatus,
   ]);
 
-  // Listen for direct recording trigger from sidebar when already on home page
-  useEffect(() => {
-    const handleDirectStart = async () => {
-      if (isRecording || isAutoStarting) {
-        console.log(
-          "Recording already in progress, ignoring direct start event",
-        );
-        return;
-      }
-
-      console.log("Direct start from sidebar - checking Parakeet model status");
-      setIsAutoStarting(true);
-
-      // Check if Parakeet transcription model is ready before starting
-      const parakeetReady = await checkParakeetReady();
-      if (!parakeetReady) {
-        const isDownloading = await checkIfModelDownloading();
-        if (isDownloading) {
-          toast.info("Model download in progress", {
-            description:
-              "Please wait for the transcription model to finish downloading before recording.",
-            duration: 5000,
-          });
-        } else {
-          toast.error("Transcription model not ready", {
-            description:
-              "Please download a transcription model before recording.",
-            duration: 5000,
-          });
-          showModal?.("modelSelector", "Transcription model setup required");
-        }
-        setStatus(RecordingStatus.IDLE);
-        setIsAutoStarting(false);
-        return;
-      }
-
-      try {
-        const { meetingTitle: generatedMeetingTitle, calendarEvent } =
-          await prepareRecordingMetadata();
-        if (calendarEvent) {
-          toast.info(
-            `Linked to "${generatedMeetingTitle}" from your calendar`,
-            {
-              description:
-                "We'll attach the event details when the meeting saves.",
-              duration: 4000,
-            },
-          );
-        }
-
-        // Set STARTING status before initiating backend recording
-        setStatus(RecordingStatus.STARTING, "Initializing recording...");
-
-        console.log(
-          "Starting backend recording with meeting:",
-          generatedMeetingTitle,
-        );
-        const result = await recordingService.startRecordingWithDevices(
-          selectedDevices?.micDevice || null,
-          selectedDevices?.systemDevice || null,
-          generatedMeetingTitle,
-        );
-        console.log("Backend recording result:", result);
-
-        // Update UI state after successful backend start
-        // Note: RECORDING status will be set by RecordingStateContext event listener
-        setMeetingTitle(generatedMeetingTitle);
-        setIsRecording(true);
-        clearTranscripts();
-        setIsMeetingActive(true);
-
-        // Show recording notification if enabled
-        await showRecordingNotification();
-      } catch (error) {
-        console.error("Failed to start recording from sidebar:", error);
-        setStatus(
-          RecordingStatus.ERROR,
-          getErrorMessage(error, "Failed to start recording from sidebar"),
-        );
-        toast.error("Couldn't start recording. Check your microphone selection and try again.");
-      } finally {
-        setIsAutoStarting(false);
-      }
-    };
-
-    window.addEventListener("start-recording-from-sidebar", handleDirectStart);
-
-    return () => {
-      window.removeEventListener(
-        "start-recording-from-sidebar",
-        handleDirectStart,
-      );
-    };
-  }, [
-    isRecording,
-    isAutoStarting,
-    selectedDevices,
-    setMeetingTitle,
-    setIsRecording,
-    clearTranscripts,
-    setIsMeetingActive,
-    checkParakeetReady,
-    checkIfModelDownloading,
-    showModal,
-    setStatus,
-  ]);
+  // NOTE: the `start-recording-from-sidebar` window event is handled by the
+  // home page (`page.tsx`), which routes it through the same guarded
+  // `handleStartClick` as the button. This hook used to register a second
+  // listener for the same event, so a sidebar/tray start fired two concurrent
+  // `start_recording` invokes (two PipeWire stream pairs, two meeting folders,
+  // a leaked transcript listener). Keep exactly one listener.
 
   return {
     handleRecordingStart,

@@ -590,6 +590,27 @@ async fn get_or_init_whisper<R: Runtime>(
             };
 
             if needs_load {
+                // Retranscription (manual, and auto-refine which runs through
+                // this same path) is background/user-initiated batch work,
+                // not latency sensitive — so if a live recording currently
+                // holds the engine lease, wait for it to finish rather than
+                // swap the model out from under it (which would silently
+                // drop live transcript chunks; see `whisper_engine::lease`).
+                if crate::whisper_engine::LIVE_ENGINE_LEASE.is_live_leased() {
+                    warn!(
+                        "Live recording holds the Whisper engine lease; waiting before loading '{}' for retranscription",
+                        target_model
+                    );
+                    if !crate::whisper_engine::LIVE_ENGINE_LEASE
+                        .wait_until_free(std::time::Duration::from_secs(30 * 60))
+                        .await
+                    {
+                        return Err(anyhow!(
+                            "Timed out waiting for live recording to release the Whisper engine"
+                        ));
+                    }
+                }
+
                 info!(
                     "Loading Whisper model '{}' (current: {:?})",
                     target_model, current_model

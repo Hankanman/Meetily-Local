@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
-import { FolderOpen } from "lucide-react";
+import { CheckCircle2, Download, FolderOpen, RefreshCw } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { DeviceSelection, SelectedDevices } from "@/components/DeviceSelection";
 import { toast } from "sonner";
@@ -11,6 +11,12 @@ import {
   SettingsRow,
 } from "@/app/settings/parts/SettingsCard";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+
+interface FfmpegStatus {
+  installed: boolean;
+  path: string | null;
+  source: string | null;
+}
 
 export interface RecordingPreferences {
   save_folder: string;
@@ -36,6 +42,21 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  const [ffmpegStatus, setFfmpegStatus] = useState<FfmpegStatus | null>(null);
+  const [ffmpegChecking, setFfmpegChecking] = useState(true);
+  const [ffmpegInstalling, setFfmpegInstalling] = useState(false);
+
+  const refreshFfmpegStatus = useCallback(async () => {
+    try {
+      const status = await invoke<FfmpegStatus>("ffmpeg_status");
+      setFfmpegStatus(status);
+    } catch (error) {
+      console.error("Failed to load FFmpeg status:", error);
+    } finally {
+      setFfmpegChecking(false);
+    }
+  }, []);
 
   // Load recording preferences (including the notification toggle) on
   // component mount
@@ -64,6 +85,29 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
 
     loadPreferences();
   }, []);
+
+  useEffect(() => {
+    const checkFfmpeg = async () => {
+      await refreshFfmpegStatus();
+    };
+    checkFfmpeg();
+  }, [refreshFfmpegStatus]);
+
+  const handleInstallFfmpeg = async () => {
+    setFfmpegInstalling(true);
+    try {
+      await invoke<string>("ffmpeg_ensure_installed");
+      toast.success("FFmpeg installed");
+    } catch (error) {
+      console.error("Failed to install FFmpeg:", error);
+      toast.error("Failed to install FFmpeg", {
+        description: getErrorMessage(error),
+      });
+    } finally {
+      setFfmpegInstalling(false);
+      await refreshFfmpegStatus();
+    }
+  };
 
   const handleAutoSaveToggle = async (enabled: boolean) => {
     const newPreferences = { ...preferences, auto_save: enabled };
@@ -193,6 +237,49 @@ export function RecordingSettings({ onSave }: RecordingSettingsProps) {
           </AlertDescription>
         </Alert>
       )}
+
+      <SettingsCard
+        title="FFmpeg"
+        description="Needed to save finished recordings as playable files and to play back clips. Recording itself works without it."
+      >
+        <SettingsRow
+          label={
+            ffmpegChecking
+              ? "Checking…"
+              : ffmpegStatus?.installed
+                ? "Installed"
+                : "Not installed"
+          }
+          description={
+            ffmpegChecking
+              ? undefined
+              : ffmpegStatus?.installed
+                ? `${ffmpegStatus.source ? `(${ffmpegStatus.source}) ` : ""}${ffmpegStatus.path ?? ""}`
+                : "Recordings will be kept as raw checkpoints until FFmpeg is installed."
+          }
+        >
+          {ffmpegChecking ? (
+            <RefreshCw className="size-4 animate-spin text-muted-foreground" />
+          ) : ffmpegStatus?.installed ? (
+            <CheckCircle2 className="size-5 text-green-600" />
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleInstallFfmpeg}
+              disabled={ffmpegInstalling}
+              className="gap-1.5"
+            >
+              {ffmpegInstalling ? (
+                <RefreshCw className="size-3.5 animate-spin" />
+              ) : (
+                <Download className="size-3.5" />
+              )}
+              <span>{ffmpegInstalling ? "Installing…" : "Install FFmpeg"}</span>
+            </Button>
+          )}
+        </SettingsRow>
+      </SettingsCard>
 
       <SettingsCard>
         <SettingsRow

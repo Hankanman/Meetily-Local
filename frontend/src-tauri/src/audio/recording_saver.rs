@@ -299,12 +299,20 @@ impl RecordingSaver {
     /// Write transcripts.json to disk (atomic write with temp file).
     fn write_transcripts_json(&self, folder: &PathBuf) -> Result<()> {
         // Clone segments to avoid holding lock during I/O
-        let segments_clone = if let Ok(segments) = self.transcript_segments.lock() {
+        let mut segments_clone = if let Ok(segments) = self.transcript_segments.lock() {
             segments.clone()
         } else {
             error!("Failed to lock transcript segments for writing");
             return Err(anyhow::anyhow!("Failed to lock transcript segments"));
         };
+
+        // Segments arrive in completion order, not chronological order: with
+        // dual-VAD (mic + system) sources, a segment that started earlier can
+        // finish later (e.g. a long system-audio segment force-cut well after
+        // a short mic segment that started after it). Re-order chronologically
+        // by audio start time before persisting, with sequence_id as a
+        // tie-breaker for segments that share (or lack) a start time.
+        Self::sort_segments_chronologically(&mut segments_clone);
 
         info!(
             "Writing {} transcript segments to JSON",
@@ -318,6 +326,131 @@ impl RecordingSaver {
             segments_clone.len()
         );
         Ok(())
+    }
+
+    /// Wait for the accumulation task spawned by `start_accumulation` to
+    /// finish draining its channel, without finalizing anything (no
+    /// `audio.mp4` merge, no metadata/transcript writes). Used when aborting
+    /// a recording start that failed before real capture began (issue #45),
+    /// so `discard_empty_session` can safely inspect (and remove) the
+    /// meeting folder once the task is no longer writing to it.
+    ///
+    /// The caller is responsible for dropping/closing whatever sender the
+    /// accumulation task's receiver is reading from (directly, or by
+    /// stopping the pipeline that owns it) — otherwise this waits out its
+    /// full timeout with nothing to show for it.
+    pub async fn abort_accumulation(&mut self) {
+        if let Some(task) = self.accumulation_task.take() {
+            match tokio::time::timeout(tokio::time::Duration::from_secs(5), task).await {
+                Ok(Ok(())) => info!("Recording saver accumulation task drained cleanly (abort)"),
+                Ok(Err(e)) => warn!("Recording saver accumulation task panicked (abort): {}", e),
+                Err(_) => warn!(
+                    "Timed out waiting for recording saver accumulation task to drain (abort)"
+                ),
+            }
+        }
+    }
+
+    /// Discard the current session's meeting folder if it was created but
+    /// never actually captured anything (issue #45).
+    ///
+    /// `start_accumulation` creates the meeting folder (plus `.checkpoints/`,
+    /// `format.json` and `metadata.json` with status "recording") before the
+    /// caller has actually managed to start audio capture. If capture then
+    /// fails to start (pipeline or stream startup error), that folder is
+    /// left behind on disk with no audio and no transcript, and the crash
+    /// recovery dialog can later offer it as a recoverable meeting even
+    /// though nothing was ever recorded.
+    ///
+    /// This removes the folder ONLY when it is safe to do so — no
+    /// checkpoint audio chunks were written and no transcript segments were
+    /// persisted — and resets this saver's session-scoped fields so it is
+    /// ready to start a fresh session. If the folder holds real data (or no
+    /// folder was created at all, e.g. auto_save-disabled + no meeting
+    /// name), nothing is deleted.
+    ///
+    /// Returns `true` if the folder was discarded.
+    pub fn discard_empty_session(&mut self) -> bool {
+        let Some(folder) = self.meeting_folder.clone() else {
+            return false;
+        };
+
+        if !Self::session_is_empty(&folder) {
+            info!(
+                "Not discarding meeting folder (contains audio or transcript data): {}",
+                folder.display()
+            );
+            return false;
+        }
+
+        match std::fs::remove_dir_all(&folder) {
+            Ok(()) => {
+                info!(
+                    "Discarded empty meeting folder from failed recording start: {}",
+                    folder.display()
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to discard empty meeting folder {}: {}",
+                    folder.display(),
+                    e
+                );
+                // Fall through and reset our fields regardless — the caller
+                // is aborting the session either way.
+            }
+        }
+
+        self.meeting_folder = None;
+        self.metadata = None;
+        self.incremental_saver = None;
+        if let Ok(mut segments) = self.transcript_segments.lock() {
+            segments.clear();
+        }
+        if let Ok(mut is_saving) = self.is_saving.lock() {
+            *is_saving = false;
+        }
+
+        true
+    }
+
+    /// The actual discard decision (issue #45): a meeting folder is "empty"
+    /// — safe to silently delete rather than leaving it for crash recovery
+    /// to offer — only when `.checkpoints/` holds no `audio_chunk_*` files
+    /// (covers both the current `.f32` checkpoints and the legacy `.mp4`
+    /// ones) and `transcripts.json` is either absent or contains no
+    /// segments.
+    fn session_is_empty(meeting_folder: &std::path::Path) -> bool {
+        let checkpoints_dir = meeting_folder.join(".checkpoints");
+        let has_checkpoint_audio = match std::fs::read_dir(&checkpoints_dir) {
+            Ok(entries) => entries.filter_map(|e| e.ok()).any(|entry| {
+                entry
+                    .path()
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|stem| stem.starts_with("audio_chunk_"))
+                    .unwrap_or(false)
+            }),
+            Err(_) => false,
+        };
+        if has_checkpoint_audio {
+            return false;
+        }
+
+        let transcripts_path = meeting_folder.join("transcripts.json");
+        let has_transcript_segments = match std::fs::read_to_string(&transcripts_path) {
+            Ok(contents) => match serde_json::from_str::<serde_json::Value>(&contents) {
+                Ok(serde_json::Value::Array(segments)) => !segments.is_empty(),
+                // Any other shape (or an object wrapper) — treat non-empty
+                // content as "has data" rather than risk deleting real
+                // transcripts on a format we don't recognize.
+                Ok(other) => !other.is_null(),
+                Err(_) => true,
+            },
+            Err(_) => false,
+        };
+
+        !has_transcript_segments
     }
 
     // in frontend/src-tauri/src/audio/recording_saver.rs
@@ -482,10 +615,212 @@ impl RecordingSaver {
     pub fn get_meeting_name(&self) -> Option<String> {
         self.meeting_name.clone()
     }
+
+    /// Sort transcript segments chronologically by `audio_start_time`, using
+    /// `sequence_id` as a tie-breaker when the start time is equal or absent.
+    /// See `write_transcripts_json` for why this ordering matters.
+    fn sort_segments_chronologically(segments: &mut [TranscriptSegment]) {
+        segments.sort_by(|a, b| {
+            let a_time = a.audio_start_time.unwrap_or(f64::MAX);
+            let b_time = b.audio_start_time.unwrap_or(f64::MAX);
+            a_time
+                .partial_cmp(&b_time)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    a.sequence_id
+                        .unwrap_or(u64::MAX)
+                        .cmp(&b.sequence_id.unwrap_or(u64::MAX))
+                })
+        });
+    }
 }
 
 impl Default for RecordingSaver {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn segment(id: &str, audio_start_time: Option<f64>, sequence_id: Option<u64>) -> TranscriptSegment {
+        TranscriptSegment {
+            id: id.to_string(),
+            text: id.to_string(),
+            timestamp: None,
+            audio_start_time,
+            audio_end_time: None,
+            duration: None,
+            display_time: None,
+            confidence: None,
+            sequence_id,
+            speaker: None,
+            voice_profile_id: None,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn sorts_out_of_arrival_order_segments_by_audio_start_time() {
+        // Mirrors issue #37: a system-audio segment starting at t=10s but
+        // finishing (and thus being appended) at t=22s must still land before
+        // a mic segment spanning 15-16s in the persisted transcript.
+        let mut segments = vec![
+            segment("mic-15-16", Some(15.0), Some(2)),
+            segment("system-10-22", Some(10.0), Some(1)),
+        ];
+
+        RecordingSaver::sort_segments_chronologically(&mut segments);
+
+        assert_eq!(
+            segments.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["system-10-22", "mic-15-16"]
+        );
+    }
+
+    #[test]
+    fn falls_back_to_sequence_id_when_start_times_tie_or_are_missing() {
+        let mut segments = vec![
+            segment("no-time-seq-3", None, Some(3)),
+            segment("t5-seq-1", Some(5.0), Some(1)),
+            segment("no-time-seq-2", None, Some(2)),
+            segment("t5-seq-0", Some(5.0), Some(0)),
+        ];
+
+        RecordingSaver::sort_segments_chronologically(&mut segments);
+
+        assert_eq!(
+            segments.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["t5-seq-0", "t5-seq-1", "no-time-seq-2", "no-time-seq-3"]
+        );
+    }
+
+    // ---- discard_empty_session / session_is_empty (issue #45) ------------
+
+    #[test]
+    fn session_is_empty_for_a_freshly_created_folder() {
+        // Mirrors what start_accumulation() creates before capture has
+        // produced anything: a bare meeting folder with an empty
+        // .checkpoints/ directory and no transcripts.json yet.
+        let tmp = tempfile::tempdir().unwrap();
+        let meeting_folder = tmp.path().join("Meeting_2026-01-01_00-00-00");
+        std::fs::create_dir_all(meeting_folder.join(".checkpoints")).unwrap();
+
+        assert!(RecordingSaver::session_is_empty(&meeting_folder));
+    }
+
+    #[test]
+    fn session_is_not_empty_with_a_checkpoint_audio_chunk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let meeting_folder = tmp.path().join("Meeting");
+        let checkpoints_dir = meeting_folder.join(".checkpoints");
+        std::fs::create_dir_all(&checkpoints_dir).unwrap();
+        std::fs::write(checkpoints_dir.join("audio_chunk_000.f32"), [0u8; 4]).unwrap();
+
+        assert!(!RecordingSaver::session_is_empty(&meeting_folder));
+    }
+
+    #[test]
+    fn session_is_not_empty_with_a_legacy_mp4_checkpoint_chunk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let meeting_folder = tmp.path().join("Meeting");
+        let checkpoints_dir = meeting_folder.join(".checkpoints");
+        std::fs::create_dir_all(&checkpoints_dir).unwrap();
+        std::fs::write(checkpoints_dir.join("audio_chunk_000.mp4"), [0u8; 4]).unwrap();
+
+        assert!(!RecordingSaver::session_is_empty(&meeting_folder));
+    }
+
+    #[test]
+    fn session_is_not_empty_with_non_empty_transcripts_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let meeting_folder = tmp.path().join("Meeting");
+        std::fs::create_dir_all(meeting_folder.join(".checkpoints")).unwrap();
+        std::fs::write(
+            meeting_folder.join("transcripts.json"),
+            r#"[{"id":"seg-1","text":"hello"}]"#,
+        )
+        .unwrap();
+
+        assert!(!RecordingSaver::session_is_empty(&meeting_folder));
+    }
+
+    #[test]
+    fn session_is_empty_with_an_empty_transcripts_json_array() {
+        let tmp = tempfile::tempdir().unwrap();
+        let meeting_folder = tmp.path().join("Meeting");
+        std::fs::create_dir_all(meeting_folder.join(".checkpoints")).unwrap();
+        std::fs::write(meeting_folder.join("transcripts.json"), "[]").unwrap();
+
+        assert!(RecordingSaver::session_is_empty(&meeting_folder));
+    }
+
+    #[test]
+    fn session_is_empty_when_checkpoints_dir_is_missing_entirely() {
+        // auto_save disabled: initialize_meeting_folder(..., false) never
+        // creates .checkpoints/ at all.
+        let tmp = tempfile::tempdir().unwrap();
+        let meeting_folder = tmp.path().join("Meeting");
+        std::fs::create_dir_all(&meeting_folder).unwrap();
+
+        assert!(RecordingSaver::session_is_empty(&meeting_folder));
+    }
+
+    #[test]
+    fn discard_empty_session_removes_the_folder_and_resets_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let meeting_folder = tmp.path().join("Meeting");
+        std::fs::create_dir_all(meeting_folder.join(".checkpoints")).unwrap();
+
+        let mut saver = RecordingSaver::new();
+        saver.meeting_folder = Some(meeting_folder.clone());
+        saver.metadata = Some(MeetingMetadata {
+            version: Some("1.0".to_string()),
+            meeting_id: None,
+            meeting_name: Some("Meeting".to_string()),
+            created_at: None,
+            completed_at: None,
+            retranscribed_at: None,
+            duration_seconds: None,
+            devices: None,
+            audio_file: None,
+            transcript_file: None,
+            sample_rate: None,
+            status: Some("recording".to_string()),
+            origin: None,
+            auto_refined_at: None,
+        });
+        *saver.is_saving.lock().unwrap() = true;
+
+        assert!(saver.discard_empty_session());
+
+        assert!(!meeting_folder.exists());
+        assert!(saver.meeting_folder.is_none());
+        assert!(saver.metadata.is_none());
+        assert!(!*saver.is_saving.lock().unwrap());
+    }
+
+    #[test]
+    fn discard_empty_session_leaves_a_non_empty_folder_in_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let meeting_folder = tmp.path().join("Meeting");
+        let checkpoints_dir = meeting_folder.join(".checkpoints");
+        std::fs::create_dir_all(&checkpoints_dir).unwrap();
+        std::fs::write(checkpoints_dir.join("audio_chunk_000.f32"), [0u8; 4]).unwrap();
+
+        let mut saver = RecordingSaver::new();
+        saver.meeting_folder = Some(meeting_folder.clone());
+
+        assert!(!saver.discard_empty_session());
+        assert!(meeting_folder.exists());
+        assert!(saver.meeting_folder.is_some());
+    }
+
+    #[test]
+    fn discard_empty_session_is_a_no_op_with_no_meeting_folder() {
+        let mut saver = RecordingSaver::new();
+        assert!(!saver.discard_empty_session());
     }
 }

@@ -1,15 +1,10 @@
 use anyhow::Result;
 use chrono::Utc;
 use log::{debug, info, warn};
-use nnnoiseless::DenoiseState;
-use realfft::num_complex::{Complex32, ComplexFloat};
-use realfft::RealFftPlanner;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use std::path::PathBuf;
-
-use super::encode::encode_single_audio; // Correct path to encode module
 
 /// Sanitize a filename to be safe for filesystem use
 pub fn sanitize_filename(name: &str) -> String {
@@ -74,84 +69,48 @@ pub fn create_meeting_folder(
     Ok(meeting_folder)
 }
 
-pub fn normalize_v2(audio: &[f32]) -> Vec<f32> {
-    let rms = (audio.iter().map(|&x| x * x).sum::<f32>() / audio.len() as f32).sqrt();
-    let peak = audio
-        .iter()
-        .fold(0.0f32, |max, &sample| max.max(sample.abs()));
-
-    // Return the original audio if it's completely silent
-    if rms == 0.0 || peak == 0.0 {
-        return audio.to_vec();
-    }
-
-    // Increase target RMS for better voice volume while keeping peak in check
-    let target_rms = 0.9; // Increased from 0.6
-    let target_peak = 0.95; // Slightly reduced to prevent clipping
-
-    let rms_scaling = target_rms / rms;
-    let peak_scaling = target_peak / peak;
-
-    // Apply a minimum scaling factor to boost very quiet audio
-    let min_scaling = 1.5; // Minimum boost for quiet audio
-    let scaling_factor = (rms_scaling.min(peak_scaling)).max(min_scaling);
-
-    // Apply scaling with soft clipping to prevent harsh distortion
-    audio
-        .iter()
-        .map(|&sample| {
-            let scaled = sample * scaling_factor;
-            // Soft clip at ±0.95 to prevent harsh distortion
-            if scaled > 0.95 {
-                0.95 + (scaled - 0.95) * 0.05
-            } else if scaled < -0.95 {
-                -0.95 + (scaled + 0.95) * 0.05
-            } else {
-                scaled
-            }
-        })
-        .collect()
+/// Soft-clipping "limiter" (issue #21).
+///
+/// The previous `TruePeakLimiter` here wasn't actually a limiter: it fed
+/// each sample through a 10ms delay line and hard-clipped it if it exceeded
+/// the threshold, with no knee — a delayed hard clip, not true-peak
+/// limiting. Replaced with a `tanh` soft clip: samples below `threshold`
+/// pass through completely unchanged (so normal-level speech is untouched),
+/// and samples above it are compressed smoothly toward ±1.0 instead of
+/// being clipped flat. That trades a little harmonic distortion on rare
+/// over-threshold peaks for no lookahead buffer (zero added latency) and no
+/// audible "wall" at the threshold — the right trade for a live mic path
+/// feeding VAD/Whisper, not a mastering chain.
+struct SoftClipper {
+    threshold: f32,
 }
 
-/// True peak limiter with lookahead buffer (prevents clipping)
-struct TruePeakLimiter {
-    lookahead_samples: usize,
-    buffer: Vec<f32>,
-    gain_reduction: Vec<f32>,
-    current_position: usize,
-}
-
-impl TruePeakLimiter {
-    fn new(sample_rate: u32) -> Self {
-        const LIMITER_LOOKAHEAD_MS: usize = 10;
-        let lookahead_samples = ((sample_rate as usize * LIMITER_LOOKAHEAD_MS) / 1000).max(1);
-
+impl SoftClipper {
+    fn new(threshold: f32) -> Self {
         Self {
-            lookahead_samples,
-            buffer: vec![0.0; lookahead_samples],
-            gain_reduction: vec![1.0; lookahead_samples],
-            current_position: 0,
+            threshold: threshold.clamp(0.0, 0.999),
         }
     }
 
-    fn process(&mut self, sample: f32, true_peak_limit: f32) -> f32 {
-        self.buffer[self.current_position] = sample;
-
-        let sample_abs = sample.abs();
-        if sample_abs > true_peak_limit {
-            let reduction = true_peak_limit / sample_abs;
-            self.gain_reduction[self.current_position] = reduction;
-        } else {
-            self.gain_reduction[self.current_position] = 1.0;
+    fn process(&self, sample: f32) -> f32 {
+        let abs = sample.abs();
+        if abs <= self.threshold {
+            return sample;
         }
-
-        let output_position = (self.current_position + 1) % self.lookahead_samples;
-        let output_sample = self.buffer[output_position] * self.gain_reduction[output_position];
-
-        self.current_position = output_position;
-        output_sample
+        let headroom = (1.0 - self.threshold).max(1e-6);
+        let over = (abs - self.threshold) / headroom;
+        sample.signum() * (self.threshold + headroom * over.tanh())
     }
 }
+
+/// Gain the mic normalizer is allowed to request, in dB (issue #21).
+///
+/// Unbounded gain was the bug: a very quiet (e.g. -60 LUFS) mic could ask
+/// for +37 dB, which also amplifies whatever echo AEC didn't fully cancel
+/// back up toward the target loudness. Capping keeps the normalizer doing
+/// comfort gain, not undoing AEC's work.
+const GAIN_CEILING_DB: f32 = 18.0;
+const GAIN_FLOOR_DB: f32 = -12.0;
 
 /// Professional loudness normalizer using EBU R128 standard
 /// This is a STATEFUL normalizer that tracks cumulative loudness over time
@@ -161,12 +120,22 @@ impl TruePeakLimiter {
 /// - Used by: Netflix, YouTube, Spotify, all professional broadcast
 /// - Perceptually accurate (not just simple RMS)
 ///
+/// Gain is capped to [GAIN_FLOOR_DB, GAIN_CEILING_DB] and smoothed with a
+/// one-pole follower (issue #21) so it never steps abruptly every 512-sample
+/// analysis window, and never demands more boost than a downstream AEC path
+/// can tolerate. This normalizer must run AFTER acoustic echo cancellation
+/// (see `AudioPipeline::run` in pipeline.rs) — applying it before AEC feeds
+/// AEC a time-varying near-end signal and breaks its convergence.
 pub struct LoudnessNormalizer {
     ebur128: ebur128::EbuR128,
-    limiter: TruePeakLimiter,
+    limiter: SoftClipper,
+    /// Current, smoothed linear gain actually applied to samples.
     gain_linear: f32,
+    /// Most recent gain measurement (capped), which `gain_linear` chases.
+    target_gain_linear: f32,
+    /// One-pole smoothing coefficient — see `new` for the time constant.
+    smoothing_alpha: f32,
     loudness_buffer: Vec<f32>,
-    true_peak_limit: f32,
 }
 
 impl LoudnessNormalizer {
@@ -176,34 +145,38 @@ impl LoudnessNormalizer {
     /// * `channels` - Number of audio channels (1 for mono, 2 for stereo)
     /// * `sample_rate` - Sample rate in Hz (e.g., 48000)
     pub fn new(channels: u32, sample_rate: u32) -> Result<Self> {
-        const TRUE_PEAK_LIMIT: f64 = -1.0;
         const ANALYZE_CHUNK_SIZE: usize = 512;
+        // -1 dBFS soft-clip threshold — matches the previous true-peak target.
+        const SOFT_CLIP_THRESHOLD_DB: f32 = -1.0;
+        // 50ms one-pole time constant for the gain follower: fast enough to
+        // track real level changes, slow enough that no single 512-sample
+        // measurement update is audible as a step.
+        const SMOOTHING_TAU_SECS: f32 = 0.05;
 
-        let ebur128 = ebur128::EbuR128::new(
-            channels,
-            sample_rate,
-            ebur128::Mode::I | ebur128::Mode::TRUE_PEAK,
-        )
-        .map_err(|e| anyhow::anyhow!("Failed to create EBU R128 normalizer: {}", e))?;
+        let ebur128 = ebur128::EbuR128::new(channels, sample_rate, ebur128::Mode::I)
+            .map_err(|e| anyhow::anyhow!("Failed to create EBU R128 normalizer: {}", e))?;
 
-        let true_peak_limit = 10_f32.powf(TRUE_PEAK_LIMIT as f32 / 20.0);
+        let soft_clip_threshold = 10_f32.powf(SOFT_CLIP_THRESHOLD_DB / 20.0);
+        let smoothing_alpha = 1.0 - (-1.0 / (SMOOTHING_TAU_SECS * sample_rate as f32)).exp();
 
         Ok(Self {
             ebur128,
-            limiter: TruePeakLimiter::new(sample_rate),
+            limiter: SoftClipper::new(soft_clip_threshold),
             gain_linear: 1.0,
+            target_gain_linear: 1.0,
+            smoothing_alpha,
             loudness_buffer: Vec::with_capacity(ANALYZE_CHUNK_SIZE),
-            true_peak_limit,
         })
     }
 
-    /// Normalize loudness using EBU R128 standard with true peak limiting
+    /// Normalize loudness using EBU R128 standard with a capped, smoothed
+    /// gain and a soft clip.
     ///
-    /// This maintains cumulative loudness measurements across all processed audio,
-    /// resulting in consistent normalization that sounds natural.
-    ///
-    /// Target: -23 LUFS (professional broadcast standard for speech/dialog)
-    /// Applies sample-by-sample with 10ms lookahead limiter to prevent clipping
+    /// This maintains cumulative loudness measurements across all processed
+    /// audio, resulting in consistent normalization that sounds natural.
+    /// Target: -23 LUFS (professional broadcast standard for speech/dialog).
+    /// Gain is capped to [-12dB, +18dB] and smoothed per-sample toward the
+    /// latest measurement (issue #21) rather than jumping to it.
     pub fn normalize_loudness(&mut self, samples: &[f32]) -> Vec<f32> {
         if samples.is_empty() {
             return Vec::new();
@@ -223,144 +196,31 @@ impl LoudnessNormalizer {
                 if let Err(e) = self.ebur128.add_frames_f32(&self.loudness_buffer) {
                     warn!("Failed to add frames to EBU R128: {}", e);
                 } else {
-                    // Update gain based on cumulative loudness
+                    // Update the gain target based on cumulative loudness.
+                    // `gain_linear` itself is smoothed toward this below,
+                    // one sample at a time, rather than snapping here.
                     if let Ok(current_lufs) = self.ebur128.loudness_global() {
                         if current_lufs.is_finite() && current_lufs < 0.0 {
-                            let gain_db = TARGET_LUFS - current_lufs;
-                            self.gain_linear = 10_f32.powf(gain_db as f32 / 20.0);
+                            let gain_db = (TARGET_LUFS - current_lufs) as f32;
+                            let capped_db = gain_db.clamp(GAIN_FLOOR_DB, GAIN_CEILING_DB);
+                            self.target_gain_linear = 10_f32.powf(capped_db / 20.0);
                         }
                     }
                 }
                 self.loudness_buffer.clear();
             }
 
-            // Apply gain and true peak limiting
+            // Chase the target gain smoothly instead of stepping to it.
+            self.gain_linear +=
+                (self.target_gain_linear - self.gain_linear) * self.smoothing_alpha;
+
             let amplified = sample * self.gain_linear;
-            let limited = self.limiter.process(amplified, self.true_peak_limit);
+            let limited = self.limiter.process(amplified);
 
             normalized_samples.push(limited);
         }
 
         normalized_samples
-    }
-}
-
-/// RNNoise-based noise suppression processor
-///
-/// Uses a recurrent neural network to suppress background noise while preserving speech.
-/// Processes audio at 48kHz in 10ms frames (480 samples per frame).
-///
-/// Benefits:
-/// - 10-15 dB noise reduction in typical office/home environments
-/// - Preserves speech quality and intelligibility
-/// - Low latency (~10ms per frame)
-/// - Cross-platform (works on macOS, Windows, Linux)
-pub struct NoiseSuppressionProcessor {
-    denoiser: DenoiseState<'static>,
-    frame_buffer: Vec<f32>,
-    frame_size: usize, // 480 samples at 48kHz = 10ms
-}
-
-impl NoiseSuppressionProcessor {
-    /// Create a new noise suppression processor
-    ///
-    /// # Arguments
-    /// * `sample_rate` - Must be 48000 Hz (RNNoise requirement)
-    pub fn new(sample_rate: u32) -> Result<Self> {
-        if sample_rate != 48000 {
-            return Err(anyhow::anyhow!(
-                "Noise suppression requires 48kHz sample rate, got {}Hz",
-                sample_rate
-            ));
-        }
-
-        const FRAME_SIZE: usize = DenoiseState::FRAME_SIZE;
-
-        info!(
-            "Initializing RNNoise noise suppression (frame size: {} samples, 10ms @ 48kHz)",
-            FRAME_SIZE
-        );
-
-        Ok(Self {
-            denoiser: *DenoiseState::new(),
-            frame_buffer: Vec::with_capacity(FRAME_SIZE * 2),
-            frame_size: FRAME_SIZE,
-        })
-    }
-
-    /// Apply noise suppression to audio samples
-    ///
-    /// Processes audio in 480-sample frames (10ms at 48kHz).
-    /// Buffers partial frames for next call.
-    ///
-    /// CRITICAL FIX: Always returns same length as input to prevent latency accumulation
-    ///
-    /// # Arguments
-    /// * `samples` - Input audio samples at 48kHz
-    ///
-    /// # Returns
-    /// Noise-suppressed audio samples (SAME LENGTH as input)
-    pub fn process(&mut self, samples: &[f32]) -> Vec<f32> {
-        if samples.is_empty() {
-            return Vec::new();
-        }
-
-        // CRITICAL: Remember original input length
-        let input_len = samples.len();
-
-        // Add new samples to buffer
-        self.frame_buffer.extend_from_slice(samples);
-
-        let mut output = Vec::with_capacity(input_len);
-
-        // Process complete frames
-        while self.frame_buffer.len() >= self.frame_size {
-            // Extract one frame
-            let frame: Vec<f32> = self.frame_buffer.drain(0..self.frame_size).collect();
-
-            // RNNoise processes audio: separate input and output buffers
-            let mut denoised_frame = vec![0.0f32; self.frame_size];
-
-            // Apply noise suppression
-            // process_frame(output: &mut [f32], input: &[f32]) -> f32
-            // Returns VAD probability (0.0-1.0), higher means more likely to be speech
-            let _vad_prob = self.denoiser.process_frame(&mut denoised_frame, &frame);
-
-            output.extend_from_slice(&denoised_frame);
-        }
-
-        // Return processed output without forcing length matching
-        // Frame-based processing naturally creates variable-length output
-        // Downstream pipeline handles this correctly via ring buffer
-        output
-    }
-
-    /// Get the number of buffered samples waiting for processing
-    pub fn buffered_samples(&self) -> usize {
-        self.frame_buffer.len()
-    }
-
-    /// Flush any remaining buffered samples
-    /// Call this at the end of recording to process partial frames
-    pub fn flush(&mut self) -> Vec<f32> {
-        if self.frame_buffer.is_empty() {
-            return Vec::new();
-        }
-
-        // Pad the remaining samples to a full frame with zeros
-        let remaining = self.frame_buffer.len();
-        let mut input_frame = self.frame_buffer.clone();
-        if input_frame.len() < self.frame_size {
-            input_frame.resize(self.frame_size, 0.0);
-        }
-
-        let mut output = vec![0.0f32; self.frame_size];
-        self.denoiser.process_frame(&mut output, &input_frame);
-        self.frame_buffer.clear();
-
-        // Return only the original samples (without padding)
-        output.truncate(remaining);
-        output
     }
 }
 
@@ -427,83 +287,6 @@ impl HighPassFilter {
         self.prev_input = 0.0;
         self.prev_output = 0.0;
     }
-}
-
-pub fn spectral_subtraction(audio: &[f32], d: f32) -> Result<Vec<f32>> {
-    let mut real_planner = RealFftPlanner::<f32>::new();
-    let window_size = 1600; // 16k sample rate - 100ms
-
-    // CRITICAL FIX: Handle cases where audio is longer than window size
-    if audio.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // If audio is longer than window size, truncate to prevent overflow
-    let processed_audio = if audio.len() > window_size {
-        warn!(
-            "Audio length {} exceeds window size {}, truncating",
-            audio.len(),
-            window_size
-        );
-        &audio[..window_size]
-    } else {
-        audio
-    };
-
-    let r2c = real_planner.plan_fft_forward(window_size);
-    let mut y = r2c.make_output_vec();
-
-    // Safe padding: only pad if audio is shorter than window size
-    let mut padded_audio = processed_audio.to_vec();
-    if processed_audio.len() < window_size {
-        let padding_needed = window_size - processed_audio.len();
-        padded_audio.extend(vec![0.0f32; padding_needed]);
-    }
-
-    let mut indata = padded_audio;
-    r2c.process(&mut indata, &mut y)?;
-
-    let mut processed_audio = y
-        .iter()
-        .map(|&x| {
-            let magnitude_y = x.abs().powf(2.0);
-
-            let div = 1.0 - (d / magnitude_y);
-
-            let gain = {
-                if div > 0.0 {
-                    f32::sqrt(div)
-                } else {
-                    0.0f32
-                }
-            };
-
-            x * gain
-        })
-        .collect::<Vec<Complex32>>();
-
-    let c2r = real_planner.plan_fft_inverse(window_size);
-
-    let mut outdata = c2r.make_output_vec();
-
-    c2r.process(&mut processed_audio, &mut outdata)?;
-
-    Ok(outdata)
-}
-
-// not an average of non-speech segments, but I don't know how much pause time we
-// get. for now, we will just assume the noise is constant (kinda defeats the purpose)
-// but oh well
-pub fn average_noise_spectrum(audio: &[f32]) -> f32 {
-    let mut total_sum = 0.0f32;
-
-    for sample in audio {
-        let magnitude = sample.abs();
-
-        total_sum += magnitude.powf(2.0);
-    }
-
-    total_sum / audio.len() as f32
 }
 
 pub fn audio_to_mono(audio: &[f32], channels: u16) -> Vec<f32> {
@@ -614,88 +397,280 @@ pub fn resample(input: &[f32], from_sample_rate: u32, to_sample_rate: u32) -> Re
         1, // Mono
     )?;
 
+    // SincFixedIn has a fixed group delay of `sinc_len / 2` input frames
+    // (reported here, already converted to output frames, by
+    // `output_delay()`) that is never flushed by a single `process()` call:
+    // the trailing ~`delay` output samples that correspond to the tail of
+    // `input` are still "owed" by the filter and only come out if we feed it
+    // more (zero-padded) input. Without draining this, output is shifted
+    // early by `delay` samples and the last few milliseconds of audio are
+    // silently lost.
+    let delay = resampler.output_delay();
+
     let waves_in = vec![input.to_vec()];
-    let waves_out = resampler.process(&waves_in, None)?;
+    let mut waves_out = resampler.process(&waves_in, None)?;
+
+    // Drain the remaining group delay: feeding `None` zero-pads the input
+    // with the samples needed to complete the filter response for the tail
+    // of `input`.
+    let flush = resampler.process_partial::<Vec<f32>>(None, None)?;
+    waves_out[0].extend(flush.into_iter().next().unwrap_or_default());
+
+    let mut out = waves_out.into_iter().next().unwrap();
+
+    // Trim the leading `delay` samples (sinc filter warm-up) so the output
+    // is time-aligned with the input instead of shifted late by the group
+    // delay.
+    if delay >= out.len() {
+        out.clear();
+    } else {
+        out.drain(0..delay);
+    }
+
+    // The drain above can leave a few samples more than the ideal
+    // input.len() * ratio (the flush call rounds up to a full output
+    // block); trim to the expected length so callers get output whose
+    // duration matches the input's, not the resampler's internal block size.
+    let target_len = ((input.len() as f64) * ratio).round() as usize;
+    out.truncate(target_len);
 
     debug!(
-        "Resampling complete: {} samples → {} samples",
+        "Resampling complete: {} samples → {} samples (delay {} trimmed)",
         input.len(),
-        waves_out[0].len()
+        out.len(),
+        delay
     );
 
-    Ok(waves_out.into_iter().next().unwrap())
+    Ok(out)
 }
 
-// Alias for compatibility with existing code
-pub fn resample_audio(input: &[f32], from_sample_rate: u32, to_sample_rate: u32) -> Vec<f32> {
-    match resample(input, from_sample_rate, to_sample_rate) {
-        Ok(result) => result,
-        Err(e) => {
-            debug!("Resampling failed: {}, returning original audio", e);
-            input.to_vec()
+// Alias for compatibility with existing code.
+//
+// Returns `Result` (rather than silently falling back to the original,
+// wrong-sample-rate audio) because a caller that gets back samples at the
+// wrong rate has no way to detect it — e.g. audio meant for 16kHz Whisper
+// coming back still at 48kHz plays out ~3x slowed and produces garbage
+// transcriptions with no error surfaced anywhere. Callers must propagate or
+// explicitly log-and-fail instead of continuing with the input untouched.
+pub fn resample_audio(
+    input: &[f32],
+    from_sample_rate: u32,
+    to_sample_rate: u32,
+) -> Result<Vec<f32>> {
+    resample(input, from_sample_rate, to_sample_rate)
+}
+
+#[cfg(test)]
+mod mic_enhancement_tests {
+    //! Pure-function tests for issue #21: the normalizer's gain cap/smoothing
+    //! and the soft clip. No audio devices involved.
+    use super::*;
+
+    fn gain_db_to_linear(db: f32) -> f32 {
+        10f32.powf(db / 20.0)
+    }
+
+    // ---- SoftClipper -------------------------------------------------
+
+    #[test]
+    fn soft_clip_passes_samples_below_threshold_unchanged() {
+        let clipper = SoftClipper::new(0.9);
+        assert!((clipper.process(0.5) - 0.5).abs() < 1e-6);
+        assert!((clipper.process(-0.5) - (-0.5)).abs() < 1e-6);
+        assert!((clipper.process(0.9) - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn soft_clip_bounds_samples_above_threshold() {
+        let clipper = SoftClipper::new(0.9);
+        // Moderately over threshold (not so far that f32 tanh saturates to
+        // exactly 1.0): stays bounded strictly below full scale, above the
+        // threshold (soft knee, not a hard clip down to the threshold).
+        let pos = clipper.process(1.2);
+        let neg = clipper.process(-1.2);
+        assert!(pos < 1.0 && pos > 0.9, "pos={pos}");
+        assert!(neg > -1.0 && neg < -0.9, "neg={neg}");
+
+        // Far-over-threshold samples still never exceed full scale, even
+        // once f32 precision saturates tanh to 1.0.
+        let extreme = clipper.process(50.0);
+        assert!(extreme <= 1.0, "extreme={extreme}");
+    }
+
+    #[test]
+    fn soft_clip_is_monotonic_and_antisymmetric() {
+        let clipper = SoftClipper::new(0.8);
+        let mut prev_out = f32::NEG_INFINITY;
+        let mut x = -3.0f32;
+        while x <= 3.0 {
+            let out = clipper.process(x);
+            assert!(
+                out >= prev_out,
+                "soft clip must be monotonic: x={x} out={out} prev_out={prev_out}"
+            );
+            // Odd function: f(-x) == -f(x).
+            let out_neg = clipper.process(-x);
+            assert!(
+                (out_neg + out).abs() < 1e-5,
+                "soft clip should be antisymmetric: x={x} out={out} out(-x)={out_neg}"
+            );
+            prev_out = out;
+            x += 0.1;
         }
+    }
+
+    // ---- LoudnessNormalizer gain cap + smoothing ----------------------
+
+    #[test]
+    fn normalizer_gain_is_capped_for_very_quiet_audio() {
+        let mut norm = LoudnessNormalizer::new(1, 48_000).unwrap();
+        // Far below -23 LUFS target; an uncapped normalizer would demand
+        // tens of dB of boost (issue #21). Feed several seconds so the
+        // EBU R128 integrated measurement settles.
+        let quiet: Vec<f32> = (0..48_000 * 3)
+            .map(|i| 0.0003 * (i as f32 * 0.05).sin())
+            .collect();
+        for chunk in quiet.chunks(4800) {
+            norm.normalize_loudness(chunk);
+        }
+        let ceiling_linear = gain_db_to_linear(GAIN_CEILING_DB);
+        assert!(
+            norm.target_gain_linear <= ceiling_linear + 1e-3,
+            "target gain {} exceeded +{}dB ceiling {}",
+            norm.target_gain_linear,
+            GAIN_CEILING_DB,
+            ceiling_linear
+        );
+        assert!(
+            norm.gain_linear <= ceiling_linear + 1e-3,
+            "smoothed gain {} exceeded +{}dB ceiling {}",
+            norm.gain_linear,
+            GAIN_CEILING_DB,
+            ceiling_linear
+        );
+    }
+
+    #[test]
+    fn normalizer_gain_is_floored_for_very_loud_audio() {
+        let mut norm = LoudnessNormalizer::new(1, 48_000).unwrap();
+        // Well above -23 LUFS; an uncapped normalizer would ask for large
+        // negative gain, undoing AEC's work on residual echo (issue #21).
+        let loud: Vec<f32> = (0..48_000 * 3)
+            .map(|i| 0.8 * (i as f32 * 0.05).sin())
+            .collect();
+        for chunk in loud.chunks(4800) {
+            norm.normalize_loudness(chunk);
+        }
+        let floor_linear = gain_db_to_linear(GAIN_FLOOR_DB);
+        assert!(
+            norm.target_gain_linear >= floor_linear - 1e-3,
+            "target gain {} went below {}dB floor {}",
+            norm.target_gain_linear,
+            GAIN_FLOOR_DB,
+            floor_linear
+        );
+    }
+
+    #[test]
+    fn normalizer_gain_changes_smoothly_not_in_steps() {
+        let mut norm = LoudnessNormalizer::new(1, 48_000).unwrap();
+
+        // EBU R128's integrated-loudness measurement needs hundreds of ms
+        // to converge, which would make this test slow and indirect. Stage
+        // a large target jump directly instead, to isolate the one-pole
+        // smoothing math (the thing issue #21 asks for) from the
+        // measurement pipeline.
+        norm.target_gain_linear = gain_db_to_linear(GAIN_CEILING_DB);
+        assert!((norm.gain_linear - 1.0).abs() < 1e-6);
+
+        // Silence doesn't yield a finite loudness measurement (guarded by
+        // `current_lufs.is_finite()` in `normalize_loudness`), so
+        // `target_gain_linear` stays exactly what we staged above — only
+        // the smoothing follower moves.
+        let silence = vec![0.0f32; 512];
+        norm.normalize_loudness(&silence);
+
+        assert!(
+            norm.gain_linear < norm.target_gain_linear - 1e-4,
+            "gain should not jump instantly to target: gain={} target={}",
+            norm.gain_linear,
+            norm.target_gain_linear
+        );
+
+        // Feeding enough further silence lets the smoothed gain converge
+        // toward the (fixed) target.
+        for _ in 0..50 {
+            norm.normalize_loudness(&silence);
+        }
+        assert!(
+            (norm.gain_linear - norm.target_gain_linear).abs() < 0.05,
+            "gain should have converged close to target after many blocks: gain={} target={}",
+            norm.gain_linear,
+            norm.target_gain_linear
+        );
     }
 }
 
-/// Fast resampling optimized for transcription preprocessing
-///
-pub fn write_audio_to_file(
-    audio: &[f32],
-    sample_rate: u32,
-    output_path: &PathBuf,
-    device: &str,
-    skip_encoding: bool,
-) -> Result<String> {
-    write_audio_to_file_with_meeting_name(
-        audio,
-        sample_rate,
-        output_path,
-        device,
-        skip_encoding,
-        None,
-    )
-}
+#[cfg(test)]
+mod resample_tests {
+    //! Issue #38: SincFixedIn's group delay must be flushed (not just
+    //! truncated at the input's nominal length) so the last few
+    //! milliseconds of audio survive resampling and the output is time-
+    //! aligned with the input.
+    use super::*;
 
-pub fn write_audio_to_file_with_meeting_name(
-    audio: &[f32],
-    sample_rate: u32,
-    output_path: &PathBuf,
-    device: &str,
-    skip_encoding: bool,
-    meeting_name: Option<&str>,
-) -> Result<String> {
-    let timestamp = Utc::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let sanitized_device_name = device.replace(['/', '\\'], "_");
+    #[test]
+    fn resample_1khz_tone_48k_to_16k_is_aligned_and_complete() {
+        const FROM_RATE: u32 = 48_000;
+        const TO_RATE: u32 = 16_000;
+        let duration_secs = 1.0f32;
+        let freq = 1000.0f32;
+        let n = (FROM_RATE as f32 * duration_secs) as usize;
+        let input: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * freq * i as f32 / FROM_RATE as f32).sin())
+            .collect();
 
-    // Create meeting folder if meeting name is provided
-    let final_output_path = if let Some(name) = meeting_name {
-        let sanitized_meeting_name = sanitize_filename(name);
-        let meeting_folder = output_path.join(&sanitized_meeting_name);
+        let output = resample(&input, FROM_RATE, TO_RATE).expect("resample should succeed");
 
-        // Create the meeting folder if it doesn't exist
-        if !meeting_folder.exists() {
-            std::fs::create_dir_all(&meeting_folder)?;
-        }
+        // Length should be ~= input.len() * ratio (16000 samples for 1s @ 16kHz).
+        let expected_len = 16_000usize;
+        let len_diff = (output.len() as i64 - expected_len as i64).unsigned_abs();
+        assert!(
+            len_diff <= 2,
+            "expected ~{} samples, got {}",
+            expected_len,
+            output.len()
+        );
 
-        meeting_folder
-    } else {
-        output_path.clone()
-    };
+        // RMS of a resampled full-cycle sine tone should closely match the
+        // RMS of the original (both sines of the same amplitude): within 3%.
+        let input_rms = (input.iter().map(|s| s * s).sum::<f32>() / input.len() as f32).sqrt();
+        let output_rms = (output.iter().map(|s| s * s).sum::<f32>() / output.len() as f32).sqrt();
+        let rel_diff = (output_rms - input_rms).abs() / input_rms;
+        assert!(
+            rel_diff < 0.03,
+            "RMS mismatch too large: input_rms={} output_rms={} rel_diff={}",
+            input_rms,
+            output_rms,
+            rel_diff
+        );
 
-    let file_path = final_output_path
-        .join(format!("{}_{}.mp4", sanitized_device_name, timestamp))
-        .to_str()
-        .expect("Failed to create valid path")
-        .to_string();
-    let file_path_clone = file_path.clone();
-    // Run FFmpeg in a separate task
-    if !skip_encoding {
-        encode_single_audio(
-            bytemuck::cast_slice(audio),
-            sample_rate,
-            1,
-            &file_path.into(),
-        )?;
+        // The last 5ms (80 samples at 16kHz) must be non-zero — proof the
+        // group delay was flushed rather than silently truncating the tail.
+        let last_5ms = TO_RATE as usize * 5 / 1000;
+        let tail = &output[output.len() - last_5ms..];
+        assert!(
+            tail.iter().any(|s| s.abs() > 1e-4),
+            "expected non-zero samples in the last 5ms of output, got {:?}",
+            tail
+        );
     }
-    Ok(file_path_clone)
+
+    #[test]
+    fn resample_audio_propagates_result() {
+        let input = vec![0.1f32; 4800];
+        let result = resample_audio(&input, 48_000, 16_000);
+        assert!(result.is_ok());
+        assert!(!result.unwrap().is_empty());
+    }
 }

@@ -64,9 +64,17 @@ impl RecordingManager {
             auto_save, enable_partials
         );
 
-        // Set up transcription channel
-        let (transcription_sender, transcription_receiver) =
+        // Set up transcription channel. The pipeline gets a plain
+        // `UnboundedSender` as before (unmodified pipeline.rs); a lightweight
+        // forwarding task counts segments in flight for the transcription
+        // backlog metric (issue #26) without pipeline.rs needing to know
+        // about it. See `transcription::queue` for the accounting and the
+        // "channel closed" completion-signal handoff.
+        super::transcription::reset_queue_depth();
+        let (transcription_sender, raw_transcription_receiver) =
             mpsc::unbounded_channel::<AudioChunk>();
+        let transcription_receiver =
+            super::transcription::spawn_counting_forwarder(raw_transcription_receiver);
 
         // Streaming-partial channel (only when enabled). The command layer
         // claims the receiver via take_partial_receiver() and spawns the
@@ -88,31 +96,15 @@ impl RecordingManager {
         // Start recording state first
         self.state.start_recording()?;
 
-        // Get device information for adaptive mixing
-        // The pipeline uses device kind (Bluetooth vs Wired) to apply adaptive buffering:
-        // - Bluetooth: Larger buffers (80-200ms) to handle jitter
-        // - Wired: Smaller buffers (20-50ms) for low latency
-        let (mic_name, mic_kind) = if let Some(ref mic) = microphone_device {
-            let device_kind =
-                super::device_detection::InputDeviceKind::detect(&mic.name, 512, 48000);
-            (mic.name.clone(), device_kind)
-        } else {
-            (
-                "No Microphone".to_string(),
-                super::device_detection::InputDeviceKind::Unknown,
-            )
-        };
-
-        let (sys_name, sys_kind) = if let Some(ref sys) = system_device {
-            let device_kind =
-                super::device_detection::InputDeviceKind::detect(&sys.name, 512, 48000);
-            (sys.name.clone(), device_kind)
-        } else {
-            (
-                "No System Audio".to_string(),
-                super::device_detection::InputDeviceKind::Unknown,
-            )
-        };
+        // Device names, used only for logging in the pipeline.
+        let mic_name = microphone_device
+            .as_ref()
+            .map(|d| d.name.clone())
+            .unwrap_or_else(|| "No Microphone".to_string());
+        let sys_name = system_device
+            .as_ref()
+            .map(|d| d.name.clone())
+            .unwrap_or_else(|| "No System Audio".to_string());
 
         // Update recording metadata with device information
         self.recording_saver.set_device_info(
@@ -123,7 +115,14 @@ impl RecordingManager {
         // Start the audio processing pipeline with FFmpeg adaptive mixer
         // Pipeline will: 1) Mix mic+system audio with adaptive buffering, 2) Send mixed to recording_sender,
         // 3) Apply VAD and send speech segments to transcription
-        self.pipeline_manager.start(
+        //
+        // issue #45: start_accumulation() above already created the meeting
+        // folder (and, when auto_save is on, .checkpoints/ + metadata.json
+        // with status "recording") on disk. If pipeline or stream startup
+        // fails from here on, that folder must not be left behind as an
+        // orphan for crash recovery to later offer — tear everything down
+        // and discard it (only if it never actually captured anything).
+        if let Err(e) = self.pipeline_manager.start(
             self.state.clone(),
             transcription_sender,
             0,                      // Ignored - using dynamic sizing internally
@@ -131,19 +130,38 @@ impl RecordingManager {
             Some(recording_sender), // CRITICAL: Pass recording sender to receive pre-mixed audio
             partial_sender,         // Streaming partials (None when disabled)
             mic_name,
-            mic_kind,
             sys_name,
-            sys_kind,
-        )?;
+            microphone_device.is_some(),
+            system_device.is_some(),
+        ) {
+            error!("Failed to start audio pipeline: {}", e);
+            self.abort_failed_start().await;
+            return Err(e);
+        }
 
         // Give the pipeline a moment to fully initialize before starting streams
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         // Start audio streams - they send RAW unmixed chunks to pipeline for mixing
         // Pipeline handles mixing and distribution to both recording and transcription
-        self.stream_manager
+        if let Err(e) = self
+            .stream_manager
             .start_streams(microphone_device.clone(), system_device.clone())
-            .await?;
+            .await
+        {
+            error!("Failed to start audio streams: {}", e);
+            // The pipeline did start; stop it so it releases the recording
+            // sender (letting the saver's accumulation task drain and end)
+            // before we inspect/discard the meeting folder.
+            if let Err(stop_err) = self.pipeline_manager.stop().await {
+                error!(
+                    "Error stopping audio pipeline during failed-start cleanup: {}",
+                    stop_err
+                );
+            }
+            self.abort_failed_start().await;
+            return Err(e);
+        }
 
         info!(
             "Recording manager started successfully with {} active streams",
@@ -151,6 +169,20 @@ impl RecordingManager {
         );
 
         Ok(transcription_receiver)
+    }
+
+    /// Clean up after a `start_recording` failure that happened after
+    /// `start_accumulation()` already created the meeting folder (issue
+    /// #45): reset recording state and discard the folder if it never
+    /// captured anything, so a failed start doesn't leave an orphan
+    /// "recording"-status meeting for crash recovery to offer later.
+    async fn abort_failed_start(&mut self) {
+        self.state.stop_recording();
+        // Wait for the accumulation task to see its channel close (dropped
+        // by the pipeline stop above, or never handed off if pipeline
+        // startup itself failed) before inspecting the folder it wrote to.
+        self.recording_saver.abort_accumulation().await;
+        self.recording_saver.discard_empty_session();
     }
 
     /// Start recording with the system default source + sink monitor.
@@ -185,7 +217,7 @@ impl RecordingManager {
         self.state.stop_recording();
 
         // Stop audio streams
-        if let Err(e) = self.stream_manager.stop_streams() {
+        if let Err(e) = self.stream_manager.stop_streams().await {
             error!("Error stopping audio streams: {}", e);
         }
 
@@ -206,7 +238,7 @@ impl RecordingManager {
         self.state.stop_recording();
 
         // Stop audio streams immediately
-        if let Err(e) = self.stream_manager.stop_streams() {
+        if let Err(e) = self.stream_manager.stop_streams().await {
             error!("Error stopping audio streams: {}", e);
         }
 
@@ -272,7 +304,7 @@ impl RecordingManager {
         self.state.stop_recording();
 
         // Stop audio streams
-        if let Err(e) = self.stream_manager.stop_streams() {
+        if let Err(e) = self.stream_manager.stop_streams().await {
             error!("Error stopping audio streams: {}", e);
         }
 
@@ -333,11 +365,6 @@ impl RecordingManager {
     /// Check if recording is active (recording and not paused)
     pub fn is_active(&self) -> bool {
         self.state.is_active()
-    }
-
-    /// Get recording statistics
-    pub fn get_stats(&self) -> super::recording_state::RecordingStats {
-        self.state.get_stats()
     }
 
     /// Get recording duration
@@ -419,7 +446,7 @@ impl RecordingManager {
             self.state.stop_recording();
 
             // Stop audio streams
-            if let Err(e) = self.stream_manager.stop_streams() {
+            if let Err(e) = self.stream_manager.stop_streams().await {
                 error!("Error stopping audio streams during cleanup: {}", e);
             }
 
@@ -435,11 +462,6 @@ impl RecordingManager {
     /// Returns None if no meeting name was set or folder structure not initialized
     pub fn get_meeting_folder(&self) -> Option<std::path::PathBuf> {
         self.recording_saver.get_meeting_folder().map(|p| p.clone())
-    }
-
-    /// Check if currently attempting to reconnect
-    pub fn is_reconnecting(&self) -> bool {
-        self.state.is_reconnecting()
     }
 
     /// Get reference to recording state for external access

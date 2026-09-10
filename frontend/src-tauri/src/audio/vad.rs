@@ -11,7 +11,8 @@
 //! - Same `SpeechSegment` shape (samples + start/end timestamps + source tag).
 //! - Same `ContinuousVadProcessor` API (`new`, `new_with_source`, `process_audio`, `flush`).
 //! - Same `extract_speech_16k`, `get_speech_chunks`, `get_speech_chunks_with_progress` helpers.
-//! - 16 kHz mono input; resampling from any input rate happens here.
+//! - 16 kHz mono input; resampling from any input rate happens here via a
+//!   stateful windowed-sinc downsampler (`StreamingDownsampler`).
 //!
 //! What changed under the hood:
 //! - The "redemption_time_ms" parameter now maps to sherpa's
@@ -22,6 +23,9 @@
 
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 use sherpa_onnx::{SileroVadModelConfig, VadModelConfig, VoiceActivityDetector};
 
 use super::recording_state::DeviceType;
@@ -41,8 +45,10 @@ pub struct SpeechSegment {
 /// Streaming VAD processor that emits complete speech segments.
 pub struct ContinuousVadProcessor {
     detector: VoiceActivityDetector,
-    /// Sample rate of the *input* audio (we resample to 16 kHz before feeding sherpa).
-    sample_rate: u32,
+    /// Stateful anti-aliased downsampler to 16 kHz. `None` when the input is
+    /// already 16 kHz. The samples it produces are what sherpa hands back in
+    /// each `SpeechSegment`, i.e. exactly what Whisper decodes.
+    downsampler: Option<StreamingDownsampler>,
     /// Total 16 kHz samples consumed so far. Used to convert sherpa's
     /// segment-relative sample indices into absolute timestamps.
     processed_samples_16k: u64,
@@ -150,9 +156,18 @@ impl ContinuousVadProcessor {
             input_sample_rate, redemption_time_ms, max_speech_duration, source
         );
 
+        let downsampler = if input_sample_rate == VAD_SAMPLE_RATE as u32 {
+            None
+        } else {
+            Some(StreamingDownsampler::new(
+                input_sample_rate,
+                VAD_SAMPLE_RATE as u32,
+            )?)
+        };
+
         Ok(Self {
             detector,
-            sample_rate: input_sample_rate,
+            downsampler,
             processed_samples_16k: 0,
             source,
             current_utterance_16k: Vec::new(),
@@ -174,20 +189,12 @@ impl ContinuousVadProcessor {
     /// Process incoming audio samples and return any complete speech segments.
     /// Handles resampling from input sample rate to 16 kHz.
     pub fn process_audio(&mut self, samples: &[f32]) -> Result<Vec<SpeechSegment>> {
-        let resampled: std::borrow::Cow<[f32]> = if self.sample_rate == 16_000 {
-            samples.into()
-        } else {
-            self.resample_to_16k(samples)?.into()
+        let resampled: std::borrow::Cow<[f32]> = match self.downsampler.as_mut() {
+            None => samples.into(),
+            Some(ds) => ds.process(samples)?.into(),
         };
 
-        self.detector.accept_waveform(resampled.as_ref());
-        self.processed_samples_16k += resampled.as_ref().len() as u64;
-
-        // Accumulate the in-progress utterance for streaming partial decodes,
-        // bounded by MAX_PARTIAL_SAMPLES.
-        if self.current_utterance_16k.len() < MAX_PARTIAL_SAMPLES {
-            self.current_utterance_16k.extend_from_slice(resampled.as_ref());
-        }
+        self.feed_16k(resampled.as_ref());
 
         let segments = self.drain_segments();
         // A finalized segment ends the current utterance — the authoritative
@@ -206,8 +213,31 @@ impl ContinuousVadProcessor {
             self.processed_samples_16k,
             self.processed_samples_16k as f64 / 16_000.0
         );
+        // Push the downsampler's buffered remainder + filter delay through so
+        // the last few milliseconds of speech reach the detector.
+        if let Some(ds) = self.downsampler.as_mut() {
+            let tail = ds.flush()?;
+            if !tail.is_empty() {
+                self.feed_16k(&tail);
+            }
+        }
         self.detector.flush();
         Ok(self.drain_segments())
+    }
+
+    /// Hand 16 kHz samples to sherpa and to the partial-preview accumulator.
+    fn feed_16k(&mut self, samples_16k: &[f32]) {
+        if samples_16k.is_empty() {
+            return;
+        }
+        self.detector.accept_waveform(samples_16k);
+        self.processed_samples_16k += samples_16k.len() as u64;
+
+        // Accumulate the in-progress utterance for streaming partial decodes,
+        // bounded by MAX_PARTIAL_SAMPLES.
+        if self.current_utterance_16k.len() < MAX_PARTIAL_SAMPLES {
+            self.current_utterance_16k.extend_from_slice(samples_16k);
+        }
     }
 
     /// Pop every queued segment from sherpa's detector, converting each to
@@ -245,112 +275,105 @@ impl ContinuousVadProcessor {
         out
     }
 
-    /// Resample `samples` from `self.sample_rate` to 16 kHz with a basic
-    /// low-pass + linear interpolation. Adequate for VAD input quality.
-    ///
-    /// Deliberately NOT `audio_processing::resample_audio`: that builds a
-    /// one-shot 512-tap sinc resampler per call, sized to the whole input —
-    /// right for batch jobs resampling a full recording, but this runs on
-    /// every ~50ms pipeline window, where the construction cost and the
-    /// per-call windowing edge effects would dominate. VAD only needs
-    /// speech-band energy to survive, which this cheap filter preserves.
-    fn resample_to_16k(&self, samples: &[f32]) -> Result<Vec<f32>> {
-        if self.sample_rate == 16_000 {
-            return Ok(samples.to_vec());
-        }
-
-        let ratio = self.sample_rate as f64 / 16_000.0;
-        let output_len = (samples.len() as f64 / ratio) as usize;
-        let mut resampled = Vec::with_capacity(output_len);
-
-        // Simple moving-average low-pass before downsampling to reduce aliasing.
-        let filter_size = std::cmp::max(
-            1,
-            std::cmp::min(
-                (self.sample_rate as f64 / (0.4 * self.sample_rate as f64)) as usize,
-                5,
-            ),
-        );
-        let mut filtered = Vec::with_capacity(samples.len());
-        for i in 0..samples.len() {
-            let start = if i >= filter_size { i - filter_size } else { 0 };
-            let end = std::cmp::min(i + filter_size + 1, samples.len());
-            let sum: f32 = samples[start..end].iter().sum();
-            filtered.push(sum / (end - start) as f32);
-        }
-
-        // Linear-interpolation downsampling.
-        for i in 0..output_len {
-            let source_pos = i as f64 * ratio;
-            let source_index = source_pos as usize;
-            let fraction = source_pos - source_index as f64;
-            if source_index + 1 < filtered.len() {
-                let s1 = filtered[source_index];
-                let s2 = filtered[source_index + 1];
-                resampled.push(s1 + (s2 - s1) * fraction as f32);
-            } else if source_index < filtered.len() {
-                resampled.push(filtered[source_index]);
-            }
-        }
-
-        debug!(
-            "Resampled {} → {} samples ({}Hz → 16kHz)",
-            samples.len(),
-            resampled.len(),
-            self.sample_rate
-        );
-        Ok(resampled)
-    }
 }
 
-/// Legacy helper: extract concatenated speech samples from a 16 kHz mono buffer.
-/// Used by older code paths that want a single contiguous "speech-only" array.
-pub fn extract_speech_16k(samples_mono_16k: &[f32]) -> Result<Vec<f32>> {
-    let mut processor = ContinuousVadProcessor::new(16_000, 400)?;
+/// Stateful, anti-aliased sample-rate converter used to bring pipeline audio
+/// (48 kHz) down to the 16 kHz sherpa/Whisper expect.
+///
+/// A windowed-sinc resampler (rubato `SincFixedIn`) with its state carried
+/// across calls: there are no per-window edge effects and the transition band
+/// sits at the *output* Nyquist, so content above 8 kHz is rejected instead of
+/// folding into the speech band. (The previous implementation was a 5-tap
+/// moving average plus linear interpolation, whose first null was near
+/// 9.6 kHz — sibilants and broadband noise between 8 and 24 kHz aliased
+/// straight into what Whisper decoded.)
+///
+/// Input is accumulated into fixed 10 ms blocks, so arbitrary chunk sizes
+/// are accepted; the live pipeline's 50 ms windows resolve to exactly five
+/// blocks (2400 in → 800 out at 48 → 16 kHz). Group delay is
+/// `sinc_len / 2` input frames (~1.3 ms), flushed by [`Self::flush`].
+pub(crate) struct StreamingDownsampler {
+    resampler: SincFixedIn<f32>,
+    /// Fixed input block the resampler consumes per call.
+    block_in: usize,
+    /// Input samples waiting for a full block.
+    pending: Vec<f32>,
+}
 
-    let mut all_segments = processor.process_audio(samples_mono_16k)?;
-    let final_segments = processor.flush()?;
-    all_segments.extend(final_segments);
-
-    let mut result = Vec::new();
-    let num_segments = all_segments.len();
-    for segment in &all_segments {
-        result.extend_from_slice(&segment.samples);
-    }
-
-    // Energy-based fallback for very short outputs (avoids Whisper hallucinating
-    // on near-silent input that VAD over-aggressively trimmed).
-    if result.len() < 1600 {
-        let input_energy: f32 =
-            samples_mono_16k.iter().map(|&x| x * x).sum::<f32>() / samples_mono_16k.len() as f32;
-        let rms = input_energy.sqrt();
-        let peak = samples_mono_16k
-            .iter()
-            .map(|&x| x.abs())
-            .fold(0.0f32, f32::max);
-
-        if rms < 0.2 || peak < 0.20 {
-            info!(
-                "VAD detected silence/noise (RMS: {:.6}, Peak: {:.6}); skipping",
-                rms, peak
-            );
-            return Ok(Vec::new());
-        } else {
-            info!(
-                "VAD energy-fallback: passing through full buffer (RMS: {:.6}, Peak: {:.6})",
-                rms, peak
-            );
-            return Ok(samples_mono_16k.to_vec());
+impl StreamingDownsampler {
+    pub(crate) fn new(input_rate: u32, output_rate: u32) -> Result<Self> {
+        if input_rate == 0 || output_rate == 0 {
+            return Err(anyhow!(
+                "invalid sample rates for downsampler: {} -> {}",
+                input_rate,
+                output_rate
+            ));
         }
+        // 10 ms blocks: small enough that leftovers are negligible for any
+        // caller, and an exact divisor of the pipeline's 50 ms windows.
+        let block_in = (input_rate / 100).max(1) as usize;
+        let ratio = output_rate as f64 / input_rate as f64;
+        let params = SincInterpolationParameters {
+            sinc_len: 128,
+            // Relative to the lower Nyquist (the 16 kHz side): keep the
+            // passband to ~7.4 kHz so the stopband is well established by 8 kHz.
+            f_cutoff: 0.92,
+            interpolation: SincInterpolationType::Linear,
+            oversampling_factor: 128,
+            window: WindowFunction::BlackmanHarris2,
+        };
+        let resampler = SincFixedIn::<f32>::new(ratio, 1.0, params, block_in, 1)
+            .map_err(|e| anyhow!("failed to create {}→{} Hz downsampler: {}", input_rate, output_rate, e))?;
+        Ok(Self {
+            resampler,
+            block_in,
+            pending: Vec::with_capacity(block_in * 6),
+        })
     }
 
-    debug!(
-        "VAD: processed {} samples → {} speech samples from {} segments",
-        samples_mono_16k.len(),
-        result.len(),
-        num_segments
-    );
-    Ok(result)
+    /// Convert `samples`; returns whatever whole blocks are now available
+    /// (the remainder is buffered for the next call).
+    pub(crate) fn process(&mut self, samples: &[f32]) -> Result<Vec<f32>> {
+        self.pending.extend_from_slice(samples);
+        let blocks = self.pending.len() / self.block_in;
+        let mut out = Vec::with_capacity(blocks * self.resampler.output_frames_max());
+        for _ in 0..blocks {
+            let block = [self.pending.drain(..self.block_in).collect::<Vec<f32>>()];
+            let mut converted = self
+                .resampler
+                .process(&block[..], None)
+                .map_err(|e| anyhow!("downsampler process failed: {}", e))?;
+            if let Some(channel) = converted.pop() {
+                out.extend_from_slice(&channel);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Emit the buffered partial block plus the filter's group-delay tail.
+    /// The resampler stays usable afterwards (its delay line is zero-filled).
+    pub(crate) fn flush(&mut self) -> Result<Vec<f32>> {
+        let mut out = Vec::new();
+        if !self.pending.is_empty() {
+            let partial = [self.pending.drain(..).collect::<Vec<f32>>()];
+            let mut converted = self
+                .resampler
+                .process_partial(Some(&partial[..]), None)
+                .map_err(|e| anyhow!("downsampler partial process failed: {}", e))?;
+            if let Some(channel) = converted.pop() {
+                out.extend_from_slice(&channel);
+            }
+        }
+        let empty: Option<&[Vec<f32>]> = None;
+        let mut converted = self
+            .resampler
+            .process_partial(empty, None)
+            .map_err(|e| anyhow!("downsampler flush failed: {}", e))?;
+        if let Some(channel) = converted.pop() {
+            out.extend_from_slice(&channel);
+        }
+        Ok(out)
+    }
 }
 
 /// Trim a voice-enrollment recording (16 kHz mono) down to its voiced parts.
@@ -469,6 +492,73 @@ where
     }
 
     Ok(all_segments)
+}
+
+#[cfg(test)]
+mod downsampler_tests {
+    use super::StreamingDownsampler;
+
+    fn tone(freq: f32, rate: u32, seconds: f32) -> Vec<f32> {
+        let n = (rate as f32 * seconds) as usize;
+        (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * freq * i as f32 / rate as f32).sin())
+            .collect()
+    }
+
+    fn rms(x: &[f32]) -> f32 {
+        (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
+    }
+
+    #[test]
+    fn live_window_yields_800_samples_after_warmup() {
+        let mut ds = StreamingDownsampler::new(48_000, 16_000).unwrap();
+        // rubato absorbs the filter's group delay (sinc_len / 2 input frames,
+        // ≈ 21 output samples) in the very first call; every window after
+        // that maps 2400 → 800 exactly, which keeps VAD timestamps aligned.
+        let first = ds.process(&vec![0.1; 2400]).unwrap();
+        assert!((760..=800).contains(&first.len()), "first window: {}", first.len());
+        for _ in 0..20 {
+            let out = ds.process(&vec![0.1; 2400]).unwrap();
+            assert_eq!(out.len(), 800);
+        }
+    }
+
+    #[test]
+    fn arbitrary_chunking_is_conserved() {
+        let mut ds = StreamingDownsampler::new(48_000, 16_000).unwrap();
+        let input = tone(440.0, 48_000, 1.0);
+        let mut total = 0usize;
+        for chunk in input.chunks(517) {
+            total += ds.process(chunk).unwrap().len();
+        }
+        total += ds.flush().unwrap().len();
+        // 48 000 in → 16 000 out, minus the group delay absorbed up front,
+        // plus the zero block rubato pushes through on flush (≤ one 10 ms
+        // block, i.e. ≤ 160 output samples of trailing silence).
+        assert!(
+            (total as i64 - 16_000).abs() <= 200,
+            "got {} samples",
+            total
+        );
+    }
+
+    #[test]
+    fn passband_preserved_and_aliases_rejected() {
+        // 1 kHz must pass ~unchanged; 11 kHz (above the 8 kHz output Nyquist)
+        // must be strongly attenuated instead of folding down to 5 kHz.
+        let mut pass = StreamingDownsampler::new(48_000, 16_000).unwrap();
+        let mut stop = StreamingDownsampler::new(48_000, 16_000).unwrap();
+        let in_pass = tone(1_000.0, 48_000, 1.0);
+        let in_stop = tone(11_000.0, 48_000, 1.0);
+        let out_pass = pass.process(&in_pass).unwrap();
+        let out_stop = stop.process(&in_stop).unwrap();
+        // Skip the warm-up region.
+        let p = rms(&out_pass[4_000..]);
+        let s = rms(&out_stop[4_000..]);
+        let in_rms = rms(&in_pass);
+        assert!((p - in_rms).abs() / in_rms < 0.05, "passband rms {} vs {}", p, in_rms);
+        assert!(s < in_rms * 0.01, "stopband leak rms {} (input {})", s, in_rms);
+    }
 }
 
 #[cfg(test)]

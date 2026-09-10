@@ -731,6 +731,36 @@ async fn get_or_init_whisper<R: Runtime>(
             };
 
             if needs_load {
+                // Import is user-initiated and the user is waiting on it, so
+                // prefer not to block on a live recording if we can avoid it.
+                // If a live recording holds the engine lease, reuse whatever
+                // model it already has loaded instead of swapping (swapping
+                // would silently drop live transcript chunks while the load
+                // is in flight — see `whisper_engine::lease`); only fall back
+                // to waiting for the lease when there's no loaded model to
+                // reuse at all (e.g. caught mid-startup).
+                if crate::whisper_engine::LIVE_ENGINE_LEASE.is_live_leased() {
+                    if let Some(loaded) = &current_model {
+                        warn!(
+                            "Live recording holds the Whisper engine lease; reusing loaded model '{}' for import instead of switching to requested '{}'",
+                            loaded, target_model
+                        );
+                        return Ok(e);
+                    }
+                    warn!(
+                        "Live recording holds the Whisper engine lease and no model is currently loaded; waiting before loading '{}' for import",
+                        target_model
+                    );
+                    if !crate::whisper_engine::LIVE_ENGINE_LEASE
+                        .wait_until_free(std::time::Duration::from_secs(30 * 60))
+                        .await
+                    {
+                        return Err(anyhow!(
+                            "Timed out waiting for live recording to release the Whisper engine"
+                        ));
+                    }
+                }
+
                 info!(
                     "Loading Whisper model '{}' (current: {:?})",
                     target_model, current_model
