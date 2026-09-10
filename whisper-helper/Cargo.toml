@@ -1,0 +1,30 @@
+[package]
+name = "whisper-helper"
+version = "0.1.0"
+edition.workspace = true
+description = "Stdio JSON-lines whisper.cpp transcription sidecar (issue #56 spike). One binary per compiled backend — see README.md for the build matrix."
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+whisper-protocol = { path = "../whisper-protocol" }
+whisper-core = { path = "../whisper-core" }
+whisper-rs = { version = "0.16.0", features = ["raw-api", "log_backend"] }
+base64 = "0.22"
+# Restore default SIGPIPE disposition at startup — see llama-helper's
+# main.rs for why (a vanished parent must not turn a stdout write into an
+# EPIPE panic).
+libc = "0.2"
+
+[features]
+default = []
+cpu = []
+cuda = ["whisper-rs/cuda", "whisper-core/cuda"]
+vulkan = ["whisper-rs/vulkan", "whisper-core/vulkan"]
+
+# Release profile lives at the workspace root (see top-level Cargo.toml) —
+# sized like llama-helper/meetily-mcp since this is also a short-lived,
+# lazily-spawned sidecar where startup time and disk footprint matter more
+# than raw decode throughput (whisper.cpp itself is unaffected by this
+# crate's own codegen settings).

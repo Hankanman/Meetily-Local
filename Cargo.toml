@@ -4,7 +4,10 @@ members = [
     "frontend/src-tauri",
     "llama-helper",
     "llama-protocol",
-    "meetily-mcp"
+    "meetily-mcp",
+    "whisper-helper",
+    "whisper-protocol",
+    "whisper-core"
 ]
 
 # Shared workspace settings
@@ -47,5 +50,13 @@ opt-level = "s"
 # is startup and footprint, not throughput, so optimise it for size like
 # llama-helper.
 [profile.release.package.meetily-mcp]
+codegen-units = 1
+opt-level = "s"
+
+# whisper-helper (issue #56 spike): same rationale as llama-helper — lazily
+# spawned, short-lived, startup time and AppImage footprint matter more than
+# this crate's own codegen (whisper.cpp/ggml itself always builds at -O3
+# regardless of this profile).
+[profile.release.package.whisper-helper]
 codegen-units = 1
 opt-level = "s"
