@@ -141,9 +141,9 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     [meetings],
   );
 
-  const toggleCollapse = () => {
-    setIsCollapsed(!isCollapsed);
-  };
+  const toggleCollapse = React.useCallback(() => {
+    setIsCollapsed((prev) => !prev);
+  }, []);
 
   // Reset current meeting when navigating to home page (genuine pathname-driven reset)
   useEffect(() => {
@@ -154,7 +154,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   }, [pathname]);
 
   // Function to handle recording toggle from sidebar
-  const handleRecordingToggle = () => {
+  const handleRecordingToggle = React.useCallback(() => {
     if (!isRecording) {
       // A previous recording's stop is still draining/finalising (or this
       // window's local stop flow is mid-flight) — starting now would race
@@ -183,10 +183,10 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
       }
     }
     // The actual recording start/stop is handled in the Home component
-  };
+  }, [isRecording, isStopFlowActive, pathname, router]);
 
   // Function to search through meeting transcripts
-  const searchTranscripts = async (query: string) => {
+  const searchTranscripts = React.useCallback(async (query: string) => {
     if (!query.trim()) {
       setSearchResults([]);
       return;
@@ -205,7 +205,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsSearching(false);
     }
-  };
+  }, []);
 
   // Summary polling management
   const startSummaryPolling = React.useCallback(
@@ -314,30 +314,49 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     };
   }, [activeSummaryPolls]);
 
+  const value: SidebarContextType = useMemo(
+    () => ({
+      currentMeeting,
+      setCurrentMeeting,
+      sidebarItems,
+      isCollapsed,
+      toggleCollapse,
+      meetings,
+      setMeetings,
+      isMeetingActive,
+      setIsMeetingActive,
+      handleRecordingToggle,
+      searchTranscripts,
+      searchResults,
+      isSearching,
+      transcriptServerAddress,
+      setTranscriptServerAddress,
+      activeSummaryPolls,
+      startSummaryPolling,
+      stopSummaryPolling,
+      refetchMeetings: fetchMeetings,
+    }),
+    [
+      currentMeeting,
+      sidebarItems,
+      isCollapsed,
+      toggleCollapse,
+      meetings,
+      isMeetingActive,
+      handleRecordingToggle,
+      searchTranscripts,
+      searchResults,
+      isSearching,
+      transcriptServerAddress,
+      activeSummaryPolls,
+      startSummaryPolling,
+      stopSummaryPolling,
+      fetchMeetings,
+    ],
+  );
+
   return (
-    <SidebarContext.Provider
-      value={{
-        currentMeeting,
-        setCurrentMeeting,
-        sidebarItems,
-        isCollapsed,
-        toggleCollapse,
-        meetings,
-        setMeetings,
-        isMeetingActive,
-        setIsMeetingActive,
-        handleRecordingToggle,
-        searchTranscripts,
-        searchResults,
-        isSearching,
-        transcriptServerAddress,
-        setTranscriptServerAddress,
-        activeSummaryPolls,
-        startSummaryPolling,
-        stopSummaryPolling,
-        refetchMeetings: fetchMeetings,
-      }}
-    >
+    <SidebarContext.Provider value={value}>
       {children}
     </SidebarContext.Provider>
   );

@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use log::{debug, info};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -162,6 +162,190 @@ pub(crate) fn create_transcript_segments(
             }
         })
         .collect()
+}
+
+/// Filename of the append-only transcript journal written incrementally
+/// during a live recording (issue #48). Each line is one JSON-encoded
+/// [`TranscriptSegment`]; an updated segment is simply appended again, so
+/// upsert semantics are "the last line for a given `sequence_id` wins" on
+/// replay (see [`replay_transcript_journal`]). This lets the live path avoid
+/// re-serialising and rewriting the whole `transcripts.json` on every single
+/// segment — see [`load_transcripts_from_folder`] for how a reader recovers
+/// the true segment set from folder + journal.
+pub(crate) const TRANSCRIPTS_JOURNAL_FILENAME: &str = "transcripts.ndjson";
+
+/// Sort transcript segments chronologically by `audio_start_time`, using
+/// `sequence_id` as a tie-breaker when the start time is equal or absent.
+///
+/// Segments can arrive (or be journaled) out of chronological order: with
+/// dual-VAD (mic + system) sources, a segment that started earlier can
+/// finish later (e.g. a long system-audio segment force-cut well after a
+/// short mic segment that started after it). Every persisted view of a
+/// transcript (transcripts.json, and a journal replay) is re-ordered through
+/// this before being written or handed to a caller.
+pub(crate) fn sort_segments_chronologically(segments: &mut [TranscriptSegment]) {
+    segments.sort_by(|a, b| {
+        let a_time = a.audio_start_time.unwrap_or(f64::MAX);
+        let b_time = b.audio_start_time.unwrap_or(f64::MAX);
+        a_time
+            .partial_cmp(&b_time)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                a.sequence_id
+                    .unwrap_or(u64::MAX)
+                    .cmp(&b.sequence_id.unwrap_or(u64::MAX))
+            })
+    });
+}
+
+/// Append one segment as a single JSON line to `transcripts.ndjson` in
+/// `folder`, creating the file if it doesn't exist yet. Never truncates —
+/// callers upsert by simply appending the updated segment again.
+///
+/// Async (uses `tokio::fs`) so it can run directly on the dedicated journal
+/// writer task (see `RecordingSaver`) without blocking a tokio worker.
+pub(crate) async fn append_transcript_journal_line(
+    folder: &Path,
+    segment: &TranscriptSegment,
+) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let path = folder.join(TRANSCRIPTS_JOURNAL_FILENAME);
+    let mut line = serde_json::to_string(segment)?;
+    line.push('\n');
+
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .await?;
+    file.write_all(line.as_bytes()).await?;
+    // tokio::fs::File buffers writes internally; write_all() completing
+    // does not by itself guarantee the data has reached the OS file (Drop
+    // best-effort-flushes but can't be awaited). Without this, a reader
+    // racing a fresh append — including this same journal being replayed
+    // moments later — can observe a torn/short file. flush() drives the
+    // buffered write through before the handle goes out of scope.
+    file.flush().await?;
+    Ok(())
+}
+
+/// Unique key a journal replay dedupes on: `sequence_id` is the meaningful
+/// upsert key for the live-recording path (a segment is re-appended under
+/// the same `sequence_id` when Whisper refines a partial transcription into
+/// a final one), so segments carrying one are keyed on it. Segments with no
+/// `sequence_id` (shouldn't happen on the live path, but keep this robust)
+/// fall back to `id`, so they never spuriously collide with each other.
+fn journal_replay_key(segment: &TranscriptSegment) -> String {
+    match segment.sequence_id {
+        Some(sequence_id) => format!("seq:{}", sequence_id),
+        None => format!("id:{}", segment.id),
+    }
+}
+
+/// Replay `transcripts.ndjson` from `folder`: parse every line as a
+/// [`TranscriptSegment`], keep only the last line written for each
+/// `sequence_id` (upsert semantics), and return the result sorted
+/// chronologically via [`sort_segments_chronologically`].
+///
+/// A line that fails to parse (e.g. a torn write from a crash mid-append) is
+/// skipped with a warning rather than failing the whole replay — the journal
+/// is a recovery aid, so best-effort beats losing everything to one bad line.
+pub(crate) fn replay_transcript_journal(folder: &Path) -> Result<Vec<TranscriptSegment>> {
+    let path = folder.join(TRANSCRIPTS_JOURNAL_FILENAME);
+    let contents = std::fs::read_to_string(&path)?;
+
+    let mut by_key: std::collections::HashMap<String, TranscriptSegment> =
+        std::collections::HashMap::new();
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<TranscriptSegment>(line) {
+            Ok(segment) => {
+                by_key.insert(journal_replay_key(&segment), segment);
+            }
+            Err(e) => warn!(
+                "Skipping malformed line in {}: {}",
+                TRANSCRIPTS_JOURNAL_FILENAME, e
+            ),
+        }
+    }
+
+    let mut segments: Vec<TranscriptSegment> = by_key.into_values().collect();
+    sort_segments_chronologically(&mut segments);
+    Ok(segments)
+}
+
+/// Load the true set of transcript segments for a meeting folder, preferring
+/// a fresher `transcripts.ndjson` journal over a possibly-stale
+/// `transcripts.json` (issue #48: `transcripts.json` is only rewritten from
+/// the journal at most every 5s while recording, and can lag behind by that
+/// much right up until the final rewrite at stop).
+///
+/// Every reader of a meeting folder's transcripts (crash-recovery / audio
+/// import / retranscription code, and anything else that wants "the current
+/// transcript for this folder") should go through this rather than reading
+/// `transcripts.json` directly, so it can't observe up to 5s of missing
+/// segments from a recording that's still in progress or was interrupted.
+///
+/// Returns an empty vec if neither file exists. Returns `Err` only for a
+/// `transcripts.json` that exists but fails to parse — deliberately not
+/// silently ignored, since that's the "no journal, or a same-or-older
+/// journal" fallback and hiding a genuine parse failure behind an empty
+/// result would look like "this meeting has no transcript" instead of "this
+/// meeting's transcript file is corrupt".
+pub(crate) fn load_transcripts_from_folder(folder: &Path) -> Result<Vec<TranscriptSegment>> {
+    let json_path = folder.join("transcripts.json");
+    let journal_path = folder.join(TRANSCRIPTS_JOURNAL_FILENAME);
+
+    let json_segments = if json_path.exists() {
+        let contents = std::fs::read_to_string(&json_path)?;
+        let value: serde_json::Value = serde_json::from_str(&contents)?;
+        // Current `write_transcripts_json` output is `{ "segments": [...],
+        // ... }`; also accept a bare top-level array for compatibility with
+        // any older on-disk files that predate the wrapper object.
+        let segments_value = match &value {
+            serde_json::Value::Object(_) => value
+                .get("segments")
+                .cloned()
+                .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
+            serde_json::Value::Array(_) => value.clone(),
+            _ => serde_json::Value::Array(Vec::new()),
+        };
+        serde_json::from_value::<Vec<TranscriptSegment>>(segments_value)?
+    } else {
+        Vec::new()
+    };
+
+    if !journal_path.exists() {
+        return Ok(json_segments);
+    }
+
+    let journal_segments = replay_transcript_journal(folder)?;
+
+    let journal_is_fresher = if !json_path.exists() {
+        true
+    } else {
+        let journal_mtime = std::fs::metadata(&journal_path).and_then(|m| m.modified());
+        let json_mtime = std::fs::metadata(&json_path).and_then(|m| m.modified());
+        let journal_newer = matches!((journal_mtime, json_mtime), (Ok(j), Ok(t)) if j > t);
+        journal_newer || journal_segments.len() > json_segments.len()
+    };
+
+    if journal_is_fresher {
+        info!(
+            "Preferring {} ({} segments) over transcripts.json ({} segments) for {}",
+            TRANSCRIPTS_JOURNAL_FILENAME,
+            journal_segments.len(),
+            json_segments.len(),
+            folder.display()
+        );
+        Ok(journal_segments)
+    } else {
+        Ok(json_segments)
+    }
 }
 
 /// Write transcripts.json to a meeting folder (atomic write with temp file).
@@ -651,4 +835,116 @@ pub(crate) fn split_segment_at_silence(
     }
 
     result
+}
+
+#[cfg(test)]
+mod journal_tests {
+    use super::*;
+
+    fn segment(id: &str, text: &str, audio_start_time: f64, sequence_id: u64) -> TranscriptSegment {
+        TranscriptSegment {
+            id: id.to_string(),
+            text: text.to_string(),
+            timestamp: None,
+            audio_start_time: Some(audio_start_time),
+            audio_end_time: None,
+            duration: None,
+            display_time: None,
+            confidence: None,
+            sequence_id: Some(sequence_id),
+            speaker: None,
+            voice_profile_id: None,
+            source: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn journal_append_and_replay_dedupes_by_sequence_id_and_orders_chronologically() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Two segments arrive out of chronological order, then the first
+        // (seq 1) is updated in place (e.g. VAD partial -> final) by
+        // appending it again under the same sequence_id.
+        append_transcript_journal_line(tmp.path(), &segment("a", "partial", 10.0, 1))
+            .await
+            .unwrap();
+        append_transcript_journal_line(tmp.path(), &segment("b", "second", 5.0, 2))
+            .await
+            .unwrap();
+        append_transcript_journal_line(tmp.path(), &segment("a", "final", 10.0, 1))
+            .await
+            .unwrap();
+
+        let replayed = replay_transcript_journal(tmp.path()).unwrap();
+
+        // Deduped: only the last line for sequence_id 1 survives.
+        assert_eq!(replayed.len(), 2);
+        // Ordered chronologically by audio_start_time (seq 2 started earlier).
+        assert_eq!(replayed[0].id, "b");
+        assert_eq!(replayed[1].id, "a");
+        assert_eq!(replayed[1].text, "final");
+    }
+
+    #[tokio::test]
+    async fn debounced_rebuild_matches_the_replayed_journal() {
+        // Mirrors what the RecordingSaver journal writer task does on its
+        // periodic debounced rebuild: replay the journal, then write it out
+        // as transcripts.json via the same helper used for the final save.
+        let tmp = tempfile::tempdir().unwrap();
+
+        append_transcript_journal_line(tmp.path(), &segment("s1", "hello", 1.0, 0))
+            .await
+            .unwrap();
+        append_transcript_journal_line(tmp.path(), &segment("s2", "world", 3.0, 1))
+            .await
+            .unwrap();
+        append_transcript_journal_line(tmp.path(), &segment("s2", "world!", 3.0, 1))
+            .await
+            .unwrap();
+
+        let replayed = replay_transcript_journal(tmp.path()).unwrap();
+        write_transcripts_json(tmp.path(), &replayed).unwrap();
+
+        let loaded = load_transcripts_from_folder(tmp.path()).unwrap();
+        // transcripts.json is at least as fresh as (same mtime as-or-newer
+        // than, same segment count as) the journal here, so the json copy
+        // is authoritative and should match the replay exactly.
+        assert_eq!(loaded.len(), replayed.len());
+        for (a, b) in loaded.iter().zip(replayed.iter()) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.text, b.text);
+            assert_eq!(a.sequence_id, b.sequence_id);
+        }
+    }
+
+    #[test]
+    fn load_prefers_a_fresher_journal_over_a_stale_transcripts_json() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Stale transcripts.json with just one segment.
+        write_transcripts_json(tmp.path(), &[segment("old", "stale", 0.0, 0)]).unwrap();
+
+        // Journal has more (and more recent) segments — write it after a
+        // small delay so its mtime is unambiguously newer than the json's.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let journal_path = tmp.path().join(TRANSCRIPTS_JOURNAL_FILENAME);
+        let lines = [
+            serde_json::to_string(&segment("old", "stale", 0.0, 0)).unwrap(),
+            serde_json::to_string(&segment("new", "fresh", 1.0, 1)).unwrap(),
+        ]
+        .join("\n")
+            + "\n";
+        std::fs::write(&journal_path, lines).unwrap();
+
+        let loaded = load_transcripts_from_folder(tmp.path()).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded.iter().any(|s| s.id == "new"));
+    }
+
+    #[test]
+    fn load_returns_empty_when_neither_file_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let loaded = load_transcripts_from_folder(tmp.path()).unwrap();
+        assert!(loaded.is_empty());
+    }
 }

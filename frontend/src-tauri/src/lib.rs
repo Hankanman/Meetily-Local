@@ -981,6 +981,35 @@ pub fn run() {
                     if let Err(e) = summary::summary_engine::force_shutdown_sidecar().await {
                         log::error!("Failed to force shutdown sidecar: {}", e);
                     }
+
+                    // Unload the Whisper model (see #47 — it otherwise stays
+                    // resident across recordings, and would leak until
+                    // process death). Best-effort and bounded: this happens
+                    // before `_exit` below, so it's safe (unlike the
+                    // GPU-driver-teardown hazard `_exit` itself works around,
+                    // this runs while the process is still fully alive), but
+                    // it must never hang app shutdown if the engine is
+                    // wedged.
+                    let engine_clone = {
+                        let engine_guard = whisper_engine::commands::WHISPER_ENGINE
+                            .lock()
+                            .unwrap();
+                        engine_guard.as_ref().cloned()
+                    };
+                    if let Some(engine) = engine_clone {
+                        match tokio::time::timeout(
+                            tokio::time::Duration::from_secs(3),
+                            engine.unload_model(),
+                        )
+                        .await
+                        {
+                            Ok(true) => log::info!("Whisper model unloaded on exit"),
+                            Ok(false) => log::debug!("No Whisper model was loaded on exit"),
+                            Err(_) => log::warn!(
+                                "Whisper model unload timed out on exit; continuing shutdown"
+                            ),
+                        }
+                    }
                 });
                 log::info!("Application cleanup complete");
 

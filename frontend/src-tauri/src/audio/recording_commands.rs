@@ -870,61 +870,54 @@ pub async fn stop_recording<R: Runtime>(
     // it's needed (owned) for the final save in Step 4.
     let manager_for_cleanup = { RECORDING_MANAGER.lock().unwrap().take() };
 
-    // Step 3: Now safely unload Whisper model after ALL chunks are processed
-    let _ = app.emit(
-        "recording-shutdown-progress",
-        serde_json::json!({
-            "stage": "unloading_model",
-            "message": "Unloading speech recognition model...",
-            "progress": 70
-        }),
-    );
+    // Step 3: Whisper model stays resident across recordings by default
+    // (#47) — reloading it at the start of every recording was the main
+    // cost this shutdown path used to pay for no benefit, since the same
+    // model is almost always used for the next recording too. Only unload
+    // it here when the user has explicitly opted into freeing it between
+    // recordings via `unload_model_after_recording` (see
+    // `recording_preferences::should_unload_after_stop`); otherwise it's
+    // left loaded and idle (no background work runs against it while no
+    // recording or batch job is using it).
+    let preferences = super::recording_preferences::load_recording_preferences(&app)
+        .await
+        .unwrap_or_default();
 
-    info!("🧠 All transcript chunks processed. Now safely unloading transcription model...");
+    if super::recording_preferences::should_unload_after_stop(&preferences) {
+        let _ = app.emit(
+            "recording-shutdown-progress",
+            serde_json::json!({
+                "stage": "unloading_model",
+                "message": "Unloading speech recognition model...",
+                "progress": 70
+            }),
+        );
 
-    // Determine which provider was used and unload the appropriate model (with timeout)
-    let config = match tokio::time::timeout(
-        tokio::time::Duration::from_secs(30), // 30 seconds max for DB operation
-        crate::api::api::api_get_transcript_config(app.clone(), app.clone().state()),
-    )
-    .await
-    {
-        Ok(Ok(Some(config))) => Some(config.provider),
-        Ok(Ok(None)) => None,
-        Ok(Err(e)) => {
-            warn!("⚠️ Failed to get transcript config: {:?}", e);
-            None
-        }
-        Err(_) => {
-            warn!("⏱️ Transcript config timeout (30s), continuing shutdown");
-            None
-        }
-    };
+        info!("🧠 unload_model_after_recording is set — unloading Whisper model...");
+        let engine_clone = {
+            let engine_guard = crate::whisper_engine::commands::WHISPER_ENGINE
+                .lock()
+                .unwrap();
+            engine_guard.as_ref().cloned()
+        };
 
-    // Whisper is the only local ASR engine now; unload it after recording stops.
-    let _ = config; // config provider isn't consulted any more — kept for future routing.
-    info!("🎤 Unloading Whisper model...");
-    let engine_clone = {
-        let engine_guard = crate::whisper_engine::commands::WHISPER_ENGINE
-            .lock()
-            .unwrap();
-        engine_guard.as_ref().cloned()
-    };
+        if let Some(engine) = engine_clone {
+            let current_model = engine
+                .get_current_model()
+                .await
+                .unwrap_or_else(|| "unknown".to_string());
+            info!("Current Whisper model before unload: '{}'", current_model);
 
-    if let Some(engine) = engine_clone {
-        let current_model = engine
-            .get_current_model()
-            .await
-            .unwrap_or_else(|| "unknown".to_string());
-        info!("Current Whisper model before unload: '{}'", current_model);
-
-        if engine.unload_model().await {
-            info!("✅ Whisper model '{}' unloaded successfully", current_model);
+            if engine.unload_model().await {
+                info!("✅ Whisper model '{}' unloaded successfully", current_model);
+            } else {
+                warn!("⚠️ Failed to unload Whisper model '{}'", current_model);
+            }
         } else {
-            warn!("⚠️ Failed to unload Whisper model '{}'", current_model);
+            warn!("⚠️ No Whisper engine found to unload model");
         }
     } else {
-        warn!("⚠️ No Whisper engine found to unload model");
+        info!("🧠 All transcript chunks processed. Keeping Whisper model resident for the next recording.");
     }
 
     // Step 4: Finalize recording state and cleanup resources safely

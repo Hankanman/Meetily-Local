@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Copy, GlobeIcon } from "lucide-react";
 import { useTranscripts } from "@/contexts/TranscriptContext";
+import { useTranscriptPartials } from "@/contexts/TranscriptPartialsContext";
 import { useConfig } from "@/contexts/ConfigContext";
 import { useRecordingState } from "@/contexts/RecordingStateContext";
 import { ModalType } from "@/hooks/useModalState";
@@ -33,8 +34,8 @@ export function TranscriptPanel({
     transcriptContainerRef,
     copyTranscript,
     currentMeetingId,
-    partials,
   } = useTranscripts();
+  const { partials } = useTranscriptPartials();
   const { transcriptModelConfig } = useConfig();
   const { isRecording, isPaused } = useRecordingState();
 

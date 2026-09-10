@@ -1,9 +1,21 @@
 import { useState, useEffect, useRef } from "react";
 import { TranscriptSegmentData } from "@/types";
 
-const INTERVAL_MS = 15; // Character reveal interval
-const DURATION_MS = 800; // Total streaming duration
+const INTERVAL_MS = 50; // Character reveal interval (throttled from 15ms)
+const DURATION_MS = 800; // Total streaming duration (unchanged - fewer, bigger reveals per tick)
 const INITIAL_CHARS = 5; // Show first N characters immediately
+
+function prefersReducedMotion(): boolean {
+  try {
+    return (
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
+  } catch {
+    return false;
+  }
+}
 
 interface StreamingSegment {
   id: string;
@@ -26,7 +38,12 @@ export function useTranscriptStreaming(
   const streamingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    if (!isRecording || !enableStreaming || segments.length === 0) {
+    if (
+      !isRecording ||
+      !enableStreaming ||
+      segments.length === 0 ||
+      prefersReducedMotion()
+    ) {
       // Clear streaming when not recording — reset on prop change.
       if (streamingIntervalRef.current) {
         clearInterval(streamingIntervalRef.current);

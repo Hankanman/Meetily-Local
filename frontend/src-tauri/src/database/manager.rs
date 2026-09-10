@@ -1,6 +1,8 @@
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{migrate::MigrateDatabase, Result, Sqlite, SqlitePool, Transaction};
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 use tauri::Manager;
 
 #[derive(Clone)]
@@ -21,7 +23,27 @@ impl DatabaseManager {
             Sqlite::create_database(tauri_db_path).await?;
         }
 
-        let pool = SqlitePool::connect(tauri_db_path).await?;
+        // #53: tuned connect options instead of the bare `SqlitePool::connect`
+        // default (a single connection, journal_mode left at whatever the
+        // file already has, no busy handling). WAL + a busy timeout let
+        // concurrent readers/writers from the several repositories in this
+        // process coexist without "database is locked" errors; `synchronous
+        // = NORMAL` is the standard safe pairing with WAL (still durable
+        // across app crashes, just not against an OS-level power loss
+        // mid-checkpoint, which is an acceptable tradeoff for a local
+        // desktop app's own data).
+        let connect_options = SqliteConnectOptions::new()
+            .filename(tauri_db_path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_secs(5))
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(connect_options)
+            .await?;
 
         sqlx::migrate!("./migrations").run(&pool).await?;
 

@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { recordingService } from "@/services/recordingService";
+import { useEffect, useState } from "react";
+import { useRecordingState } from "@/contexts/RecordingStateContext";
 
 interface UseRecordingStateSyncReturn {
   isBackendRecording: boolean;
@@ -8,46 +8,33 @@ interface UseRecordingStateSyncReturn {
 }
 
 /**
- * Custom hook for synchronizing frontend recording state with backend.
- * Polls backend every 1 second to detect recording state changes.
+ * Thin adapter between page.tsx's page-local `isRecording` mirror and
+ * RecordingStateContext's `isRecording` (the single source of truth, kept
+ * in sync with the backend via Tauri event listeners plus a 500ms poll
+ * while a recording/stop is in flight - see
+ * `contexts/RecordingStateContext.tsx`).
  *
- * Features:
- * - Backend state synchronization (1-second polling)
- * - Recording disabled flag management (prevents re-recording during processing)
+ * Previously this hook ran its own unconditional 1-second backend poll for
+ * the entire lifetime of the home page, duplicating the context's polling
+ * (issue #51). It now just reacts to the context's already-synced value -
+ * no interval of its own.
  */
 export function useRecordingStateSync(
   isRecording: boolean,
   setIsRecording: (value: boolean) => void,
   setIsMeetingActive: (value: boolean) => void,
 ): UseRecordingStateSyncReturn {
+  const { isRecording: backendIsRecording } = useRecordingState();
   const [isRecordingDisabled, setIsRecordingDisabled] = useState(false);
 
   useEffect(() => {
-    const checkRecordingState = async () => {
-      try {
-        const isCurrentlyRecording = await recordingService.isRecording();
-
-        if (isCurrentlyRecording && !isRecording) {
-          setIsRecording(true);
-          setIsMeetingActive(true);
-        } else if (!isCurrentlyRecording && isRecording) {
-          setIsRecording(false);
-        }
-      } catch (error) {
-        console.error("Failed to check recording state:", error);
-      }
-    };
-
-    if (typeof window !== "undefined" && (window as any).__TAURI__) {
-      checkRecordingState();
-
-      const interval = setInterval(checkRecordingState, 1000);
-
-      return () => {
-        clearInterval(interval);
-      };
+    if (backendIsRecording && !isRecording) {
+      setIsRecording(true);
+      setIsMeetingActive(true);
+    } else if (!backendIsRecording && isRecording) {
+      setIsRecording(false);
     }
-  }, [isRecording, setIsRecording, setIsMeetingActive]);
+  }, [backendIsRecording, isRecording, setIsRecording, setIsMeetingActive]);
 
   return {
     isBackendRecording: isRecording,

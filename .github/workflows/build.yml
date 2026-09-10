@@ -108,13 +108,13 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          key: ${{ inputs.platform }}-${{ inputs.target }}-vulkan-v2
+          key: ${{ inputs.platform }}-${{ inputs.target }}-openblas-v3
 
       - name: install dependencies (ubuntu 24.04)
         if: contains(inputs.platform, 'ubuntu-24.04')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev \
+          sudo apt-get install -y libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libpipewire-0.3-dev libclang-dev meson ninja-build \
             libwebkit2gtk-4.1-0=2.44.0-2 \
             libwebkit2gtk-4.1-dev=2.44.0-2 \
             libjavascriptcoregtk-4.1-0=2.44.0-2 \
@@ -126,25 +126,7 @@ jobs:
         if: contains(inputs.platform, 'ubuntu-22.04')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev
-
-      - name: Prepare Vulkan SDK for Ubuntu 24.04
-        if: contains(inputs.platform, 'ubuntu-24.04')
-        run: |
-          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-1.3.290-noble.list https://packages.lunarg.com/vulkan/1.3.290/lunarg-vulkan-1.3.290-noble.list
-          sudo apt update
-          sudo apt install vulkan-sdk -y
-          sudo apt-get install -y mesa-vulkan-drivers
-
-      - name: Prepare Vulkan SDK for Ubuntu 22.04
-        if: contains(inputs.platform, 'ubuntu-22.04')
-        run: |
-          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-1.3.290-jammy.list https://packages.lunarg.com/vulkan/1.3.290/lunarg-vulkan-1.3.290-jammy.list
-          sudo apt update
-          sudo apt install vulkan-sdk -y
-          sudo apt-get install -y mesa-vulkan-drivers
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libpipewire-0.3-dev libclang-dev meson ninja-build
 
       - name: Install frontend dependencies
         run: |
@@ -214,6 +196,11 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # linuxdeploy: keep strip off (SHT_RELR) and let it find
+          # libsherpa-onnx-c-api.so in the cargo output dir (see build.sh and
+          # issue #3). The release profile strips symbols itself.
+          NO_STRIP: 1
+          LD_LIBRARY_PATH: ${{ github.workspace }}/target/release:${{ github.workspace }}/target/${{ inputs.target }}/release
           # Tauri updater signing (ALWAYS enabled for .sig files)
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -234,6 +221,21 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y fuse libfuse2
+
+      - name: Verify AppImage before post-processing
+        if: contains(inputs.platform, 'ubuntu')
+        run: |
+          # A bundling failure can leave a tiny/empty AppImage behind (issue #3).
+          f=$(find target/${{ steps.build-profile.outputs.profile }}/bundle/appimage -name "*.AppImage" | head -1)
+          [ -n "$f" ] || { echo "::error::no AppImage produced"; exit 1; }
+          size=$(stat -c%s "$f"); echo "$f: $size bytes"
+          if [ "$size" -lt 50000000 ]; then echo "::error::AppImage is only $size bytes"; exit 1; fi
+          chmod +x "$f"
+          (cd "$(dirname "$f")" && "./$(basename "$f")" --appimage-extract >/dev/null 2>&1) || { echo "::error::AppImage does not extract"; exit 1; }
+          if ! find "$(dirname "$f")/squashfs-root" -name 'libsherpa-onnx-c-api.so*' | grep -q .; then
+            echo "::error::libsherpa-onnx-c-api.so is not bundled in the AppImage"; exit 1
+          fi
+          rm -rf "$(dirname "$f")/squashfs-root"
 
       - name: Remove libwayland-client.so from AppImage
         if: contains(inputs.platform, 'ubuntu')
@@ -271,6 +273,8 @@ jobs:
 
             # Repackage AppImage with no-appstream to avoid warnings
             ARCH=x86_64 ./appimagetool-x86_64.AppImage --no-appstream squashfs-root "$APPIMAGE_NAME"
+            size=$(stat -c%s "$APPIMAGE_NAME"); echo "repacked $APPIMAGE_NAME: $size bytes"
+            if [ "$size" -lt 50000000 ]; then echo "::error::repacked AppImage is only $size bytes"; exit 1; fi
 
             # Clean up
             rm -rf squashfs-root appimagetool-x86_64.AppImage
@@ -286,7 +290,6 @@ jobs:
         with:
           name: ${{ inputs.asset-prefix }}-${{ inputs.platform }}-${{ inputs.target }}
           path: |
-            target/${{ steps.build-profile.outputs.profile }}/bundle/deb/*.deb
             target/${{ steps.build-profile.outputs.profile }}/bundle/appimage/*.AppImage
             target/${{ steps.build-profile.outputs.profile }}/bundle/rpm/*.rpm
           retention-days: 30

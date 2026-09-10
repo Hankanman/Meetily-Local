@@ -25,6 +25,20 @@ tokio = { version = "1.32.0", features = ["full"] }
 # Profiles must live at the workspace root (cargo ignores them in member
 # manifests). meetily uses cargo's default release profile (opt-level=3)
 # while llama-helper wants size-optimised "s" for faster sidecar startup.
+#
+# lto/strip are workspace-profile-only settings (cargo rejects `lto` at the
+# per-package [profile.release.package.*] level — see below), so they live
+# here and apply to every crate in the workspace, including llama-helper and
+# meetily-mcp; those two keep their own opt-level/codegen-units overrides.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# NOTE: `NO_STRIP` in build.sh works around a Fedora linuxdeploy SHT_RELR
+# issue in the *bundler* step (AppImage packaging), not this cargo profile —
+# `strip = true` here still runs during `cargo build --release` regardless
+# of that env var; it only suppresses linuxdeploy's own separate strip pass.
 [profile.release.package.llama-helper]
 codegen-units = 1
 opt-level = "s"
