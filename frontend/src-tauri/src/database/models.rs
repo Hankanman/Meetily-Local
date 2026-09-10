@@ -9,6 +9,19 @@ pub struct MeetingModel {
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub folder_path: Option<String>,
+    /// Lifecycle status: "recording" | "completed" | "interrupted". Rows
+    /// created before this column existed default to "completed" (see the
+    /// migration). Owned entirely by the Rust recording lifecycle (issue
+    /// #57 slice 2) — the frontend never writes it.
+    #[serde(default = "default_meeting_status")]
+    pub status: String,
+    pub completed_at: Option<DateTimeUtc>,
+    pub duration_seconds: Option<f64>,
+    pub audio_path: Option<String>,
+}
+
+fn default_meeting_status() -> String {
+    "completed".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]

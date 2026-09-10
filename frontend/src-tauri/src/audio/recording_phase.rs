@@ -48,6 +48,11 @@ pub struct RecordingSnapshot {
     pub total_pause_secs: f64,
     pub meeting_name: Option<String>,
     pub folder_path: Option<String>,
+    /// The `meetings` row id for the in-progress session (issue #57 slice
+    /// 2), set as soon as `start_recording*` mints it — before the DB
+    /// insert even completes, since the id is generated first and used
+    /// either way. `None` once idle.
+    pub meeting_id: Option<String>,
     pub chunks_in_queue: usize,
     pub error: Option<String>,
     /// Monotonically increasing with every emitted snapshot, so a listener
@@ -62,6 +67,7 @@ struct PhaseState {
     started_at_ms: Option<u64>,
     meeting_name: Option<String>,
     folder_path: Option<String>,
+    meeting_id: Option<String>,
     error: Option<String>,
 }
 
@@ -70,6 +76,7 @@ static PHASE_STATE: Mutex<PhaseState> = Mutex::new(PhaseState {
     started_at_ms: None,
     meeting_name: None,
     folder_path: None,
+    meeting_id: None,
     error: None,
 });
 
@@ -158,6 +165,7 @@ fn apply(phase: RecordingPhase) {
             state.started_at_ms = None;
             state.meeting_name = None;
             state.folder_path = None;
+            state.meeting_id = None;
             state.error = None;
         }
         _ => {}
@@ -166,14 +174,19 @@ fn apply(phase: RecordingPhase) {
     SEQ.fetch_add(1, Ordering::SeqCst);
 }
 
-/// Record the meeting name / folder path for the in-progress session. Set
-/// once `start_recording` knows them; read back by `get_recording_state` and
-/// included in every subsequent `recording-state` emit until the phase
-/// returns to `Idle`.
-pub fn set_meeting_info(meeting_name: Option<String>, folder_path: Option<String>) {
+/// Record the meeting name / folder path / meeting_id for the in-progress
+/// session. Set once `start_recording` knows them; read back by
+/// `get_recording_state` and included in every subsequent `recording-state`
+/// emit until the phase returns to `Idle`.
+pub fn set_meeting_info(
+    meeting_name: Option<String>,
+    folder_path: Option<String>,
+    meeting_id: Option<String>,
+) {
     let mut state = PHASE_STATE.lock().unwrap();
     state.meeting_name = meeting_name;
     state.folder_path = folder_path;
+    state.meeting_id = meeting_id;
 }
 
 /// Record the last fatal error's user-facing message. Cleared automatically
@@ -199,6 +212,7 @@ pub fn build_snapshot(
         total_pause_secs,
         meeting_name: state.meeting_name.clone(),
         folder_path: state.folder_path.clone(),
+        meeting_id: state.meeting_id.clone(),
         chunks_in_queue,
         error: state.error.clone(),
         seq: SEQ.load(Ordering::SeqCst),

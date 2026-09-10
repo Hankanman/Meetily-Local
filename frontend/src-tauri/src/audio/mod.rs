@@ -28,6 +28,12 @@ pub mod recording_state;
 pub mod simple_level_monitor;
 pub mod stream;
 
+// Batched SQLite writer for live-recording transcript segments (issue #57
+// slice 2) and the crash-recovery commands (`list_interrupted_meetings`,
+// `recover_meeting`) that read the meeting-row lifecycle it feeds.
+pub mod recovery_commands;
+pub mod transcript_db_writer;
+
 // Transcription module (provider abstraction, engine management, worker pool)
 pub mod transcription;
 

@@ -34,6 +34,10 @@ export interface RecordingSnapshot {
   total_pause_secs: number;
   meeting_name: string | null;
   folder_path: string | null;
+  /** The `meetings` row id for the in-progress session (issue #57 slice 2),
+   *  null once idle. Rust owns creating/finalising this row — the frontend
+   *  only ever updates fields it still owns (see `api_save_meeting_title`). */
+  meeting_id: string | null;
   chunks_in_queue: number;
   error: string | null;
   /** Monotonically increasing per emitted snapshot. */
@@ -56,6 +60,21 @@ export interface RecordingStoppedPayload {
   message: string;
   folder_path?: string;
   meeting_name?: string;
+  /** The `meetings` row id Rust created for this session at start and has
+   *  already finalised (status "completed"/"interrupted") by the time this
+   *  fires (issue #57 slice 2). Absent only when talking to an older
+   *  backend build — callers should fall back to the pre-#57 save flow. */
+  meeting_id?: string;
+}
+
+export interface RecordingStartedPayload {
+  message: string;
+  devices?: string[];
+  workers?: number;
+  /** The `meetings` row id Rust just created (status "recording") for this
+   *  session (issue #57 slice 2). Absent only when talking to an older
+   *  backend build. */
+  meeting_id?: string;
 }
 
 /**
@@ -128,11 +147,15 @@ class RecordingService {
 
   /**
    * Listen for recording-started event
-   * @param callback - Function to call when recording starts
+   * @param callback - Function to call when recording starts, with its payload
    * @returns Promise that resolves to unlisten function
    */
-  async onRecordingStarted(callback: () => void): Promise<UnlistenFn> {
-    return listen("recording-started", callback);
+  async onRecordingStarted(
+    callback: (payload: RecordingStartedPayload) => void,
+  ): Promise<UnlistenFn> {
+    return listen<RecordingStartedPayload>("recording-started", (event) => {
+      callback(event.payload);
+    });
   }
 
   /**

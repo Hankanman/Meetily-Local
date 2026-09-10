@@ -813,6 +813,10 @@ pub fn run() {
             audio::incremental_saver::recover_audio_from_checkpoints,
             audio::incremental_saver::cleanup_checkpoints,
             audio::incremental_saver::has_audio_checkpoints,
+            // Interrupted-meeting recovery (issue #57 slice 2: DB-driven,
+            // replaces the old IndexedDB scan)
+            audio::recovery_commands::list_interrupted_meetings,
+            audio::recovery_commands::recover_meeting,
             ollama::get_ollama_models,
             ollama::pull_ollama_model,
             ollama::delete_ollama_model,

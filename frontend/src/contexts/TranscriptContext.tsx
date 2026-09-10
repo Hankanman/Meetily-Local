@@ -131,20 +131,24 @@ function TranscriptProviderInner({ children }: { children: ReactNode }) {
         // Initialize IndexedDB
         await indexedDBService.init();
 
-        // Listen for recording-started event
+        // Listen for recording-started event. Rust now creates the
+        // `meetings` row itself at recording start (issue #57 slice 2) and
+        // hands back its id in the payload — use that directly as the key
+        // for the IndexedDB write-ahead cache below instead of minting a
+        // separate IndexedDB-only id and duplicating meeting metadata
+        // (title/folder_path/status) that SQLite already owns.
         unlistenRecordingStarted = await recordingService.onRecordingStarted(
-          async () => {
+          async (payload) => {
             try {
-              // Generate unique meeting ID
-              const meetingId = `meeting-${Date.now()}`;
+              // Talking to an older backend build with no meeting_id in the
+              // payload falls back to a local-only cache key so the
+              // write-ahead cache below still works, just unkeyed to a real
+              // meeting row.
+              const meetingId = payload.meeting_id ?? `meeting-${Date.now()}`;
               setCurrentMeetingId(meetingId);
-
-              // Store in sessionStorage as fallback for markMeetingAsSaved
+              // Fallback for markMeetingAsSaved if this provider instance
+              // unmounts/remounts mid-recording.
               sessionStorage.setItem("indexeddb_current_meeting_id", meetingId);
-              console.log(
-                "[Recording Started] 💾 IndexedDB meeting ID stored:",
-                meetingId,
-              );
 
               // Get meeting name
               const meetingName =
@@ -155,7 +159,16 @@ function TranscriptProviderInner({ children }: { children: ReactNode }) {
                 meetingName ||
                 `Meeting ${new Date().toISOString().slice(0, 19).replace("T", "_").replace(/:/g, "-")}`;
 
-              // Initialize meeting metadata in IndexedDB
+              // Synchronize meeting title to state (fixes tray stop title issue)
+              setMeetingTitle(effectiveTitle);
+
+              // A slim metadata row, kept only so the periodic janitors
+              // below (deleteOldMeetings/deleteSavedMeetings) have
+              // something to key their pruning off of — SQLite (via
+              // `payload.meeting_id`'s row) is the source of truth for
+              // everything else about this meeting now, so this no longer
+              // round-trips to fetch/store folder_path or track
+              // savedToSQLite for recovery purposes.
               await indexedDBService.saveMeetingMetadata({
                 meetingId,
                 title: effectiveTitle,
@@ -163,33 +176,10 @@ function TranscriptProviderInner({ children }: { children: ReactNode }) {
                 lastUpdated: Date.now(),
                 transcriptCount: 0,
                 savedToSQLite: false,
-                folderPath: undefined, // Will update shortly
               });
-
-              // Synchronize meeting title to state (fixes tray stop title issue)
-              setMeetingTitle(effectiveTitle);
-
-              // Fetch folder path from backend and update metadata
-              // This ensures folder path is persisted even if app crashes
-              try {
-                const { invoke } = await import("@tauri-apps/api/core");
-                const folderPath = await invoke<string>(
-                  "get_meeting_folder_path",
-                );
-                if (folderPath) {
-                  const metadata =
-                    await indexedDBService.getMeetingMetadata(meetingId);
-                  if (metadata) {
-                    metadata.folderPath = folderPath;
-                    await indexedDBService.saveMeetingMetadata(metadata);
-                  }
-                }
-              } catch (error) {
-                // Non-fatal - will be set on stop if recording completes normally
-              }
             } catch (error) {
               console.error(
-                "Failed to initialize meeting in IndexedDB:",
+                "Failed to initialize meeting state on recording-started:",
                 error,
               );
             }
@@ -198,32 +188,17 @@ function TranscriptProviderInner({ children }: { children: ReactNode }) {
 
         // Listen for recording-stopped event
         unlistenRecordingStopped = await recordingService.onRecordingStopped(
-          async (payload) => {
+          async () => {
             // Recording has ended - there is no "finishing" utterance left
             // to preview, so drop any in-flight partial previews.
             clearPartials();
 
             // Nothing left to accumulate - flush anything still queued so
-            // it isn't lost before the meeting gets marked saved.
+            // it isn't lost before the meeting gets marked saved. Rust
+            // already owns folder_path/status on the meeting row itself
+            // (issue #57 slice 2), so there's no IndexedDB metadata to
+            // reconcile here any more.
             flushSaveQueueRef.current?.();
-
-            try {
-              if (currentMeetingId) {
-                // Update folder path in IndexedDB
-                const metadata =
-                  await indexedDBService.getMeetingMetadata(currentMeetingId);
-
-                if (metadata && payload.folder_path) {
-                  metadata.folderPath = payload.folder_path;
-                  await indexedDBService.saveMeetingMetadata(metadata);
-                }
-              }
-            } catch (error) {
-              console.error(
-                "Failed to update meeting metadata on stop:",
-                error,
-              );
-            }
           },
         );
       } catch (error) {

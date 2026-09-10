@@ -135,6 +135,7 @@ function snapshotFromBackendState(s: BackendRecordingState): RecordingSnapshot {
     total_pause_secs: s.total_pause_secs ?? 0,
     meeting_name: s.meeting_name ?? null,
     folder_path: s.folder_path ?? null,
+    meeting_id: s.meeting_id ?? null,
     chunks_in_queue: s.chunks_in_queue ?? 0,
     error: s.error ?? null,
     seq: s.seq ?? 0,

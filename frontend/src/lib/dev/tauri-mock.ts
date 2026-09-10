@@ -97,6 +97,14 @@ const COMMAND_DEFAULTS: Record<string, Default> = {
   get_transcription_status: null,
   has_audio_checkpoints: false,
 
+  // --- Interrupted-meeting recovery (issue #57 slice 2) --------------------
+  list_interrupted_meetings: () => [],
+  recover_meeting: () => ({
+    success: false,
+    meeting_id: "",
+    audio_recovery_status: null,
+  }),
+
   // --- Onboarding gate ------------------------------------------------------
   // AppShell shows a full-screen OnboardingFlow (hiding the whole app) unless
   // this resolves to a non-null object with `completed: true`. That is the one

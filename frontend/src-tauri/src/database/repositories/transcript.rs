@@ -96,6 +96,88 @@ impl TranscriptsRepository {
         Ok(meeting_id)
     }
 
+    /// Upsert a batch of live-recording transcript segments, keyed by
+    /// `(meeting_id, sequence_id)` (issue #57 slice 2): a segment whose
+    /// `(meeting_id, sequence_id)` already exists is updated in place
+    /// (covers the transcription worker revising a partial into its final
+    /// text under the same sequence id); anything new is inserted. One
+    /// transaction per batch — called by `transcript_db_writer`'s periodic
+    /// flush, so a batch is typically a handful of segments from one
+    /// in-progress recording.
+    ///
+    /// A segment with `sequence_id: None` is always inserted as a new row
+    /// (SQLite's UNIQUE index treats every NULL as distinct) — the
+    /// live-recording path this writer serves always sets it, so that's
+    /// only reachable from a caller passing raw segments in directly.
+    ///
+    /// Returns `Err` (rolling the whole batch back) on the first failing
+    /// segment rather than skipping it, so a batch is never partially
+    /// applied — the caller logs and drops the batch on error; the
+    /// transcripts.ndjson journal on disk remains the source of truth if a
+    /// batch is ever lost this way.
+    pub async fn upsert_transcript_segments(
+        pool: &SqlitePool,
+        items: &[(String, TranscriptSegment)],
+    ) -> Result<u64, SqlxError> {
+        if items.is_empty() {
+            return Ok(0);
+        }
+
+        let mut conn = pool.acquire().await?;
+        let mut transaction = conn.begin().await?;
+
+        let mut affected = 0u64;
+        for (meeting_id, segment) in items {
+            let transcript_id = format!("transcript-{}", Uuid::new_v4());
+            let result = sqlx::query(
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, voice_profile_id, sequence_id, source)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(meeting_id, sequence_id) DO UPDATE SET
+                     transcript = excluded.transcript,
+                     timestamp = excluded.timestamp,
+                     audio_start_time = excluded.audio_start_time,
+                     audio_end_time = excluded.audio_end_time,
+                     duration = excluded.duration,
+                     speaker = excluded.speaker,
+                     voice_profile_id = excluded.voice_profile_id,
+                     source = excluded.source",
+            )
+            .bind(&transcript_id)
+            .bind(meeting_id)
+            .bind(&segment.text)
+            .bind(
+                segment
+                    .timestamp
+                    .clone()
+                    .unwrap_or_else(|| Utc::now().to_rfc3339()),
+            )
+            .bind(segment.audio_start_time)
+            .bind(segment.audio_end_time)
+            .bind(segment.duration)
+            .bind(&segment.speaker)
+            .bind(&segment.voice_profile_id)
+            .bind(segment.sequence_id.map(|s| s as i64))
+            .bind(&segment.source)
+            .execute(&mut *transaction)
+            .await;
+
+            match result {
+                Ok(r) => affected += r.rows_affected(),
+                Err(e) => {
+                    error!(
+                        "Failed to upsert transcript segment (meeting {}, sequence {:?}): {}",
+                        meeting_id, segment.sequence_id, e
+                    );
+                    transaction.rollback().await?;
+                    return Err(e);
+                }
+            }
+        }
+
+        transaction.commit().await?;
+        Ok(affected)
+    }
+
     /// Re-point every transcript that currently references `from_profile_id`
     /// to `to_profile_id`, also rewriting the displayed `speaker` text to
     /// `to_name`. Used when merging two stored voice profiles into one.

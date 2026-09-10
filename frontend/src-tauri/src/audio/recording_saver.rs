@@ -26,6 +26,11 @@ pub struct RecordingSaver {
     incremental_saver: Option<Arc<AsyncMutex<IncrementalAudioSaver>>>,
     meeting_folder: Option<PathBuf>,
     meeting_name: Option<String>,
+    /// The `meetings` row id for this session (issue #57 slice 2). Minted
+    /// by `recording_commands::start_recording*` before the manager is
+    /// stored globally, so it's available for the whole session — used to
+    /// key live transcript upserts and to finalise the row at stop.
+    meeting_id: Option<String>,
     metadata: Option<MeetingMetadata>,
     transcript_segments: Arc<Mutex<Vec<TranscriptSegment>>>,
     chunk_receiver: Option<mpsc::UnboundedReceiver<AudioChunk>>,
@@ -53,6 +58,7 @@ impl RecordingSaver {
             incremental_saver: None,
             meeting_folder: None,
             meeting_name: None,
+            meeting_id: None,
             metadata: None,
             transcript_segments: Arc::new(Mutex::new(Vec::new())),
             chunk_receiver: None,
@@ -66,6 +72,18 @@ impl RecordingSaver {
     /// Set the meeting name for this recording session
     pub fn set_meeting_name(&mut self, name: Option<String>) {
         self.meeting_name = name;
+    }
+
+    /// Set the `meetings` row id for this recording session (issue #57
+    /// slice 2). Set once, right after the id is minted in
+    /// `recording_commands::start_recording*`.
+    pub fn set_meeting_id(&mut self, id: Option<String>) {
+        self.meeting_id = id;
+    }
+
+    /// Get the `meetings` row id for this recording session, if set.
+    pub fn get_meeting_id(&self) -> Option<String> {
+        self.meeting_id.clone()
     }
 
     /// Set device information in metadata
