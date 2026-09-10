@@ -10,28 +10,38 @@ import React, {
   useMemo,
 } from "react";
 import { toast } from "sonner";
-import { recordingService } from "@/services/recordingService";
+import {
+  recordingService,
+  RecordingPhase,
+  RecordingSnapshot,
+  RecordingState as BackendRecordingState,
+} from "@/services/recordingService";
 import { isPostProcessingRef } from "@/hooks/useRecordingStop";
+import { useElapsedTime } from "@/hooks/useElapsedTime";
 
 // Watchdog (issue #17 gap): if we've been sitting in a stop-flow status
 // (STOPPING / PROCESSING_TRANSCRIPTS / SAVING) for longer than this while
-// the backend confirms it's fully idle (`is_recording=false`,
-// `is_finalising=false`) and no post-processing is actually running
-// locally, assume the frontend missed whatever event was supposed to move
-// it out of that status and force it back to IDLE rather than leaving the
-// Start button hidden forever. Kept long (30s) and gated on
-// `isPostProcessingRef` so it never fires during a legitimate save - the
-// full transcription-wait + DB-save flow can itself take tens of seconds,
-// but keeps that ref true the whole time.
+// the backend's canonical state machine (audio::recording_phase) reports
+// Idle and no post-processing is actually running locally, assume the
+// frontend missed whatever event was supposed to move it out of that
+// status and force it back to IDLE rather than leaving the Start button
+// hidden forever. Kept long (30s) and gated on `isPostProcessingRef` so it
+// never fires during a legitimate save - the full transcription-wait +
+// DB-save flow can itself take tens of seconds, but keeps that ref true
+// the whole time.
 const WATCHDOG_STUCK_TIMEOUT_MS = 30000;
 
 /**
- * Recording state synchronized with backend
- * This context provides a single source of truth for recording state
- * that automatically syncs with the Rust backend, solving:
- * 1. Page refresh desync (backend recording but UI shows stopped)
- * 2. Pause state visibility across components
- * 3. Comprehensive state for future features (reconnection, etc.)
+ * Recording state synchronized with the Rust backend's canonical state
+ * machine (`audio::recording_phase::RecordingPhase`, issue #57 slice 1).
+ *
+ * This context is now event-driven rather than polled: it subscribes to
+ * the single `recording-state` event Rust emits on every phase transition
+ * (start/stop/pause/resume/error), plus a one-shot `get_recording_state`
+ * fetch on mount and on window focus/visibility change to resync a window
+ * that missed events while backgrounded or was opened mid-session. There is
+ * no periodic poll any more - durations tick client-side from the
+ * snapshot's `started_at_ms` via `useElapsedTime`.
  */
 
 // Recording lifecycle status enum
@@ -58,7 +68,7 @@ interface RecordingState {
   statusMessage?: string; // Optional message for current status
 
   // True while the Rust side reports a previous stop is still draining /
-  // finalising (recording_commands::is_stop_in_progress()), independent of
+  // finalising (recording phase is Stopping or Finalising), independent of
   // this window's own local `status`. Lets a fresh window/tab, or a tray
   // stop that this window never locally transitioned for, still see the
   // stop-in-progress window.
@@ -77,8 +87,8 @@ interface RecordingStateContextType extends RecordingState {
   // Single source of truth for "a stop is in flight and must not be
   // interrupted by a new start": true whenever local status is in the
   // STOPPING/PROCESSING_TRANSCRIPTS/SAVING lifecycle, OR the backend reports
-  // `is_finalising`. Every start entry point (sidebar toggle, tray toggle,
-  // auto-start effect, page.tsx) must honour this (issue #35).
+  // `isBackendFinalising`. Every start entry point (sidebar toggle, tray
+  // toggle, auto-start effect, page.tsx) must honour this (issue #35).
   isStopFlowActive: boolean;
 }
 
@@ -96,340 +106,328 @@ export const useRecordingState = () => {
   return context;
 };
 
+/** Ordering over the local stop-flow lifecycle, used so a phase-derived
+ *  status update never regresses past whatever local post-processing has
+ *  already reached (e.g. the backend reporting Idle - which happens right
+ *  after `recording-stopped`, seconds before local post-processing actually
+ *  finishes saving - must not snap the UI back to IDLE mid-save). 0 covers
+ *  every status outside the stop flow (IDLE/STARTING/RECORDING/ERROR). */
+const STOP_FLOW_RANK: Partial<Record<RecordingStatus, number>> = {
+  [RecordingStatus.STOPPING]: 1,
+  [RecordingStatus.PROCESSING_TRANSCRIPTS]: 2,
+  [RecordingStatus.SAVING]: 3,
+  [RecordingStatus.COMPLETED]: 4,
+};
+function stopFlowRank(status: RecordingStatus): number {
+  return STOP_FLOW_RANK[status] ?? 0;
+}
+
+/** Builds a full snapshot shape out of `get_recording_state`'s response for
+ *  the initial/resync fetch, so it can go through the same `applySnapshot`
+ *  path as a live `recording-state` event. `get_recording_state` always
+ *  includes the snapshot fields now, but this stays defensive about a
+ *  missing field rather than assuming it. */
+function snapshotFromBackendState(s: BackendRecordingState): RecordingSnapshot {
+  return {
+    phase: s.phase ?? (s.is_recording ? (s.is_paused ? "paused" : "recording") : "idle"),
+    started_at_ms: s.started_at_ms ?? null,
+    active_duration_secs: s.active_duration_secs ?? s.active_duration ?? null,
+    total_pause_secs: s.total_pause_secs ?? 0,
+    meeting_name: s.meeting_name ?? null,
+    folder_path: s.folder_path ?? null,
+    chunks_in_queue: s.chunks_in_queue ?? 0,
+    error: s.error ?? null,
+    seq: s.seq ?? 0,
+  };
+}
+
 export function RecordingStateProvider({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const [state, setState] = useState<RecordingState>({
-    isRecording: false,
-    isPaused: false,
-    isActive: false,
-    recordingDuration: null,
-    activeDuration: null,
-    status: RecordingStatus.IDLE, // NEW: Initialize with IDLE status
-    statusMessage: undefined, // NEW: No message initially
-    isBackendFinalising: false,
-  });
+  // Canonical fields mirrored straight from the backend's RecordingPhase
+  // snapshot.
+  const [phase, setPhase] = useState<RecordingPhase>("idle");
+  const [startedAtMs, setStartedAtMs] = useState<number | null>(null);
+  const [totalPauseSecs, setTotalPauseSecs] = useState(0);
 
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  // Indirection to break the startPolling <-> syncWithBackend declaration
-  // cycle below without forward-referencing either useCallback before it's
-  // declared (startPolling schedules ticks by calling through this ref
-  // rather than closing over syncWithBackend directly).
-  const syncWithBackendRef = useRef<() => Promise<void>>(async () => {});
-
-  // Mirrors state.status for syncWithBackend's watchdog check below, which
-  // needs the latest status without taking a `state` dependency (that would
-  // recreate syncWithBackend, and therefore the polling interval, on every
-  // status change).
-  const statusRef = useRef(state.status);
-  useEffect(() => {
-    statusRef.current = state.status;
-  }, [state.status]);
-
-  // Timestamp of when the watchdog condition (stuck in a stop-flow status
-  // while the backend reports fully idle) was first observed; null while
-  // not currently stuck. Reset whenever the condition stops holding.
-  const watchdogStuckSinceRef = useRef<number | null>(null);
-
-  // NEW: Status setter with logging
-  const setStatus = useCallback(
-    (status: RecordingStatus, message?: string) => {
-      console.log(
-        `[RecordingState] Status: ${state.status} → ${status}`,
-        message || "",
-      );
-
-      setState((prev) => ({
-        ...prev,
-        status,
-        statusMessage: message,
-      }));
-    },
-    [state.status],
+  // Local lifecycle status - richer than `phase` (it also tracks
+  // PROCESSING_TRANSCRIPTS/SAVING/COMPLETED, which are driven by
+  // useRecordingStop's own post-processing, not by the Rust phase machine).
+  const [status, setStatusState] = useState<RecordingStatus>(
+    RecordingStatus.IDLE,
+  );
+  const [statusMessage, setStatusMessage] = useState<string | undefined>(
+    undefined,
   );
 
-  /**
-   * Stop polling backend state (called when recording stops)
-   */
-  const stopPolling = useCallback(() => {
-    if (pollingIntervalRef.current) {
-      console.log("[RecordingStateContext] Stopping state polling");
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-    }
-  }, []);
+  // Mirrors `status` for use inside callbacks/timers that must read the
+  // latest value without becoming a dependency (which would tear down and
+  // re-arm the watchdog timer below on every status change).
+  const statusRef = useRef(status);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
-  /**
-   * Start polling backend state (called when recording starts)
-   */
-  const startPolling = useCallback(() => {
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-    }
+  // Discards a `recording-state` event or resync fetch that is older than
+  // one already applied (e.g. the initial `get_recording_state` resolving
+  // after a live event already moved the snapshot forward).
+  const lastSeqRef = useRef(-1);
 
+  const watchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Displayed active-recording duration while paused: frozen at the value
+  // the backend computed at the instant of pausing (its own
+  // `get_active_recording_duration` stops growing the moment a pause
+  // starts) rather than continuing to tick. Set directly inside
+  // `applySnapshot` below (an event-driven update, not a render-time ref
+  // mutation) whenever a `Paused` snapshot arrives, and cleared on any other
+  // phase.
+  const [frozenActiveDuration, setFrozenActiveDuration] = useState<
+    number | null
+  >(null);
+
+  // NEW: Status setter with logging
+  const setStatus = useCallback((next: RecordingStatus, message?: string) => {
     console.log(
-      "[RecordingStateContext] Starting state polling (500ms interval)",
+      `[RecordingState] Status: ${statusRef.current} → ${next}`,
+      message || "",
     );
-    pollingIntervalRef.current = setInterval(() => {
-      syncWithBackendRef.current();
-    }, 500);
+    setStatusState(next);
+    setStatusMessage(message);
   }, []);
 
   /**
-   * Sync recording state with backend
-   * Called on mount (fixes refresh desync) and periodically while recording
+   * Apply a `RecordingSnapshot` (from a live `recording-state` event or a
+   * `get_recording_state` resync) to local state. This is the only place
+   * `phase`/`startedAtMs`/`totalPauseSecs`/`status` are derived from the
+   * backend.
    */
-  const syncWithBackend = useCallback(async () => {
-    try {
-      const backendState = await recordingService.getRecordingState();
-      const isFinalising = backendState.is_finalising ?? false;
-
-      // Skip the setState when nothing the backend reports has actually
-      // changed - `syncWithBackend` runs every 500ms while a recording/stop
-      // is in flight, and re-creating the state object on every tick forces
-      // every consumer (page.tsx, the sidebar, the top bar, ...) to
-      // re-render for no reason (issue #51).
-      setState((prev) => {
-        if (
-          prev.isRecording === backendState.is_recording &&
-          prev.isPaused === backendState.is_paused &&
-          prev.isActive === backendState.is_active &&
-          prev.recordingDuration === backendState.recording_duration &&
-          prev.activeDuration === backendState.active_duration &&
-          prev.isBackendFinalising === isFinalising
-        ) {
-          return prev;
-        }
-        return {
-          ...prev,
-          isRecording: backendState.is_recording,
-          isPaused: backendState.is_paused,
-          isActive: backendState.is_active,
-          recordingDuration: backendState.recording_duration,
-          activeDuration: backendState.active_duration,
-          isBackendFinalising: isFinalising,
-        };
-      });
-
-      const inStopFlow = [
-        RecordingStatus.STOPPING,
-        RecordingStatus.PROCESSING_TRANSCRIPTS,
-        RecordingStatus.SAVING,
-      ].includes(statusRef.current);
-
-      // Keep polling alive through the finalising window even after
-      // `recording-stopped` has already fired (backend is_recording flips
-      // false ~100ms into a stop, well before the multi-second finalise
-      // completes) - and stop it once the backend confirms both recording
-      // and finalising have cleared. This is what lets a fresh window/tab
-      // that mounts mid-finalise, or this window if it missed the
-      // recording-stopped event's stopPolling() race, still observe the
-      // window (issue #35). Also keep polling while `status` itself is
-      // still in the stop-flow lifecycle even after the backend goes fully
-      // idle, so the watchdog below gets the repeated ticks it needs to
-      // measure how long it's been stuck (issue #17 gap) - it stops polling
-      // itself once it fires.
-      if (backendState.is_recording || isFinalising || inStopFlow) {
-        if (!pollingIntervalRef.current) {
-          startPolling();
-        }
-      } else {
-        stopPolling();
-      }
-
-      // Watchdog: the frontend is sitting in a stop-flow status but the
-      // backend says recording+finalising are both done, and no
-      // post-processing is actually running locally to move it the rest of
-      // the way to COMPLETED/IDLE. If that holds for longer than the
-      // timeout, assume whatever event was supposed to drive that
-      // transition (recording-stop-complete, its fallback, ...) was lost
-      // and force IDLE ourselves rather than leaving the Start button
-      // hidden forever.
-      if (inStopFlow && !backendState.is_recording && !isFinalising && !isPostProcessingRef.current) {
-        if (watchdogStuckSinceRef.current === null) {
-          watchdogStuckSinceRef.current = Date.now();
-        } else if (
-          Date.now() - watchdogStuckSinceRef.current >
-          WATCHDOG_STUCK_TIMEOUT_MS
-        ) {
-          console.warn(
-            "[RecordingStateContext] Watchdog: stuck in",
-            statusRef.current,
-            "for over",
-            WATCHDOG_STUCK_TIMEOUT_MS,
-            "ms while backend reports idle and no post-processing is running - forcing IDLE",
-          );
-          watchdogStuckSinceRef.current = null;
-          setState((prev) => ({
-            ...prev,
-            status: RecordingStatus.IDLE,
-            statusMessage: undefined,
-          }));
-          toast.error(
-            "Recording finished; the transcript may need recovery from the Recoverable meetings dialog",
-          );
-          stopPolling();
-        }
-      } else {
-        watchdogStuckSinceRef.current = null;
-      }
-
-      console.log("[RecordingStateContext] Synced with backend:", backendState);
-    } catch (error) {
-      console.error(
-        "[RecordingStateContext] Failed to sync with backend:",
-        error,
+  const applySnapshot = useCallback((snapshot: RecordingSnapshot) => {
+    if (snapshot.seq < lastSeqRef.current) {
+      console.log(
+        "[RecordingStateContext] Ignoring stale recording-state snapshot (seq",
+        snapshot.seq,
+        "< last applied",
+        lastSeqRef.current,
+        ")",
       );
-      // Don't update state on error - keep current state
+      return;
     }
-  }, [startPolling, stopPolling]);
+    lastSeqRef.current = snapshot.seq;
 
-  useEffect(() => {
-    syncWithBackendRef.current = syncWithBackend;
-  }, [syncWithBackend]);
+    console.log("[RecordingStateContext] Applying snapshot:", snapshot);
+
+    setPhase(snapshot.phase);
+    setStartedAtMs(snapshot.started_at_ms);
+    setTotalPauseSecs(snapshot.total_pause_secs);
+    setFrozenActiveDuration(
+      snapshot.phase === "paused" ? snapshot.active_duration_secs : null,
+    );
+
+    setStatusState((prevStatus) => {
+      switch (snapshot.phase) {
+        case "error":
+          return RecordingStatus.ERROR;
+        case "starting":
+          return RecordingStatus.STARTING;
+        case "recording":
+        case "paused":
+          return RecordingStatus.RECORDING;
+        case "stopping":
+          return stopFlowRank(prevStatus) < 1
+            ? RecordingStatus.STOPPING
+            : prevStatus;
+        case "finalising":
+          // "unless the local post-processing has already moved to SAVING"
+          return stopFlowRank(prevStatus) < 2
+            ? RecordingStatus.PROCESSING_TRANSCRIPTS
+            : prevStatus;
+        case "idle":
+        default:
+          // Only force IDLE when local post-processing hasn't already moved
+          // past STOPPING - see the STOP_FLOW_RANK comment above.
+          return stopFlowRank(prevStatus) < 1
+            ? RecordingStatus.IDLE
+            : prevStatus;
+      }
+    });
+
+    if (snapshot.phase === "error") {
+      setStatusMessage(snapshot.error ?? undefined);
+    }
+  }, []);
+
+  // Ticks elapsed wall time since the session started recording (including
+  // any time spent paused) - client-side, from the backend's `started_at_ms`,
+  // instead of polling a duration.
+  const elapsedMs = useElapsedTime(startedAtMs);
+  const recordingDuration = startedAtMs !== null ? elapsedMs / 1000 : null;
+
+  // Active duration excludes pause time; see `frozenActiveDuration` above for
+  // the paused case.
+  const activeDuration =
+    recordingDuration === null
+      ? null
+      : phase === "paused"
+        ? frozenActiveDuration
+        : Math.max(0, recordingDuration - totalPauseSecs);
+
+  const isRecording = phase === "recording" || phase === "paused";
+  const isPaused = phase === "paused";
+  const isActive = phase === "recording";
+  const isBackendFinalising = phase === "stopping" || phase === "finalising";
 
   /**
-   * Set up event listeners for backend state changes
+   * Subscribe to `recording-state`, and resync once on mount plus on every
+   * window focus / tab-visible transition (covers a window that was
+   * backgrounded through a whole recording, or opened mid-session).
    */
   useEffect(() => {
-    console.log("[RecordingStateContext] Setting up event listeners");
-    const unsubscribers: (() => void)[] = [];
+    let unlistenState: (() => void) | undefined;
+    let cancelled = false;
 
-    const setupListeners = async () => {
+    const resync = async () => {
       try {
-        // Recording started
-        const unlistenStarted = await recordingService.onRecordingStarted(
-          () => {
-            console.log("[RecordingStateContext] Recording started event");
-            setState((prev) => ({
-              ...prev,
-              isRecording: true,
-              isPaused: false,
-              isActive: true,
-              status: RecordingStatus.RECORDING, // NEW: Set status to RECORDING
-            }));
-            startPolling();
-          },
-        );
-        unsubscribers.push(unlistenStarted);
-
-        // Recording stopped
-        const unlistenStopped = await recordingService.onRecordingStopped(
-          (payload) => {
-            console.log(
-              "[RecordingStateContext] Recording stopped event:",
-              payload,
-            );
-            setState((prev) => {
-              // Set status to STOPPING if not already in stop flow
-              // This ensures smooth UI transition for tray/keyboard stops
-              const newStatus = [
-                RecordingStatus.STOPPING,
-                RecordingStatus.PROCESSING_TRANSCRIPTS,
-                RecordingStatus.SAVING,
-              ].includes(prev.status)
-                ? prev.status // Already in stop flow
-                : RecordingStatus.STOPPING; // New stop, transition smoothly
-
-              return {
-                ...prev,
-                status: newStatus,
-                statusMessage:
-                  newStatus === RecordingStatus.STOPPING
-                    ? "Stopping recording..."
-                    : prev.statusMessage,
-                isRecording: false,
-                isPaused: false,
-                isActive: false,
-                recordingDuration: null,
-                activeDuration: null,
-              };
-            });
-            // Deliberately do NOT stop polling here: the backend keeps
-            // draining/finalising (transcription flush, audio merge) for
-            // seconds after `is_recording` flips false, and `is_finalising`
-            // must keep being observed through that window (issue #35).
-            // `syncWithBackend`'s own polling tick stops the interval once
-            // the backend confirms both recording and finalising are done.
-          },
-        );
-        unsubscribers.push(unlistenStopped);
-
-        // Recording paused
-        const unlistenPaused = await recordingService.onRecordingPaused(() => {
-          console.log("[RecordingStateContext] Recording paused event");
-          setState((prev) => ({
-            ...prev,
-            isPaused: true,
-            isActive: false,
-          }));
-        });
-        unsubscribers.push(unlistenPaused);
-
-        // Recording resumed
-        const unlistenResumed = await recordingService.onRecordingResumed(
-          () => {
-            console.log("[RecordingStateContext] Recording resumed event");
-            setState((prev) => ({
-              ...prev,
-              isPaused: false,
-              isActive: true,
-            }));
-          },
-        );
-        unsubscribers.push(unlistenResumed);
-
-        console.log(
-          "[RecordingStateContext] Event listeners set up successfully",
-        );
+        const backendState = await recordingService.getRecordingState();
+        if (!cancelled) {
+          applySnapshot(snapshotFromBackendState(backendState));
+        }
       } catch (error) {
         console.error(
-          "[RecordingStateContext] Failed to set up event listeners:",
+          "[RecordingStateContext] Failed to resync recording state:",
           error,
         );
       }
     };
 
-    setupListeners();
+    const setup = async () => {
+      try {
+        unlistenState = await recordingService.onRecordingState((snapshot) => {
+          applySnapshot(snapshot);
+        });
+        console.log(
+          "[RecordingStateContext] Subscribed to recording-state events",
+        );
+      } catch (error) {
+        console.error(
+          "[RecordingStateContext] Failed to subscribe to recording-state:",
+          error,
+        );
+      }
+
+      // Initial sync on mount - fixes refresh/new-window desync (backend
+      // recording but this window's default state is idle).
+      await resync();
+    };
+
+    setup();
+
+    const onFocus = () => {
+      resync();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        resync();
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     return () => {
-      console.log("[RecordingStateContext] Cleaning up event listeners");
-      unsubscribers.forEach((unsub) => unsub());
-      stopPolling();
+      cancelled = true;
+      unlistenState?.();
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [startPolling, stopPolling]);
+  }, [applySnapshot]);
 
   /**
-   * Initial sync on mount - CRITICAL for fixing refresh desync bug
-   * If backend is recording but UI state is false, this will correct it.
-   * setState happens after await inside syncWithBackend.
+   * Watchdog (issue #17 gap): arm a one-shot timer whenever local `status`
+   * is stuck in the stop flow while the backend's phase is already Idle.
+   * Re-checks both conditions (plus `isPostProcessingRef`) when it fires,
+   * so a status change or a post-processing run that starts in the
+   * meantime disarms it without needing its own effect dependency.
    */
   useEffect(() => {
-    console.log("[RecordingStateContext] Initial mount - syncing with backend");
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    syncWithBackend();
-  }, [syncWithBackend]);
+    const rank = stopFlowRank(status);
+    const inStopFlow = rank >= 1 && rank <= 3; // STOPPING/PROCESSING/SAVING, not COMPLETED
+    const backendIdle = phase === "idle";
+
+    if (inStopFlow && backendIdle && !isPostProcessingRef.current) {
+      if (!watchdogTimerRef.current) {
+        watchdogTimerRef.current = setTimeout(() => {
+          watchdogTimerRef.current = null;
+          const stillRank = stopFlowRank(statusRef.current);
+          const stillStuck =
+            stillRank >= 1 && stillRank <= 3 && !isPostProcessingRef.current;
+          if (stillStuck) {
+            console.warn(
+              "[RecordingStateContext] Watchdog: stuck in",
+              statusRef.current,
+              "for over",
+              WATCHDOG_STUCK_TIMEOUT_MS,
+              "ms while backend reports idle and no post-processing is running - forcing IDLE",
+            );
+            setStatusState(RecordingStatus.IDLE);
+            setStatusMessage(undefined);
+            toast.error(
+              "Recording finished; the transcript may need recovery from the Recoverable meetings dialog",
+            );
+          }
+        }, WATCHDOG_STUCK_TIMEOUT_MS);
+      }
+    } else if (watchdogTimerRef.current) {
+      clearTimeout(watchdogTimerRef.current);
+      watchdogTimerRef.current = null;
+    }
+  }, [status, phase]);
+
+  // Clear any still-armed watchdog timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (watchdogTimerRef.current) {
+        clearTimeout(watchdogTimerRef.current);
+      }
+    };
+  }, []);
 
   // NEW: Computed helpers from status
   const contextValue = useMemo(() => {
-    const isStopping = state.status === RecordingStatus.STOPPING;
-    const isProcessing = state.status === RecordingStatus.PROCESSING_TRANSCRIPTS;
-    const isSaving = state.status === RecordingStatus.SAVING;
+    const isStopping = status === RecordingStatus.STOPPING;
+    const isProcessing = status === RecordingStatus.PROCESSING_TRANSCRIPTS;
+    const isSaving = status === RecordingStatus.SAVING;
     return {
-      ...state,
+      isRecording,
+      isPaused,
+      isActive,
+      recordingDuration,
+      activeDuration,
+      status,
+      statusMessage,
+      isBackendFinalising,
       setStatus,
       isStopping,
       isProcessing,
       isSaving,
       // Single source of truth (issue #35): local stop-flow status OR the
-      // backend's own `is_finalising` flag, so every start entry point can
-      // gate on one value regardless of which window/tab drove the stop.
+      // backend's own finalising phase, so every start entry point can gate
+      // on one value regardless of which window/tab drove the stop.
       isStopFlowActive:
-        isStopping || isProcessing || isSaving || state.isBackendFinalising,
+        isStopping || isProcessing || isSaving || isBackendFinalising,
     };
-  }, [state, setStatus]);
+  }, [
+    isRecording,
+    isPaused,
+    isActive,
+    recordingDuration,
+    activeDuration,
+    status,
+    statusMessage,
+    isBackendFinalising,
+    setStatus,
+  ]);
 
   return (
     <RecordingStateContext.Provider value={contextValue}>

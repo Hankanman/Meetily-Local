@@ -8,7 +8,39 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
-export interface RecordingState {
+/**
+ * Canonical recording lifecycle phase, owned entirely by the Rust side
+ * (`audio::recording_phase::RecordingPhase`). Mirrors its `serde`
+ * `snake_case` representation exactly.
+ */
+export type RecordingPhase =
+  | "idle"
+  | "starting"
+  | "recording"
+  | "paused"
+  | "stopping"
+  | "finalising"
+  | "error";
+
+/**
+ * Payload of the `recording-state` event, and the shape `get_recording_state`
+ * now returns alongside its legacy keys. See `audio::recording_phase::RecordingSnapshot`.
+ */
+export interface RecordingSnapshot {
+  phase: RecordingPhase;
+  /** Unix ms the current session started recording (null once idle). */
+  started_at_ms: number | null;
+  active_duration_secs: number | null;
+  total_pause_secs: number;
+  meeting_name: string | null;
+  folder_path: string | null;
+  chunks_in_queue: number;
+  error: string | null;
+  /** Monotonically increasing per emitted snapshot. */
+  seq: number;
+}
+
+export interface RecordingState extends Partial<RecordingSnapshot> {
   is_recording: boolean;
   is_paused: boolean;
   is_active: boolean;
@@ -77,6 +109,22 @@ class RecordingService {
   }
 
   // Event Listeners
+
+  /**
+   * Listen for the canonical `recording-state` event, emitted by the Rust
+   * state machine (`audio::recording_phase`) on every phase transition
+   * (start/stop/pause/resume/error) — the single source of truth this
+   * context syncs from instead of polling `get_recording_state`.
+   * @param callback - Function to call with the new snapshot
+   * @returns Promise that resolves to unlisten function
+   */
+  async onRecordingState(
+    callback: (snapshot: RecordingSnapshot) => void,
+  ): Promise<UnlistenFn> {
+    return listen<RecordingSnapshot>("recording-state", (event) => {
+      callback(event.payload);
+    });
+  }
 
   /**
    * Listen for recording-started event

@@ -21,6 +21,7 @@ pub mod incremental_saver;
 pub mod pipeline;
 pub mod recording_commands;
 pub mod recording_manager;
+pub mod recording_phase;
 pub mod recording_preferences;
 pub mod recording_saver;
 pub mod recording_state;
