@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use log::{debug, info, warn};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -19,7 +19,7 @@ use super::recording_state::DeviceType;
 use super::stream::capture_target_for;
 use crate::events::{EventSinkExt, SharedEventSink};
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AudioLevelData {
     /// Role key: `"mic"` or `"system"`.
     pub device_name: String,
@@ -29,7 +29,7 @@ pub struct AudioLevelData {
     pub is_active: bool,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AudioLevelUpdate {
     pub timestamp: u64,
     pub levels: Vec<AudioLevelData>,

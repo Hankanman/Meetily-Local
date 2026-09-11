@@ -20,9 +20,6 @@ use crate::audio::recording_service::{self, RecordingContext, StartHooks, StartR
 use crate::events::{EventSink, SharedEventSink};
 use crate::state::AppState;
 
-// Import transcription modules
-use crate::audio::transcription;
-
 // Re-export TranscriptUpdate for backward compatibility
 pub use crate::audio::transcription::TranscriptUpdate;
 
@@ -83,29 +80,11 @@ pub(crate) fn build_context<R: Runtime>(app: &AppHandle<R>) -> RecordingContext 
     RecordingContext::new(sink, db_pool(app))
 }
 
-/// Build the two shell-side hooks `recording_service::start` needs mid-flow.
-/// Both underlying functions are Tauri-free (`Option<&SqlitePool>`), so the
-/// hooks just close over the pool resolved once from the live `AppHandle`.
+/// Build the two shell-side hooks `recording_service::start` needs mid-flow,
+/// from the live `AppHandle`. Delegates to `recording_service::default_start_hooks`
+/// (shared with the GPUI shell) once the pool is resolved from `AppState`.
 fn build_start_hooks<R: Runtime>(app: &AppHandle<R>) -> StartHooks {
-    let pool_for_validate = db_pool(app);
-    let pool_for_diarizer = db_pool(app);
-    StartHooks {
-        validate_transcription_model: Box::new(move || {
-            Box::pin(async move {
-                transcription::validate_transcription_model_ready(pool_for_validate.as_ref())
-                    .await
-            })
-        }),
-        init_speaker_diarizer: Box::new(move || {
-            Box::pin(async move {
-                crate::speaker_diarization::service::try_init_for_recording(
-                    pool_for_diarizer.as_ref(),
-                )
-                .await
-                .map_err(|e| e.to_string())
-            })
-        }),
-    }
+    recording_service::default_start_hooks(db_pool(app))
 }
 
 async fn start_recording_impl<R: Runtime>(

@@ -75,6 +75,35 @@ pub struct StartHooks {
     pub init_speaker_diarizer: StartHook<Result<bool, String>>,
 }
 
+/// Build the standard [`StartHooks`] every shell wires up: both underlying
+/// functions (`transcription::validate_transcription_model_ready`,
+/// `speaker_diarization::service::try_init_for_recording`) are already
+/// Tauri-free (`Option<&SqlitePool>`), so this just closes over `pool` for
+/// each. Extracted here (rather than duplicated per shell) so the Tauri
+/// command layer and the GPUI shell build byte-for-byte the same hooks; a
+/// shell only needs this when it doesn't want to build custom hooks itself.
+pub fn default_start_hooks(pool: Option<sqlx::SqlitePool>) -> StartHooks {
+    let pool_for_validate = pool.clone();
+    let pool_for_diarizer = pool;
+    StartHooks {
+        validate_transcription_model: Box::new(move || {
+            Box::pin(async move {
+                transcription::validate_transcription_model_ready(pool_for_validate.as_ref())
+                    .await
+            })
+        }),
+        init_speaker_diarizer: Box::new(move || {
+            Box::pin(async move {
+                crate::speaker_diarization::service::try_init_for_recording(
+                    pool_for_diarizer.as_ref(),
+                )
+                .await
+                .map_err(|e| e.to_string())
+            })
+        }),
+    }
+}
+
 // ============================================================================
 // GLOBAL STATE
 // ============================================================================
