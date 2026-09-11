@@ -4,7 +4,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
 
-use crate::calendar::fetcher;
 use crate::calendar::models::{CalendarEvent, CalendarSourceRow};
 use crate::calendar::repository::CalendarRepository;
 use crate::calendar::snapshot::{
@@ -71,21 +70,7 @@ pub async fn calendar_add_source<R: Runtime>(
     url: String,
     label: Option<String>,
 ) -> Result<CalendarSource, String> {
-    let trimmed = url.trim();
-    if trimmed.is_empty() {
-        return Err("Calendar URL cannot be empty".to_string());
-    }
-    if !(trimmed.starts_with("http://")
-        || trimmed.starts_with("https://")
-        || trimmed.starts_with("webcal://"))
-    {
-        return Err("Calendar URL must start with http(s):// or webcal://".to_string());
-    }
-    let normalized = if let Some(rest) = trimmed.strip_prefix("webcal://") {
-        format!("https://{}", rest)
-    } else {
-        trimmed.to_string()
-    };
+    let normalized = crate::calendar::normalize_calendar_url(&url)?;
 
     let row = CalendarRepository::add_source(
         state.db_manager.pool(),
@@ -115,32 +100,11 @@ pub async fn calendar_refresh_source<R: Runtime>(
     source_id: String,
 ) -> Result<RefreshResult, String> {
     let pool = state.db_manager.pool();
-    let source = CalendarRepository::get_source(pool, &source_id)
-        .await
-        .map_err(err)?
-        .ok_or_else(|| format!("Calendar source {} not found", source_id))?;
-
-    match fetcher::fetch_and_expand(&source.url).await {
-        Ok(occurrences) => {
-            let count = CalendarRepository::replace_events(pool, &source_id, &occurrences)
-                .await
-                .map_err(err)?;
-            CalendarRepository::mark_source_fetched(pool, &source_id, None)
-                .await
-                .map_err(err)?;
-            Ok(RefreshResult {
-                source_id,
-                event_count: count,
-            })
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            CalendarRepository::mark_source_fetched(pool, &source_id, Some(&msg))
-                .await
-                .map_err(err)?;
-            Err(msg)
-        }
-    }
+    let event_count = crate::calendar::refresh_source(pool, &source_id).await?;
+    Ok(RefreshResult {
+        source_id,
+        event_count,
+    })
 }
 
 #[derive(Debug, Deserialize)]
