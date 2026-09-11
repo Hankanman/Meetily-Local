@@ -10,11 +10,10 @@
 #
 # Env:
 #   NO_STRIP=1     passed through to linuxdeploy (Fedora 43+ SHT_RELR
-#                  workaround, same as the Tauri AppImage build in build.sh)
+#                  workaround — see docs/building_in_linux.md)
 #
 # Tool caching: linuxdeploy is downloaded once into
-# ~/.cache/meetily-appimage-tools/ and reused on subsequent builds (mirrors
-# tauri-cli's own ~/.cache/tauri/ convention for the same tool).
+# ~/.cache/meetily-appimage-tools/ and reused on subsequent builds.
 
 set -euo pipefail
 
@@ -52,7 +51,7 @@ chmod +x "$APPDIR/usr/bin/meetily-gpui" "$APPDIR/usr/bin/llama-helper" 2>/dev/nu
 DESKTOP_FILE="$APPDIR/usr/share/applications/com.meetily.ai.desktop"
 cp "$PACKAGING_DIR/parley.desktop" "$DESKTOP_FILE"
 
-ICON_SRC="$ROOT/frontend/src-tauri/icons/icon.png"
+ICON_SRC="$PACKAGING_DIR/icon.png"
 if [[ ! -f "$ICON_SRC" ]]; then
     echo "error: icon not found at $ICON_SRC" >&2
     exit 1
@@ -69,8 +68,7 @@ export NO_STRIP="${NO_STRIP:-1}"
 # rpath on meetily-gpui is $ORIGIN (see meetily-gpui/build.rs), and the
 # sherpa-onnx / onnxruntime .so files are already staged next to it in
 # usr/bin/, so linuxdeploy's ldd-based dependency scan resolves them without
-# needing LD_LIBRARY_PATH — but set it anyway as a safety net, matching the
-# Tauri AppImage build's approach in build.sh.
+# needing LD_LIBRARY_PATH — but set it anyway as a safety net.
 export LD_LIBRARY_PATH="$DIST_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 # linuxdeploy is chatty on stdout (mksquashfs progress, etc.) — this script's
