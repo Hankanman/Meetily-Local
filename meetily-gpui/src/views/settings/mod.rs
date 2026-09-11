@@ -7,10 +7,19 @@
 //! comment for why.
 
 mod appearance;
+mod beta;
+mod calendar;
+mod integrations;
+mod notifications;
 mod recording;
 mod state;
 mod summary;
 mod transcription;
+
+// Re-exported for `main.rs` to call once at startup after `state::load` —
+// see `apply_saved_theme`'s doc comment in `appearance.rs`.
+#[allow(unused_imports)]
+pub use appearance::apply_saved_theme;
 
 use gpui_kit::component::setting::Settings;
 use gpui_kit::*;
@@ -95,6 +104,10 @@ impl Render for SettingsView {
             recording::page(&view, cx),
             transcription::page(&view, cx),
             summary::page(&view, cx),
+            notifications::page(&view, cx),
+            calendar::page(&view, cx),
+            integrations::page(&view, cx),
+            beta::page(&view, cx),
             appearance::page(&view, cx),
         ];
 

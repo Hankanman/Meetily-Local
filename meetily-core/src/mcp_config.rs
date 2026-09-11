@@ -27,29 +27,33 @@ const MCP_BIN_NAME: &str = "meetily-mcp";
 const MCP_BIN_ENV: &str = "MEETILY_MCP_BIN";
 
 /// What the Integrations panel needs to render MCP-client config.
-#[derive(Debug, Serialize)]
+///
+/// Fields are `pub` (rather than accessed only through `Serialize`/JSON) so
+/// a non-Tauri shell — the GPUI Integrations settings page — can read them
+/// directly without round-tripping through JSON.
+#[derive(Debug, Clone, Serialize)]
 pub struct McpServerInfo {
     /// Absolute path to the Meetily SQLite database this app uses. The MCP
     /// server resolves the same default on its own, so a `--db` flag is only
     /// needed when this differs from that default.
     #[serde(rename = "dbPath")]
-    db_path: String,
+    pub db_path: String,
     /// Whether that database file exists yet (it won't until the app has run
     /// once and created it).
     #[serde(rename = "dbExists")]
-    db_exists: bool,
+    pub db_exists: bool,
     /// Whether `db_path` is the platform-default location the MCP server would
     /// pick with no `--db`/`$MEETILY_DB_PATH`. When true the snippet can omit
     /// the flag entirely.
     #[serde(rename = "dbIsDefault")]
-    db_is_default: bool,
+    pub db_is_default: bool,
     /// Best guess at the `meetily-mcp` binary's absolute path, or `null` if it
     /// couldn't be found. The UI treats this as a prefill the user can edit.
     #[serde(rename = "binaryPath")]
-    binary_path: Option<String>,
+    pub binary_path: Option<String>,
     /// Whether `binary_path` was found and points at an existing file.
     #[serde(rename = "binaryFound")]
-    binary_found: bool,
+    pub binary_found: bool,
 }
 
 /// The default DB location the MCP server picks with no flag/env, mirroring

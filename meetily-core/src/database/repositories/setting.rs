@@ -17,6 +17,25 @@ pub const KEY_NOTIFICATION_SETTINGS: &str = "notification_settings";
 /// Frontend UI config (language, confidence indicator, auto-summary, provider model cache, ...).
 /// Shape is owned by the frontend; the backend stores it as an opaque JSON blob.
 pub const KEY_UI_CONFIG: &str = "ui_config";
+/// Default summary template id, used to pre-select a template for new
+/// meetings. Added for the GPUI Settings → Summary page (`meetily-gpui`);
+/// the React app currently keeps template selection per-meeting-session
+/// only (`useTemplates` local state) with no persisted default — this key
+/// has no legacy JSON-file/localStorage predecessor. Value is a plain JSON
+/// string (a template id from `summary::templates::list_templates`), stored
+/// via `SettingsRepository::get_setting`/`set_setting`.
+pub const KEY_DEFAULT_SUMMARY_TEMPLATE: &str = "default_summary_template";
+/// Beta feature toggles (see `types/betaFeatures.ts` on the React side,
+/// which is localStorage-only under the key `"betaFeatures"` there — this
+/// DB key is new, added so the GPUI Settings → Beta page has a durable
+/// store; the two are not yet unified). Value is a JSON object matching the
+/// GPUI `BetaFeatures` struct (`meetily-gpui/src/views/settings/beta.rs`).
+pub const KEY_BETA_FEATURES: &str = "beta_features";
+/// Saved theme preference (`"light"` | `"dark"` | `"system"`). The React
+/// app's theme lives in browser `localStorage`, outside SQLite; this key is
+/// new, added for the GPUI shell so the choice survives a restart. Value is
+/// a plain JSON string.
+pub const KEY_THEME_PREFERENCE: &str = "theme_preference";
 
 #[derive(serde::Deserialize, Debug)]
 pub struct SaveModelConfigRequest {
