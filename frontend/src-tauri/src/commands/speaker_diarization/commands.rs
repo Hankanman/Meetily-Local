@@ -160,20 +160,11 @@ pub async fn update_voice_profile<R: Runtime>(
     name: String,
     email: Option<String>,
 ) -> Result<bool, String> {
-    let trimmed_name = name.trim();
-    if trimmed_name.is_empty() {
-        return Err("Profile name cannot be empty".into());
-    }
-    let normalised_email = email
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| "AppState unavailable".to_string())?;
     let pool = state.db_manager.pool();
-    VoiceProfilesRepository::update_profile(pool, &profile_id, trimmed_name, normalised_email)
+    VoiceProfilesRepository::update_profile(pool, &profile_id, &name, email.as_deref())
         .await
         .map_err(|e| format!("Failed to update voice profile: {}", e))
 }

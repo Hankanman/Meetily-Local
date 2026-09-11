@@ -16,7 +16,10 @@ use meetily_core::database::repositories::meeting::MeetingsRepository;
 
 use crate::app_state::AppServices;
 use crate::runtime::Io;
-use crate::views::{import, meeting::MeetingView, recording::RecordingView, settings::SettingsView};
+use crate::views::{
+    action_items::ActionItemsView, import, meeting::MeetingView, recording::RecordingView,
+    settings::SettingsView, speakers::SpeakersView,
+};
 use meeting_list::MeetingRow;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +27,8 @@ pub enum Route {
     Recording,
     Meeting(String),
     Settings,
+    ActionItems,
+    Speakers,
 }
 
 /// Lets any view switch pages without holding the shell: `navigate(Route::Meeting(id), cx)`.
@@ -69,6 +74,8 @@ pub struct AppShell {
     recording: Entity<RecordingView>,
     meeting: Entity<MeetingView>,
     settings: Entity<SettingsView>,
+    action_items: Entity<ActionItemsView>,
+    speakers: Entity<SpeakersView>,
     meetings: Vec<MeetingRow>,
     meetings_loading: bool,
     search: Entity<InputState>,
@@ -99,6 +106,8 @@ impl AppShell {
             recording: cx.new(|cx| RecordingView::new(window, cx)),
             meeting: cx.new(|cx| MeetingView::new(window, cx)),
             settings: cx.new(|cx| SettingsView::new(window, cx)),
+            action_items: cx.new(|cx| ActionItemsView::new(window, cx)),
+            speakers: cx.new(|cx| SpeakersView::new(window, cx)),
             meetings: Vec::new(),
             meetings_loading: false,
             search,
@@ -207,6 +216,8 @@ impl Render for AppShell {
             Route::Recording => self.recording.clone().into(),
             Route::Meeting(_) => self.meeting.clone().into(),
             Route::Settings => self.settings.clone().into(),
+            Route::ActionItems => self.action_items.clone().into(),
+            Route::Speakers => self.speakers.clone().into(),
         };
 
         let query = self.search.read(cx).value().to_string();
@@ -230,6 +241,12 @@ impl Render for AppShell {
                         .icon(gpui_kit::assets::IconName::Upload)
                         .on_click(|_, window, cx| import::open(window, cx)),
                     self.nav_item("Settings", IconName::Settings, Route::Settings, cx),
+                ])),
+            )
+            .child(
+                SidebarGroup::new("Tools").child(SidebarMenu::new().children([
+                    self.nav_item("Action items", IconName::CircleCheck, Route::ActionItems, cx),
+                    self.nav_item("Speakers", IconName::User, Route::Speakers, cx),
                 ])),
             );
 
