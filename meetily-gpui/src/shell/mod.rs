@@ -16,7 +16,7 @@ use meetily_core::database::repositories::meeting::MeetingsRepository;
 
 use crate::app_state::AppServices;
 use crate::runtime::Io;
-use crate::views::{meeting::MeetingView, recording::RecordingView, settings::SettingsView};
+use crate::views::{import, meeting::MeetingView, recording::RecordingView, settings::SettingsView};
 use meeting_list::MeetingRow;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -226,6 +226,9 @@ impl Render for AppShell {
             .child(
                 SidebarGroup::new("Meetings").child(SidebarMenu::new().children([
                     self.nav_item("Record", IconName::Play, Route::Recording, cx),
+                    SidebarMenuItem::new("Import audio")
+                        .icon(gpui_kit::assets::IconName::Upload)
+                        .on_click(|_, window, cx| import::open(window, cx)),
                     self.nav_item("Settings", IconName::Settings, Route::Settings, cx),
                 ])),
             );
@@ -249,6 +252,13 @@ impl Render for AppShell {
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
+            // Drag-and-drop an audio file onto the window to import it —
+            // mirrors `frontend/src/components/bridges/FileDropBridge.tsx`.
+            .on_drop(move |paths: &ExternalPaths, window, cx| {
+                if let Some(path) = import::pick_dropped_audio_file(paths.paths()) {
+                    import::open_with_file(window, cx, path.clone());
+                }
+            })
             .child(TitleBar::new().child("Parley"))
             .child(
                 h_flex()
