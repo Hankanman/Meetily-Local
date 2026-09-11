@@ -8,7 +8,43 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
-export interface RecordingState {
+/**
+ * Canonical recording lifecycle phase, owned entirely by the Rust side
+ * (`audio::recording_phase::RecordingPhase`). Mirrors its `serde`
+ * `snake_case` representation exactly.
+ */
+export type RecordingPhase =
+  | "idle"
+  | "starting"
+  | "recording"
+  | "paused"
+  | "stopping"
+  | "finalising"
+  | "error";
+
+/**
+ * Payload of the `recording-state` event, and the shape `get_recording_state`
+ * now returns alongside its legacy keys. See `audio::recording_phase::RecordingSnapshot`.
+ */
+export interface RecordingSnapshot {
+  phase: RecordingPhase;
+  /** Unix ms the current session started recording (null once idle). */
+  started_at_ms: number | null;
+  active_duration_secs: number | null;
+  total_pause_secs: number;
+  meeting_name: string | null;
+  folder_path: string | null;
+  /** The `meetings` row id for the in-progress session (issue #57 slice 2),
+   *  null once idle. Rust owns creating/finalising this row — the frontend
+   *  only ever updates fields it still owns (see `api_save_meeting_title`). */
+  meeting_id: string | null;
+  chunks_in_queue: number;
+  error: string | null;
+  /** Monotonically increasing per emitted snapshot. */
+  seq: number;
+}
+
+export interface RecordingState extends Partial<RecordingSnapshot> {
   is_recording: boolean;
   is_paused: boolean;
   is_active: boolean;
@@ -24,6 +60,21 @@ export interface RecordingStoppedPayload {
   message: string;
   folder_path?: string;
   meeting_name?: string;
+  /** The `meetings` row id Rust created for this session at start and has
+   *  already finalised (status "completed"/"interrupted") by the time this
+   *  fires (issue #57 slice 2). Absent only when talking to an older
+   *  backend build — callers should fall back to the pre-#57 save flow. */
+  meeting_id?: string;
+}
+
+export interface RecordingStartedPayload {
+  message: string;
+  devices?: string[];
+  workers?: number;
+  /** The `meetings` row id Rust just created (status "recording") for this
+   *  session (issue #57 slice 2). Absent only when talking to an older
+   *  backend build. */
+  meeting_id?: string;
 }
 
 /**
@@ -79,12 +130,32 @@ class RecordingService {
   // Event Listeners
 
   /**
-   * Listen for recording-started event
-   * @param callback - Function to call when recording starts
+   * Listen for the canonical `recording-state` event, emitted by the Rust
+   * state machine (`audio::recording_phase`) on every phase transition
+   * (start/stop/pause/resume/error) — the single source of truth this
+   * context syncs from instead of polling `get_recording_state`.
+   * @param callback - Function to call with the new snapshot
    * @returns Promise that resolves to unlisten function
    */
-  async onRecordingStarted(callback: () => void): Promise<UnlistenFn> {
-    return listen("recording-started", callback);
+  async onRecordingState(
+    callback: (snapshot: RecordingSnapshot) => void,
+  ): Promise<UnlistenFn> {
+    return listen<RecordingSnapshot>("recording-state", (event) => {
+      callback(event.payload);
+    });
+  }
+
+  /**
+   * Listen for recording-started event
+   * @param callback - Function to call when recording starts, with its payload
+   * @returns Promise that resolves to unlisten function
+   */
+  async onRecordingStarted(
+    callback: (payload: RecordingStartedPayload) => void,
+  ): Promise<UnlistenFn> {
+    return listen<RecordingStartedPayload>("recording-started", (event) => {
+      callback(event.payload);
+    });
   }
 
   /**

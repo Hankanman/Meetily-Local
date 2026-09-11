@@ -1,0 +1,16 @@
+[package]
+name = "whisper-core"
+version = "0.1.0"
+edition.workspace = true
+description = "Shared whisper.cpp params-building and confidence-scoring logic, used by both the in-process WhisperEngine and the whisper-helper sidecar."
+
+[dependencies]
+anyhow = { workspace = true }
+whisper-rs = { version = "0.16.0", features = ["raw-api", "log_backend"] }
+
+[features]
+default = []
+cuda = ["whisper-rs/cuda"]
+vulkan = ["whisper-rs/vulkan"]
+openblas = ["whisper-rs/openblas"]
+openmp = ["whisper-rs/openmp"]

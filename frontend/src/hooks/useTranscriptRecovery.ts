@@ -1,99 +1,98 @@
 /**
  * useTranscriptRecovery Hook
  *
- * Orchestrates transcript recovery operations for interrupted meetings.
- * Provides functionality to detect, preview, and recover meetings from IndexedDB.
+ * Orchestrates recovery of meetings an unclean shutdown interrupted
+ * mid-recording. Issue #57 slice 2: "recoverable" is now a database fact
+ * (`meetings.status = 'interrupted'`, set by the Rust startup sweep or a
+ * fatal-error stop) instead of a scan over an IndexedDB cache the frontend
+ * built up itself — recovery is a Rust command, not a client-side
+ * reconstruction. IndexedDB remains only a per-viewer write-ahead cache for
+ * the live transcript list; it has no say in what's recoverable any more.
  */
 
 import { useState, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import {
-  indexedDBService,
-  MeetingMetadata,
-  StoredTranscript,
-} from "@/services/indexedDBService";
-import { storageService } from "@/services/storageService";
+  storageService,
+  InterruptedMeeting,
+  AudioRecoveryStatus,
+} from "@/services/storageService";
 import { getErrorMessage } from "@/lib/utils";
 
-interface AudioRecoveryStatus {
-  status: string; // "success" | "partial" | "failed" | "none"
-  chunk_count: number;
-  estimated_duration_seconds: number;
-  audio_file_path?: string;
-  message: string;
+/** One row from `list_interrupted_meetings`, shaped to match the fields the
+ *  recovery dialog UI already renders (mirrors the old IndexedDB
+ *  `MeetingMetadata` shape it replaces, so the dialog component didn't need
+ *  to change). */
+export interface RecoverableMeeting {
+  meetingId: string;
+  title: string;
+  startTime: number;
+  lastUpdated: number;
+  transcriptCount: number;
+  /** Set only when `.checkpoints/` audio still exists on disk for this
+   *  meeting — mirrors the old "folderPath present = audio available"
+   *  contract the dialog's UI already checks for. */
+  folderPath?: string;
+}
+
+/** One transcript segment for the dialog's preview panel — the fields of
+ *  `MeetingTranscript` (from `api_get_meeting`) the preview UI reads. */
+export interface PreviewTranscript {
+  id: string;
+  text: string;
+  timestamp: string;
+  audio_start_time?: number;
+  audio_end_time?: number;
+  duration?: number;
 }
 
 export interface UseTranscriptRecoveryReturn {
-  recoverableMeetings: MeetingMetadata[];
+  recoverableMeetings: RecoverableMeeting[];
   isLoading: boolean;
   isRecovering: boolean;
-  checkForRecoverableTranscripts: () => Promise<MeetingMetadata[]>;
-  recoverMeeting: (
-    meetingId: string,
-  ) => Promise<{
+  checkForRecoverableTranscripts: () => Promise<RecoverableMeeting[]>;
+  recoverMeeting: (meetingId: string) => Promise<{
     success: boolean;
     audioRecoveryStatus?: AudioRecoveryStatus | null;
     meetingId?: string;
   }>;
-  loadMeetingTranscripts: (meetingId: string) => Promise<StoredTranscript[]>;
+  loadMeetingTranscripts: (meetingId: string) => Promise<PreviewTranscript[]>;
   deleteRecoverableMeeting: (meetingId: string) => Promise<void>;
+}
+
+function toRecoverableMeeting(row: InterruptedMeeting): RecoverableMeeting {
+  const createdMs = Date.parse(row.created_at);
+  return {
+    meetingId: row.meeting_id,
+    title: row.title,
+    startTime: Number.isNaN(createdMs) ? Date.now() : createdMs,
+    lastUpdated: Number.isNaN(createdMs) ? Date.now() : createdMs,
+    transcriptCount: row.segment_count,
+    folderPath:
+      row.has_audio_checkpoints && row.folder_path
+        ? row.folder_path
+        : undefined,
+  };
 }
 
 export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
   const [recoverableMeetings, setRecoverableMeetings] = useState<
-    MeetingMetadata[]
+    RecoverableMeeting[]
   >([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRecovering, setIsRecovering] = useState(false);
 
   /**
-   * Check for recoverable meetings in IndexedDB
+   * List meetings the backend considers interrupted.
    */
   const checkForRecoverableTranscripts = useCallback(async () => {
     setIsLoading(true);
     try {
-      const meetings = await indexedDBService.getAllMeetings();
-
-      // Filter out meetings older than 7 days and newer than 15 seconds
-      // The 15 seconds threshold prevents showing meetings from the current session(jus in case)
-      // where recording just stopped but hasn't been fully saved yet
-      const cutoffTime = Date.now() - 7 * 24 * 60 * 60 * 1000;
-      const secondsAgo = Date.now() - 15 * 1000;
-
-      const recentMeetings = meetings.filter((m) => {
-        const isWithinRetention = m.lastUpdated > cutoffTime; // Not older than 7 days
-        const isOldEnough = m.lastUpdated < secondsAgo; // Older than 15 seconds
-        return isWithinRetention && isOldEnough;
-      });
-
-      // Verify audio checkpoint availability for each meeting
-      const meetingsWithAudioStatus = await Promise.all(
-        recentMeetings.map(async (meeting) => {
-          if (meeting.folderPath) {
-            try {
-              const hasAudio = await invoke<boolean>("has_audio_checkpoints", {
-                meetingFolder: meeting.folderPath,
-              });
-
-              // If no audio files, clear folderPath to show "No audio" in UI
-              return {
-                ...meeting,
-                folderPath: hasAudio ? meeting.folderPath : undefined,
-              };
-            } catch (error) {
-              console.warn("Failed to check audio for meeting:", error);
-              // On error, assume no audio to be safe
-              return { ...meeting, folderPath: undefined };
-            }
-          }
-          return meeting;
-        }),
-      );
-
-      setRecoverableMeetings(meetingsWithAudioStatus);
-      return meetingsWithAudioStatus;
+      const rows = await storageService.listInterruptedMeetings();
+      const meetings = rows.map(toRecoverableMeeting);
+      setRecoverableMeetings(meetings);
+      return meetings;
     } catch (error) {
-      console.error("Failed to check for recoverable transcripts:", error);
+      console.error("Failed to list interrupted meetings:", error);
       setRecoverableMeetings([]);
       return [];
     } finally {
@@ -102,15 +101,20 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
   }, []);
 
   /**
-   * Load transcripts for preview
+   * Load transcripts for preview. Interrupted meetings already have their
+   * transcript segments in SQLite — they were upserted live, up to
+   * whatever was flushed before the interruption (issue #57 slice 2) — so
+   * this reads the same way a saved meeting's transcripts do, rather than
+   * reading back out of IndexedDB.
    */
   const loadMeetingTranscripts = useCallback(
-    async (meetingId: string): Promise<StoredTranscript[]> => {
+    async (meetingId: string): Promise<PreviewTranscript[]> => {
       try {
-        const transcripts = await indexedDBService.getTranscripts(meetingId);
-        // Sort by sequence ID
-        transcripts.sort((a, b) => (a.sequenceId || 0) - (b.sequenceId || 0));
-        return transcripts;
+        const meeting = await storageService.getMeeting(meetingId);
+        const transcripts = (meeting.transcripts ?? []) as PreviewTranscript[];
+        return [...transcripts].sort(
+          (a, b) => (a.audio_start_time ?? 0) - (b.audio_start_time ?? 0),
+        );
       } catch (error) {
         console.error("Failed to load meeting transcripts:", error);
         return [];
@@ -120,131 +124,41 @@ export function useTranscriptRecovery(): UseTranscriptRecoveryReturn {
   );
 
   /**
-   * Recover a meeting from IndexedDB
+   * Recover a meeting: the Rust command merges any `.checkpoints` audio
+   * still on disk and marks the row "completed".
    */
-  const recoverMeeting = useCallback(
-    async (
-      meetingId: string,
-    ): Promise<{
-      success: boolean;
-      audioRecoveryStatus?: AudioRecoveryStatus | null;
-      meetingId?: string;
-    }> => {
-      setIsRecovering(true);
-      try {
-        // 1. Load meeting metadata
-        const metadata = await indexedDBService.getMeetingMetadata(meetingId);
-        if (!metadata) {
-          throw new Error("Meeting metadata not found");
-        }
+  const recoverMeeting = useCallback(async (meetingId: string) => {
+    setIsRecovering(true);
+    try {
+      const result = await storageService.recoverMeeting(meetingId);
 
-        // 2. Load all transcripts
-        const transcripts = await loadMeetingTranscripts(meetingId);
-        if (transcripts.length === 0) {
-          throw new Error("No transcripts found for this meeting");
-        }
+      setRecoverableMeetings((prev) =>
+        prev.filter((m) => m.meetingId !== meetingId),
+      );
 
-        // 3. Check for folder path
-        let folderPath = metadata.folderPath;
-
-        if (!folderPath) {
-          // Try to get from backend (might exist if only app crashed, not system)
-          try {
-            folderPath = await invoke<string>("get_meeting_folder_path");
-          } catch (error) {
-            folderPath = undefined;
-          }
-        }
-
-        // 4. Attempt audio recovery if folder path exists
-        let audioRecoveryStatus: AudioRecoveryStatus | null = null;
-        if (folderPath) {
-          try {
-            audioRecoveryStatus = await invoke<AudioRecoveryStatus>(
-              "recover_audio_from_checkpoints",
-              { meetingFolder: folderPath, sampleRate: 48000 },
-            );
-          } catch (error) {
-            console.error("Audio recovery failed:", error);
-            audioRecoveryStatus = {
-              status: "failed",
-              chunk_count: 0,
-              estimated_duration_seconds: 0,
-              message: getErrorMessage(error),
-            };
-          }
-        } else {
-          audioRecoveryStatus = {
-            status: "none",
-            chunk_count: 0,
-            estimated_duration_seconds: 0,
-            message: "No folder path available",
-          };
-        }
-
-        // 5. Convert StoredTranscripts to the format expected by storageService
-        const formattedTranscripts = transcripts.map((t, index) => ({
-          id: t.id?.toString() || `${Date.now()}-${index}`,
-          text: t.text,
-          timestamp: t.timestamp,
-          sequence_id: t.sequenceId || index,
-          chunk_start_time: (t as any).chunk_start_time,
-          is_partial: (t as any).is_partial || false,
-          confidence: t.confidence,
-          audio_start_time: (t as any).audio_start_time,
-          audio_end_time: (t as any).audio_end_time,
-          duration: (t as any).duration,
-        }));
-
-        // 6. Save to backend database using existing save utilities
-        const saveResponse = await storageService.saveMeeting(
-          metadata.title,
-          formattedTranscripts,
-          folderPath ?? null,
-        );
-
-        const savedMeetingId = saveResponse.meeting_id;
-
-        // 7. Mark as saved in IndexedDB
-        await indexedDBService.markMeetingSaved(meetingId);
-
-        // 8. Clean up checkpoint files
-        if (folderPath) {
-          try {
-            await invoke("cleanup_checkpoints", { meetingFolder: folderPath });
-          } catch (error) {
-            // Non-fatal - don't fail recovery if cleanup fails
-            console.warn("Checkpoint cleanup failed (non-fatal):", error);
-          }
-        }
-
-        // 9. Remove from recoverable list
-        setRecoverableMeetings((prev) =>
-          prev.filter((m) => m.meetingId !== meetingId),
-        );
-
-        return {
-          success: true,
-          audioRecoveryStatus,
-          meetingId: savedMeetingId,
-        };
-      } catch (error) {
-        console.error("Failed to recover meeting:", error);
-        throw error;
-      } finally {
-        setIsRecovering(false);
-      }
-    },
-    [loadMeetingTranscripts],
-  );
+      return {
+        success: result.success,
+        audioRecoveryStatus: result.audio_recovery_status,
+        meetingId: result.meeting_id,
+      };
+    } catch (error) {
+      console.error("Failed to recover meeting:", error);
+      throw new Error(getErrorMessage(error));
+    } finally {
+      setIsRecovering(false);
+    }
+  }, []);
 
   /**
-   * Delete a recoverable meeting
+   * Delete an interrupted meeting outright (the user chose to discard it
+   * rather than recover it) — the same command every other "delete a
+   * meeting" affordance in the app uses.
    */
   const deleteRecoverableMeeting = useCallback(
     async (meetingId: string): Promise<void> => {
       try {
-        await indexedDBService.deleteMeeting(meetingId);
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("api_delete_meeting", { meetingId });
         setRecoverableMeetings((prev) =>
           prev.filter((m) => m.meetingId !== meetingId),
         );

@@ -122,12 +122,14 @@ export function useRecordingStop(
           message: string;
           folder_path?: string;
           meeting_name?: string;
+          meeting_id?: string;
         }>("recording-stopped", async (event) => {
           // Create promise that resolves when sessionStorage is set (prevents race condition)
           recordingStoppedDataRef.current = (async () => {
-            const { folder_path, meeting_name } = event.payload;
+            const { folder_path, meeting_name, meeting_id } = event.payload;
 
-            // Store folder_path and meeting_name for later use in handleRecordingStop
+            // Store folder_path, meeting_name and meeting_id for later use
+            // in handleRecordingStop
             if (folder_path) {
               sessionStorage.setItem("last_recording_folder_path", folder_path);
             }
@@ -136,6 +138,15 @@ export function useRecordingStop(
                 "last_recording_meeting_name",
                 meeting_name,
               );
+            }
+            // meeting_id is the `meetings` row Rust already created and
+            // finalised for this session (issue #57 slice 2). Its absence
+            // means an older backend build — handleRecordingStop falls back
+            // to the pre-#57 create-and-bulk-insert path in that case.
+            if (meeting_id) {
+              sessionStorage.setItem("last_recording_meeting_id", meeting_id);
+            } else {
+              sessionStorage.removeItem("last_recording_meeting_id");
             }
           })();
         });
@@ -348,23 +359,64 @@ export function useRecordingStop(
                 : "none",
           });
 
+          // Rust already created and finalised the meeting row (status,
+          // transcripts, folder_path, audio) by the time `recording-stopped`
+          // fired (issue #57 slice 2) — its id came along in that payload.
+          // The frontend's post-stop save is now an update to the one field
+          // it still owns (the title, which the live-recording view may
+          // have let the user edit to something other than what recording
+          // started with), not a create-and-bulk-insert. A missing
+          // meeting_id means an older backend build without slice 2 — fall
+          // back to the original create-and-bulk-insert path so nothing
+          // breaks mid-migration.
+          const meetingIdFromStop = sessionStorage.getItem(
+            "last_recording_meeting_id",
+          );
+
           try {
-            const responseData = await storageService.saveMeeting(
-              savedMeetingName || meetingTitle || "New Meeting", // PREFER savedMeetingName (backend source)
-              freshTranscripts,
-              folderPath,
-            );
+            const finalTitle =
+              savedMeetingName || meetingTitle || "New Meeting";
+            let meetingId: string;
 
-            const meetingId = responseData.meeting_id;
-            if (!meetingId) {
-              console.error("No meeting_id in response:", responseData);
-              throw new Error("No meeting ID received from save operation");
+            if (meetingIdFromStop) {
+              meetingId = meetingIdFromStop;
+              try {
+                await storageService.finalizeMeetingTitle(
+                  meetingId,
+                  finalTitle,
+                );
+              } catch (titleError) {
+                // Non-fatal: the meeting row already exists with whatever
+                // title Rust set at recording start; worst case the user
+                // re-titles it from the meeting detail page.
+                console.warn(
+                  "Failed to finalize meeting title (meeting is still saved):",
+                  titleError,
+                );
+              }
+              console.log(
+                "✅ Meeting already saved by the backend; finalized title for ID:",
+                meetingId,
+              );
+            } else {
+              console.log(
+                "No meeting_id in recording-stopped payload (older backend) — falling back to bulk transcript save",
+              );
+              const responseData = await storageService.saveMeeting(
+                finalTitle,
+                freshTranscripts,
+                folderPath,
+              );
+              if (!responseData.meeting_id) {
+                console.error("No meeting_id in response:", responseData);
+                throw new Error("No meeting ID received from save operation");
+              }
+              meetingId = responseData.meeting_id;
+              console.log(
+                "✅ Successfully saved COMPLETE meeting with ID:",
+                meetingId,
+              );
             }
-
-            console.log(
-              "✅ Successfully saved COMPLETE meeting with ID:",
-              meetingId,
-            );
             console.log("   Transcripts:", freshTranscripts.length);
             console.log("   folder_path:", folderPath);
 
@@ -410,6 +462,7 @@ export function useRecordingStop(
             // Clean up session storage
             sessionStorage.removeItem("last_recording_folder_path");
             sessionStorage.removeItem("last_recording_meeting_name");
+            sessionStorage.removeItem("last_recording_meeting_id");
             // Clean up IndexedDB meeting ID (redundant with markMeetingAsSaved cleanup, but ensures cleanup)
             sessionStorage.removeItem("indexeddb_current_meeting_id");
 

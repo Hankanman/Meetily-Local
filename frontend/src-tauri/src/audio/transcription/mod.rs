@@ -4,6 +4,10 @@
 // sole local ASR engine (a prior remote-provider abstraction was removed as
 // dead code — see worker.rs for TranscriptionError).
 
+// Issue #56 spike: runtime sidecar backend probing/selection. Off by
+// default — see backend_probe.rs's module doc comment for scope and status.
+#[cfg(feature = "backend_probe")]
+pub mod backend_probe;
 pub mod echo_dedup;
 pub mod engine;
 pub mod partial_worker;

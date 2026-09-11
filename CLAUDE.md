@@ -237,6 +237,22 @@ macro_rules! perf_debug {
 
 **Pattern**: Tauri commands update Rust state → Emit events → Frontend listeners update React state → Context propagates to components
 
+**Meeting row ownership** (issue #57 slice 2): Rust owns the `meetings` row's
+whole lifecycle, not just its live-recording phase. `start_recording*`
+inserts the row (status `"recording"`) and mints the `meeting_id` included in
+`recording-started`/`recording-stopped`; the `transcript-update` listener
+upserts each segment to SQLite as it arrives via a batched writer
+(`audio::transcript_db_writer`); `stop_recording` finalises the row
+(`"completed"`, or `"interrupted"` on a fatal-error stop), and a startup
+sweep marks any row still `"recording"` after a crash `"interrupted"`. The
+frontend's post-stop save is now an update to the one field it still owns
+(title, via `api_save_meeting_title`) instead of creating the row —
+`useRecordingStop` falls back to the old create-and-bulk-insert path only if
+`meeting_id` is missing (an older backend). Recovery of an interrupted
+meeting is a database query (`list_interrupted_meetings` /
+`recover_meeting`), not a scan over the IndexedDB cache, which now exists
+only as a per-viewer write-ahead cache for the live transcript list.
+
 ## Common Development Tasks
 
 ### Adding a New Tauri Command

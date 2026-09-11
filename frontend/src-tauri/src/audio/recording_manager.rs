@@ -256,11 +256,15 @@ impl RecordingManager {
         Ok(())
     }
 
-    /// Save recording after transcription is complete
+    /// Save recording after transcription is complete. Returns the final
+    /// audio file path (`None` if auto-save was disabled or saving failed)
+    /// and the active recording duration used to save it, so the caller can
+    /// finalise the meeting's database row (issue #57 slice 2) without
+    /// re-deriving either value.
     pub async fn save_recording_only<R: tauri::Runtime>(
         &mut self,
         app: &tauri::AppHandle<R>,
-    ) -> Result<()> {
+    ) -> Result<(Option<String>, Option<f64>)> {
         debug!("Saving recording with transcript chunks");
 
         // Get actual recording duration from state
@@ -268,25 +272,28 @@ impl RecordingManager {
         info!("Recording duration from state: {:?}s", recording_duration);
 
         // Save the recording with actual duration
-        match self
+        let audio_path = match self
             .recording_saver
             .stop_and_save(app, recording_duration)
             .await
         {
             Ok(Some(file_path)) => {
                 info!("Recording saved successfully to: {}", file_path);
+                Some(file_path)
             }
             Ok(None) => {
                 debug!("Recording not saved (auto-save disabled or no audio data)");
+                None
             }
             Err(e) => {
                 error!("Failed to save recording: {}", e);
                 // Don't fail the stop operation if saving fails
+                None
             }
-        }
+        };
 
         debug!("Recording save operation completed");
-        Ok(())
+        Ok((audio_path, recording_duration))
     }
 
     /// Stop recording and save audio (legacy method)
@@ -413,6 +420,17 @@ impl RecordingManager {
     /// Set the meeting name for this recording session
     pub fn set_meeting_name(&mut self, name: Option<String>) {
         self.recording_saver.set_meeting_name(name);
+    }
+
+    /// Set the `meetings` row id for this recording session (issue #57
+    /// slice 2).
+    pub fn set_meeting_id(&mut self, id: Option<String>) {
+        self.recording_saver.set_meeting_id(id);
+    }
+
+    /// Get the `meetings` row id for this recording session, if set.
+    pub fn get_meeting_id(&self) -> Option<String> {
+        self.recording_saver.get_meeting_id()
     }
 
     /// Add a structured transcript segment to be saved later

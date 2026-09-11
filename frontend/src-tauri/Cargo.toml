@@ -41,6 +41,12 @@ hipblas = ["whisper-rs/hipblas"]   # Linux: AMD ROCm HIP
 openblas = ["whisper-rs/openblas"] # Optimized BLAS (Auto-enabled on Windows/Linux)
 openmp = ["whisper-rs/openmp"]     # OpenMP parallel processing
 
+# Issue #56 spike only: compiles audio::transcription::backend_probe, which
+# probes whisper-helper-{cuda,vulkan,cpu} sidecar binaries next to the exe.
+# Off by default — not wired into the live recording path or invoke_handler.
+# See docs/transcription-backends.md.
+backend_probe = ["dep:whisper-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2.6.0", features = [] }
 reqwest = { version = "0.11", features = ["blocking", "multipart", "json", "stream"] }
@@ -55,6 +61,10 @@ serde = { version = "1.0", features = ["derive"] }
 anyhow = "1.0"
 # Wire protocol shared with the llama-helper sidecar.
 llama-protocol = { path = "../../llama-protocol" }
+# Wire protocol shared with the whisper-helper sidecar spike (issue #56).
+# Optional: only pulled in by the `backend_probe` feature, which is off by
+# default.
+whisper-protocol = { path = "../../whisper-protocol", optional = true }
 # Used only for `_exit` on shutdown — see the RunEvent::Exit handler in lib.rs.
 libc = "0.2"
 # Encoding per-segment audio clips for playback in the webview.

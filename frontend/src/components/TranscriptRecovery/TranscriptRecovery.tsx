@@ -27,16 +27,19 @@ import {
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { MeetingMetadata, StoredTranscript } from "@/services/indexedDBService";
+import {
+  RecoverableMeeting,
+  PreviewTranscript,
+} from "@/hooks/useTranscriptRecovery";
 import { cn } from "@/lib/utils";
 
 interface TranscriptRecoveryProps {
   isOpen: boolean;
   onClose: () => void;
-  recoverableMeetings: MeetingMetadata[];
+  recoverableMeetings: RecoverableMeeting[];
   onRecover: (meetingId: string) => Promise<any>;
   onDelete: (meetingId: string) => Promise<void>;
-  onLoadPreview: (meetingId: string) => Promise<StoredTranscript[]>;
+  onLoadPreview: (meetingId: string) => Promise<PreviewTranscript[]>;
 }
 
 export function TranscriptRecovery({
@@ -51,7 +54,7 @@ export function TranscriptRecovery({
     null,
   );
   const [previewTranscripts, setPreviewTranscripts] = useState<
-    StoredTranscript[]
+    PreviewTranscript[]
   >([]);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [isRecovering, setIsRecovering] = useState(false);

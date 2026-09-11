@@ -12,7 +12,11 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::task::JoinHandle;
 
 use super::devices::{AudioDevice, DeviceType};
+use super::recording_phase::{self, RecordingPhase};
+use super::transcript_db_writer::TranscriptDbWriter;
 use super::RecordingManager;
+use crate::database::repositories::meeting::MeetingsRepository;
+use crate::state::AppState;
 
 // Import transcription modules
 use super::transcription::{self, reset_speech_detected_flag};
@@ -27,6 +31,50 @@ pub use super::transcription::TranscriptUpdate;
 // Global recording manager and transcription task to keep them alive during recording
 static RECORDING_MANAGER: Mutex<Option<RecordingManager>> = Mutex::new(None);
 static TRANSCRIPTION_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+
+/// Batched SQLite writer for the current session's live transcript segments
+/// (issue #57 slice 2), and its task handle. Started once `start_recording*`
+/// has a `meeting_id` and a DB pool; shut down (sender dropped, task
+/// awaited) partway through `stop_recording`, after the transcription drain
+/// has delivered every tail segment to the `transcript-update` listener.
+static TRANSCRIPT_DB_WRITER: Mutex<Option<TranscriptDbWriter>> = Mutex::new(None);
+static TRANSCRIPT_DB_WRITER_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+
+/// Fetch the SQLite pool, if `AppState` has been managed yet. `None` early
+/// in startup — e.g. a first-launch cold start racing a start/stop call
+/// before the frontend has created the database. Every call site here
+/// treats a missing pool as "log and continue" rather than failing the
+/// recording (issue #57 slice 2's explicit contract for the meeting-row
+/// writes).
+fn db_pool<R: Runtime>(app: &AppHandle<R>) -> Option<sqlx::SqlitePool> {
+    app.try_state::<AppState>()
+        .map(|s| s.db_manager.pool().clone())
+}
+
+/// Best-effort: mark `meeting_id`'s row "interrupted" (issue #57 slice 2).
+/// Used on every abnormal stop path — a fatal recording error, or the audio
+/// streams themselves failing to stop — so a row never lingers at
+/// "recording" while the app keeps running (only a real crash needs the
+/// startup sweep; this covers every case that doesn't crash the process).
+/// Never fails the caller's own error path: logs and returns either way.
+async fn mark_meeting_interrupted_best_effort<R: Runtime>(
+    app: &AppHandle<R>,
+    meeting_id: &Option<String>,
+) {
+    let Some(mid) = meeting_id else { return };
+    let Some(pool) = db_pool(app) else {
+        warn!(
+            "No DB pool available; meeting {} row was not marked interrupted",
+            mid
+        );
+        return;
+    };
+    match MeetingsRepository::mark_meeting_interrupted(&pool, mid).await {
+        Ok(true) => info!("DB: meeting {} row marked interrupted", mid),
+        Ok(false) => warn!("DB: meeting {} row not found to mark interrupted", mid),
+        Err(e) => warn!("DB: failed to mark meeting {} row interrupted: {}", mid, e),
+    }
+}
 
 /// Held from the first line of a `start_recording*` call until it returns.
 /// `is_recording()` only flips true once the manager is stored — after
@@ -64,6 +112,26 @@ impl Drop for PhaseGuard {
 /// True while a stop is still draining / finalising a previous recording.
 pub fn is_stop_in_progress() -> bool {
     STOP_IN_PROGRESS.load(Ordering::SeqCst)
+}
+
+/// Move the canonical recording-state machine (`audio::recording_phase`) to
+/// `phase` and broadcast the resulting snapshot as `recording-state`,
+/// merging in the live duration/queue-depth data this module owns
+/// (`RECORDING_MANAGER`, the transcription queue). This is the single place
+/// every phase transition in this file goes through.
+fn emit_phase<R: Runtime>(app: &AppHandle<R>, phase: RecordingPhase) {
+    let (active_duration_secs, total_pause_secs) = {
+        let guard = RECORDING_MANAGER.lock().unwrap();
+        match guard.as_ref() {
+            Some(m) => (
+                m.get_active_recording_duration(),
+                m.get_total_pause_duration(),
+            ),
+            None => (None, 0.0),
+        }
+    };
+    let chunks_in_queue = transcription::queue_depth();
+    recording_phase::set_phase(app, phase, active_duration_secs, total_pause_secs, chunks_in_queue);
 }
 
 /// Shared entry check for every start path. Refuses while another start is
@@ -130,6 +198,8 @@ fn spawn_fatal_error_stop<R: Runtime>(
         error.user_message()
     );
     let _ = app.emit("recording-error", error.user_message());
+    recording_phase::set_error_message(Some(error.user_message().to_string()));
+    emit_phase(app, RecordingPhase::Error);
 
     let app_for_stop = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -205,6 +275,11 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     // still-finalising stop) and check the live recording flag.
     let _start_phase = begin_start_phase().await?;
 
+    // The canonical state machine's first transition: Idle -> Starting,
+    // before any of the awaits below (model validation, preferences, device
+    // enumeration, PipeWire stream open) that can take a noticeable moment.
+    emit_phase(&app, RecordingPhase::Starting);
+
     // Validate that transcription models are available before starting recording
     info!("🔍 Validating transcription model availability before starting recording...");
     if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
@@ -221,6 +296,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
             }),
         );
 
+        emit_phase(&app, RecordingPhase::Idle);
         return Err(validation_error);
     }
     info!("✅ Transcription model validation passed");
@@ -299,7 +375,16 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         let now = chrono::Local::now();
         format!("Meeting {}", now.format("%Y-%m-%d_%H-%M-%S"))
     });
-    manager.set_meeting_name(Some(effective_meeting_name));
+    manager.set_meeting_name(Some(effective_meeting_name.clone()));
+
+    // Mint the meeting_id up front (issue #57 slice 2): kept for the whole
+    // session so live transcript upserts, `recording-started`/
+    // `recording-stopped`, and the `meetings` row itself all agree on one
+    // id. Minting it doesn't depend on the DB insert below succeeding — a
+    // failed insert still leaves every other use of this id well-defined
+    // (transcript upserts just won't have a row to match against).
+    let meeting_id = uuid::Uuid::new_v4().to_string();
+    manager.set_meeting_id(Some(meeting_id.clone()));
 
     // Set up error callback: on a fatal error (report_error only calls this
     // once per session — see recording_state::report_error) tell the user
@@ -312,10 +397,16 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     });
 
     // Start recording with resolved devices (replaces start_recording_with_defaults_and_auto_save call)
-    let transcription_receiver = manager
+    let transcription_receiver = match manager
         .start_recording(microphone_device, system_device, auto_save, streaming_partials)
         .await
-        .map_err(|e| format!("Failed to start recording: {}", e))?;
+    {
+        Ok(rx) => rx,
+        Err(e) => {
+            emit_phase(&app, RecordingPhase::Idle);
+            return Err(format!("Failed to start recording: {}", e));
+        }
+    };
 
     // Recording itself only needs raw PCM, but finalizing it into a
     // playable file needs ffmpeg — warn (once, non-fatal) rather than
@@ -331,6 +422,56 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     // Claim the streaming-partial receiver before the manager is moved into
     // the global (None when partials are disabled).
     let partial_receiver = manager.take_partial_receiver();
+
+    // Record the meeting name/folder for the canonical snapshot while we
+    // still own `manager` locally (the folder is created inside
+    // `start_recording` above, via the recording saver's accumulation).
+    let folder_path_for_phase = manager
+        .get_meeting_folder()
+        .map(|p| p.to_string_lossy().to_string());
+    recording_phase::set_meeting_info(
+        Some(effective_meeting_name.clone()),
+        folder_path_for_phase.clone(),
+        Some(meeting_id.clone()),
+    );
+
+    // Create the `meetings` row now, status "recording" (issue #57 slice 2)
+    // — Rust owns the row's whole lifecycle from here, so a crash mid-
+    // recording leaves a real "recording"-status row for the next startup's
+    // sweep to mark "interrupted" instead of nothing at all. Best-effort:
+    // the recording itself must never fail because this insert did.
+    if let Some(pool) = db_pool(&app) {
+        if let Err(e) = MeetingsRepository::create_recording_meeting(
+            &pool,
+            &meeting_id,
+            &effective_meeting_name,
+            folder_path_for_phase.as_deref(),
+        )
+        .await
+        {
+            warn!(
+                "Failed to create meeting row {} at recording start (continuing without it): {}",
+                meeting_id, e
+            );
+        }
+        // Batched writer for live transcript-segment upserts, regardless of
+        // whether the insert above succeeded — see its own doc comment.
+        let (writer, writer_task) = TranscriptDbWriter::start(pool);
+        *TRANSCRIPT_DB_WRITER.lock().unwrap() = Some(writer);
+        let stale_task = TRANSCRIPT_DB_WRITER_TASK.lock().unwrap().replace(writer_task);
+        if let Some(stale_task) = stale_task {
+            // Same defensive cleanup as the stale transcript-update listener
+            // below: a previous session's task should already be gone, but
+            // never leave two writers racing against the same DB rows.
+            stale_task.abort();
+            warn!("⚠️ Aborted a stale transcript DB writer task from a previous session");
+        }
+    } else {
+        warn!(
+            "No DB pool available yet; meeting {} won't be persisted to SQLite live (transcripts.ndjson on disk is unaffected)",
+            meeting_id
+        );
+    }
 
     // Store the manager globally to keep it alive
     {
@@ -370,6 +511,11 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     // Store listener ID for cleanup during stop_recording to ensure microphone is released
     {
         use tauri::Listener;
+        // Captured by value into the listener closure below so every
+        // segment it enqueues for SQLite carries this session's meeting_id,
+        // without touching the (frequently swapped) RECORDING_MANAGER lock
+        // to look it up on every event.
+        let meeting_id_for_listener = meeting_id.clone();
         let listener_id = app.listen("transcript-update", move |event: tauri::Event| {
             // Parse the transcript update from the event payload
             if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
@@ -388,6 +534,15 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
                     voice_profile_id: update.voice_profile_id.clone(),
                     source: Some(update.source.clone()),
                 };
+
+                // Persist to SQLite via the batched writer (issue #57 slice
+                // 2) — a cheap channel send, non-blocking, independent of
+                // the RecordingSaver copy saved just below.
+                if let Ok(writer_guard) = TRANSCRIPT_DB_WRITER.lock() {
+                    if let Some(writer) = writer_guard.as_ref() {
+                        writer.enqueue(meeting_id_for_listener.clone(), segment.clone());
+                    }
+                }
 
                 // Save to recording manager
                 if let Ok(manager_guard) = RECORDING_MANAGER.lock() {
@@ -419,13 +574,15 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         serde_json::json!({
             "message": "Recording started successfully with parallel processing",
             "devices": ["Default Microphone", "Default System Audio"],
-            "workers": 3
+            "workers": 3,
+            "meeting_id": meeting_id
         }),
     )
     .map_err(|e| e.to_string())?;
 
     // Update tray menu to reflect recording state
     crate::tray::update_tray_menu(&app);
+    emit_phase(&app, RecordingPhase::Recording);
 
     info!("✅ Recording started successfully with async-first approach");
 
@@ -457,6 +614,11 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     // still-finalising stop) and check the live recording flag.
     let _start_phase = begin_start_phase().await?;
 
+    // The canonical state machine's first transition: Idle -> Starting,
+    // before any of the awaits below (model validation, preferences, device
+    // enumeration, PipeWire stream open) that can take a noticeable moment.
+    emit_phase(&app, RecordingPhase::Starting);
+
     // Validate that transcription models are available before starting recording
     info!("🔍 Validating transcription model availability before starting recording...");
     if let Err(validation_error) = transcription::validate_transcription_model_ready(&app).await {
@@ -473,6 +635,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
             }),
         );
 
+        emit_phase(&app, RecordingPhase::Idle);
         return Err(validation_error);
     }
     info!("✅ Transcription model validation passed");
@@ -516,7 +679,16 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         let now = chrono::Local::now();
         format!("Meeting {}", now.format("%Y-%m-%d_%H-%M-%S"))
     });
-    manager.set_meeting_name(Some(effective_meeting_name));
+    manager.set_meeting_name(Some(effective_meeting_name.clone()));
+
+    // Mint the meeting_id up front (issue #57 slice 2): kept for the whole
+    // session so live transcript upserts, `recording-started`/
+    // `recording-stopped`, and the `meetings` row itself all agree on one
+    // id. Minting it doesn't depend on the DB insert below succeeding — a
+    // failed insert still leaves every other use of this id well-defined
+    // (transcript upserts just won't have a row to match against).
+    let meeting_id = uuid::Uuid::new_v4().to_string();
+    manager.set_meeting_id(Some(meeting_id.clone()));
 
     // Set up error callback: on a fatal error (report_error only calls this
     // once per session — see recording_state::report_error) tell the user
@@ -529,10 +701,16 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     });
 
     // Start recording with specified devices and auto_save setting
-    let transcription_receiver = manager
+    let transcription_receiver = match manager
         .start_recording(mic_device, system_device, auto_save, streaming_partials)
         .await
-        .map_err(|e| format!("Failed to start recording: {}", e))?;
+    {
+        Ok(rx) => rx,
+        Err(e) => {
+            emit_phase(&app, RecordingPhase::Idle);
+            return Err(format!("Failed to start recording: {}", e));
+        }
+    };
 
     // Recording itself only needs raw PCM, but finalizing it into a
     // playable file needs ffmpeg — warn (once, non-fatal) rather than
@@ -548,6 +726,56 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     // Claim the streaming-partial receiver before the manager is moved into
     // the global (None when partials are disabled).
     let partial_receiver = manager.take_partial_receiver();
+
+    // Record the meeting name/folder for the canonical snapshot while we
+    // still own `manager` locally (the folder is created inside
+    // `start_recording` above, via the recording saver's accumulation).
+    let folder_path_for_phase = manager
+        .get_meeting_folder()
+        .map(|p| p.to_string_lossy().to_string());
+    recording_phase::set_meeting_info(
+        Some(effective_meeting_name.clone()),
+        folder_path_for_phase.clone(),
+        Some(meeting_id.clone()),
+    );
+
+    // Create the `meetings` row now, status "recording" (issue #57 slice 2)
+    // — Rust owns the row's whole lifecycle from here, so a crash mid-
+    // recording leaves a real "recording"-status row for the next startup's
+    // sweep to mark "interrupted" instead of nothing at all. Best-effort:
+    // the recording itself must never fail because this insert did.
+    if let Some(pool) = db_pool(&app) {
+        if let Err(e) = MeetingsRepository::create_recording_meeting(
+            &pool,
+            &meeting_id,
+            &effective_meeting_name,
+            folder_path_for_phase.as_deref(),
+        )
+        .await
+        {
+            warn!(
+                "Failed to create meeting row {} at recording start (continuing without it): {}",
+                meeting_id, e
+            );
+        }
+        // Batched writer for live transcript-segment upserts, regardless of
+        // whether the insert above succeeded — see its own doc comment.
+        let (writer, writer_task) = TranscriptDbWriter::start(pool);
+        *TRANSCRIPT_DB_WRITER.lock().unwrap() = Some(writer);
+        let stale_task = TRANSCRIPT_DB_WRITER_TASK.lock().unwrap().replace(writer_task);
+        if let Some(stale_task) = stale_task {
+            // Same defensive cleanup as the stale transcript-update listener
+            // below: a previous session's task should already be gone, but
+            // never leave two writers racing against the same DB rows.
+            stale_task.abort();
+            warn!("⚠️ Aborted a stale transcript DB writer task from a previous session");
+        }
+    } else {
+        warn!(
+            "No DB pool available yet; meeting {} won't be persisted to SQLite live (transcripts.ndjson on disk is unaffected)",
+            meeting_id
+        );
+    }
 
     // Store the manager globally to keep it alive
     {
@@ -587,6 +815,11 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     // Store listener ID for cleanup during stop_recording to ensure microphone is released
     {
         use tauri::Listener;
+        // Captured by value into the listener closure below so every
+        // segment it enqueues for SQLite carries this session's meeting_id,
+        // without touching the (frequently swapped) RECORDING_MANAGER lock
+        // to look it up on every event.
+        let meeting_id_for_listener = meeting_id.clone();
         let listener_id = app.listen("transcript-update", move |event: tauri::Event| {
             // Parse the transcript update from the event payload
             if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
@@ -605,6 +838,15 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                     voice_profile_id: update.voice_profile_id.clone(),
                     source: Some(update.source.clone()),
                 };
+
+                // Persist to SQLite via the batched writer (issue #57 slice
+                // 2) — a cheap channel send, non-blocking, independent of
+                // the RecordingSaver copy saved just below.
+                if let Ok(writer_guard) = TRANSCRIPT_DB_WRITER.lock() {
+                    if let Some(writer) = writer_guard.as_ref() {
+                        writer.enqueue(meeting_id_for_listener.clone(), segment.clone());
+                    }
+                }
 
                 // Save to recording manager
                 if let Ok(manager_guard) = RECORDING_MANAGER.lock() {
@@ -639,13 +881,15 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
                 mic_device_name.unwrap_or_else(|| "Default Microphone".to_string()),
                 system_device_name.unwrap_or_else(|| "Default System Audio".to_string())
             ],
-            "workers": 3
+            "workers": 3,
+            "meeting_id": meeting_id
         }),
     )
     .map_err(|e| e.to_string())?;
 
     // Update tray menu to reflect recording state
     crate::tray::update_tray_menu(&app);
+    emit_phase(&app, RecordingPhase::Recording);
 
     info!("✅ Recording started with custom devices using async-first approach");
 
@@ -682,6 +926,26 @@ pub async fn stop_recording<R: Runtime>(
     // over the manager slot while the drain / save below is still running.
     let _stop_phase = PhaseGuard::try_acquire(&STOP_IN_PROGRESS)
         .ok_or_else(|| "Recording stop already in progress".to_string())?;
+
+    // Captured before the Stopping transition below moves the canonical
+    // phase away from Error — distinguishes a fatal-error-triggered stop
+    // (issue #57 slice 2: the meeting row should end up "interrupted") from
+    // a normal user-initiated stop ("completed"). This function runs
+    // unchanged for both — `spawn_fatal_error_stop` just calls it.
+    let was_fatal_error = recording_phase::current_phase() == RecordingPhase::Error;
+
+    // The meeting_id for this session, if any (issue #57 slice 2) — read
+    // once, up front, while the manager is still definitely present; used at
+    // the end of this function to finalise the `meetings` row.
+    let meeting_id_for_stop: Option<String> = RECORDING_MANAGER
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.get_meeting_id());
+
+    // Canonical state machine: Recording/Paused/Error -> Stopping, as early
+    // as possible in the stop flow.
+    emit_phase(&app, RecordingPhase::Stopping);
 
     // Emit shutdown progress to frontend
     let _ = app.emit(
@@ -735,9 +999,16 @@ pub async fn stop_recording<R: Runtime>(
     match stop_result {
         Ok(_) => {
             info!("✅ Audio streams stopped successfully - no more chunks will be created");
+            // Canonical state machine: Stopping -> Finalising — the force
+            // flush is done, and the drain/save that follows below can take
+            // seconds to minutes.
+            emit_phase(&app, RecordingPhase::Finalising);
         }
         Err(e) => {
             error!("❌ Failed to stop audio streams: {}", e);
+            recording_phase::set_error_message(Some(e.to_string()));
+            emit_phase(&app, RecordingPhase::Error);
+            mark_meeting_interrupted_best_effort(&app, &meeting_id_for_stop).await;
             return Err(format!("Failed to stop audio streams: {}", e));
         }
     }
@@ -851,6 +1122,25 @@ pub async fn stop_recording<R: Runtime>(
         }
     }
 
+    // Shut down the transcript DB writer (issue #57 slice 2): every segment
+    // this session enqueued has been sent by now (the listener above is
+    // gone), so dropping the writer closes its channel — the task then
+    // flushes whatever's left in its current batch and returns, which this
+    // awaits (bounded) before moving on.
+    {
+        let writer = TRANSCRIPT_DB_WRITER.lock().unwrap().take();
+        drop(writer);
+        let task = TRANSCRIPT_DB_WRITER_TASK.lock().unwrap().take();
+        if let Some(task) = task {
+            match tokio::time::timeout(tokio::time::Duration::from_secs(5), task).await {
+                Ok(_) => info!("✅ Transcript DB writer task drained and finished"),
+                Err(_) => warn!(
+                    "⏱️ Transcript DB writer task still running after drain; abandoning wait (transcripts.ndjson on disk is unaffected)"
+                ),
+            }
+        }
+    }
+
     // The streaming-partial task ends on its own once the pipeline drops its
     // sender (it clears the overlay as it exits). Give it a moment, then
     // abort anything still running so a late partial can never re-populate
@@ -931,59 +1221,96 @@ pub async fn stop_recording<R: Runtime>(
     );
 
     // Perform final cleanup with the manager if available
-    let (meeting_folder, meeting_name) = if let Some(mut manager) = manager_for_cleanup {
-        info!("🧹 Performing final cleanup and saving recording data");
+    let (meeting_folder, meeting_name, final_audio_path, final_duration_seconds) =
+        if let Some(mut manager) = manager_for_cleanup {
+            info!("🧹 Performing final cleanup and saving recording data");
 
-        // Extract meeting info BEFORE async operations
-        let meeting_folder = manager.get_meeting_folder();
-        let meeting_name = manager.get_meeting_name();
+            // Extract meeting info BEFORE async operations
+            let meeting_folder = manager.get_meeting_folder();
+            let meeting_name = manager.get_meeting_name();
 
-        match tokio::time::timeout(
-            tokio::time::Duration::from_secs(300), // 5 minutes max for file I/O
-            manager.save_recording_only(&app),
-        )
-        .await
-        {
-            Ok(Ok(_)) => {
-                info!("✅ Recording data saved successfully during cleanup");
-            }
-            Ok(Err(e)) => {
-                warn!(
-                    "⚠️ Error during recording cleanup (transcripts preserved): {}",
-                    e
-                );
-                // Don't fail shutdown - transcripts are already preserved
-            }
-            Err(_) => {
-                warn!("⏱️ File I/O timeout (5 minutes) reached during save, continuing shutdown");
-                // Don't fail shutdown - transcripts are already preserved
-            }
-        }
+            let (audio_path, duration_seconds) = match tokio::time::timeout(
+                tokio::time::Duration::from_secs(300), // 5 minutes max for file I/O
+                manager.save_recording_only(&app),
+            )
+            .await
+            {
+                Ok(Ok((audio_path, duration_seconds))) => {
+                    info!("✅ Recording data saved successfully during cleanup");
+                    (audio_path, duration_seconds)
+                }
+                Ok(Err(e)) => {
+                    warn!(
+                        "⚠️ Error during recording cleanup (transcripts preserved): {}",
+                        e
+                    );
+                    // Don't fail shutdown - transcripts are already preserved
+                    (None, None)
+                }
+                Err(_) => {
+                    warn!(
+                        "⏱️ File I/O timeout (5 minutes) reached during save, continuing shutdown"
+                    );
+                    // Don't fail shutdown - transcripts are already preserved
+                    (None, None)
+                }
+            };
 
-        (meeting_folder, meeting_name)
-    } else {
-        info!("ℹ️ No recording manager available for cleanup");
-        (None, None)
-    };
+            (meeting_folder, meeting_name, audio_path, duration_seconds)
+        } else {
+            info!("ℹ️ No recording manager available for cleanup");
+            (None, None, None, None)
+        };
 
     // Recording state was already cleared when the manager was taken out of
     // `RECORDING_MANAGER` (and via `RecordingState::cleanup()`/`stop_recording()`
     // internally) earlier in this shutdown sequence — nothing left to flip here.
 
-    // Step 4.5: Prepare metadata for frontend (NO database save)
-    // NOTE: We do NOT save to database here. The frontend will save after all transcripts are displayed.
-    // This ensures the user sees all transcripts streaming in before the database save happens.
+    // Step 4.5: Finalise the meeting row (issue #57 slice 2) and prepare
+    // metadata for the frontend. The row itself — title, transcripts,
+    // status — is entirely Rust's; the frontend's post-stop save now only
+    // ever touches fields it still owns (see `api_save_meeting_title`).
     let (folder_path_str, meeting_name_str) = match (&meeting_folder, &meeting_name) {
         (Some(path), Some(name)) => (Some(path.to_string_lossy().to_string()), Some(name.clone())),
         _ => (None, None),
     };
 
-    info!("📤 Preparing recording metadata for frontend save");
+    info!("📤 Preparing recording metadata for frontend");
     info!("   folder_path: {:?}", folder_path_str);
     info!("   meeting_name: {:?}", meeting_name_str);
+    info!("   meeting_id: {:?}", meeting_id_for_stop);
 
-    // Database save removed - frontend will handle this after receiving all transcripts
-    info!("ℹ️ Skipping database save in Rust - frontend will save after all transcripts received");
+    if let Some(mid) = &meeting_id_for_stop {
+        if let Some(pool) = db_pool(&app) {
+            let result = if was_fatal_error {
+                MeetingsRepository::mark_meeting_interrupted(&pool, mid)
+                    .await
+                    .map(|_| ())
+            } else {
+                MeetingsRepository::mark_meeting_completed(
+                    &pool,
+                    mid,
+                    final_duration_seconds,
+                    final_audio_path.as_deref(),
+                )
+                .await
+                .map(|_| ())
+            };
+            match result {
+                Ok(_) => info!(
+                    "DB: meeting {} row finalised ({})",
+                    mid,
+                    if was_fatal_error { "interrupted" } else { "completed" }
+                ),
+                Err(e) => warn!("DB: failed to finalise meeting {} row: {}", mid, e),
+            }
+        } else {
+            warn!(
+                "No DB pool available; meeting {} row was not finalised",
+                mid
+            );
+        }
+    }
 
     // Step 5: Complete shutdown
     let _ = app.emit(
@@ -995,19 +1322,25 @@ pub async fn stop_recording<R: Runtime>(
         }),
     );
 
-    // Emit final stop event with folder_path and meeting_name for frontend to save
+    // Emit final stop event with folder_path, meeting_name and meeting_id.
+    // The frontend no longer needs meeting_id to look up *whether* it has a
+    // meeting to update — the row already exists — only to know which row.
     app.emit(
         "recording-stopped",
         serde_json::json!({
-            "message": "Recording stopped - frontend will save after all transcripts received",
+            "message": "Recording stopped",
             "folder_path": folder_path_str,
-            "meeting_name": meeting_name_str
+            "meeting_name": meeting_name_str,
+            "meeting_id": meeting_id_for_stop
         }),
     )
     .map_err(|e| e.to_string())?;
 
     // Update tray menu to reflect stopped state
     crate::tray::update_tray_menu(&app);
+    // Canonical state machine: Finalising -> Idle, now that
+    // `recording-stopped` has been emitted.
+    emit_phase(&app, RecordingPhase::Idle);
 
     info!("🎉 Recording stopped successfully with ZERO transcript chunks lost");
     Ok(())
@@ -1044,28 +1377,32 @@ pub async fn pause_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), String
         return Err("No recording is currently active".to_string());
     }
 
-    // Access the recording manager and pause it
-    let manager_guard = RECORDING_MANAGER.lock().unwrap();
-    if let Some(manager) = manager_guard.as_ref() {
-        manager.pause_recording().map_err(|e| e.to_string())?;
-
-        // Emit pause event to frontend
-        app.emit(
-            "recording-paused",
-            serde_json::json!({
-                "message": "Recording paused"
-            }),
-        )
-        .map_err(|e| e.to_string())?;
-
-        // Update tray menu to reflect paused state
-        crate::tray::update_tray_menu(&app);
-
-        info!("Recording paused successfully");
-        Ok(())
-    } else {
-        Err("No recording manager found".to_string())
+    // Access the recording manager and pause it. Scoped so the lock is
+    // dropped before `emit_phase` below re-locks the same (non-reentrant)
+    // static to read live duration data.
+    {
+        let manager_guard = RECORDING_MANAGER.lock().unwrap();
+        match manager_guard.as_ref() {
+            Some(manager) => manager.pause_recording().map_err(|e| e.to_string())?,
+            None => return Err("No recording manager found".to_string()),
+        }
     }
+
+    // Emit pause event to frontend
+    app.emit(
+        "recording-paused",
+        serde_json::json!({
+            "message": "Recording paused"
+        }),
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Update tray menu to reflect paused state
+    crate::tray::update_tray_menu(&app);
+    emit_phase(&app, RecordingPhase::Paused);
+
+    info!("Recording paused successfully");
+    Ok(())
 }
 
 /// Resume the current recording
@@ -1078,28 +1415,32 @@ pub async fn resume_recording<R: Runtime>(app: AppHandle<R>) -> Result<(), Strin
         return Err("No recording is currently active".to_string());
     }
 
-    // Access the recording manager and resume it
-    let manager_guard = RECORDING_MANAGER.lock().unwrap();
-    if let Some(manager) = manager_guard.as_ref() {
-        manager.resume_recording().map_err(|e| e.to_string())?;
-
-        // Emit resume event to frontend
-        app.emit(
-            "recording-resumed",
-            serde_json::json!({
-                "message": "Recording resumed"
-            }),
-        )
-        .map_err(|e| e.to_string())?;
-
-        // Update tray menu to reflect resumed state
-        crate::tray::update_tray_menu(&app);
-
-        info!("Recording resumed successfully");
-        Ok(())
-    } else {
-        Err("No recording manager found".to_string())
+    // Access the recording manager and resume it. Scoped so the lock is
+    // dropped before `emit_phase` below re-locks the same (non-reentrant)
+    // static to read live duration data.
+    {
+        let manager_guard = RECORDING_MANAGER.lock().unwrap();
+        match manager_guard.as_ref() {
+            Some(manager) => manager.resume_recording().map_err(|e| e.to_string())?,
+            None => return Err("No recording manager found".to_string()),
+        }
     }
+
+    // Emit resume event to frontend
+    app.emit(
+        "recording-resumed",
+        serde_json::json!({
+            "message": "Recording resumed"
+        }),
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Update tray menu to reflect resumed state
+    crate::tray::update_tray_menu(&app);
+    emit_phase(&app, RecordingPhase::Recording);
+
+    info!("Recording resumed successfully");
+    Ok(())
 }
 
 /// Check if recording is currently paused
@@ -1116,31 +1457,66 @@ pub async fn is_recording_paused() -> bool {
 /// Get detailed recording state
 #[tauri::command]
 pub async fn get_recording_state() -> serde_json::Value {
-    let manager_guard = RECORDING_MANAGER.lock().unwrap();
+    let (
+        is_recording_flag,
+        is_paused_flag,
+        is_active_flag,
+        recording_duration,
+        active_duration,
+        total_pause_duration,
+        current_pause_duration,
+    ) = {
+        let manager_guard = RECORDING_MANAGER.lock().unwrap();
+        match manager_guard.as_ref() {
+            Some(manager) => (
+                manager.is_recording(),
+                manager.is_paused(),
+                manager.is_active(),
+                manager.get_recording_duration(),
+                manager.get_active_recording_duration(),
+                manager.get_total_pause_duration(),
+                manager.get_current_pause_duration(),
+            ),
+            None => (false, false, false, None, None, 0.0, None),
+        }
+    };
+    let chunks_in_queue = transcription::queue_depth();
 
-    if let Some(manager) = manager_guard.as_ref() {
-        serde_json::json!({
-            "is_recording": manager.is_recording(),
-            "is_finalising": is_stop_in_progress(),
-            "is_paused": manager.is_paused(),
-            "is_active": manager.is_active(),
-            "recording_duration": manager.get_recording_duration(),
-            "active_duration": manager.get_active_recording_duration(),
-            "total_pause_duration": manager.get_total_pause_duration(),
-            "current_pause_duration": manager.get_current_pause_duration()
-        })
-    } else {
-        serde_json::json!({
-            "is_recording": false,
-            "is_finalising": is_stop_in_progress(),
-            "is_paused": false,
-            "is_active": false,
-            "recording_duration": null,
-            "active_duration": null,
-            "total_pause_duration": 0.0,
-            "current_pause_duration": null
-        })
+    // The canonical snapshot (phase, started_at_ms, meeting_name,
+    // folder_path, error, seq) merged with the live duration/queue data
+    // above — the same fields `recording-state` events carry, so a fresh
+    // window/tab that only calls this once on mount gets exactly what it
+    // would have received had it been listening from the start.
+    let snapshot = recording_phase::build_snapshot(active_duration, total_pause_duration, chunks_in_queue);
+
+    let mut value = serde_json::to_value(&snapshot).unwrap_or_else(|_| serde_json::json!({}));
+    if let serde_json::Value::Object(map) = &mut value {
+        // Legacy keys kept for compatibility with existing callers.
+        map.insert("is_recording".to_string(), serde_json::json!(is_recording_flag));
+        map.insert(
+            "is_finalising".to_string(),
+            serde_json::json!(is_stop_in_progress()),
+        );
+        map.insert("is_paused".to_string(), serde_json::json!(is_paused_flag));
+        map.insert("is_active".to_string(), serde_json::json!(is_active_flag));
+        map.insert(
+            "recording_duration".to_string(),
+            serde_json::json!(recording_duration),
+        );
+        map.insert(
+            "active_duration".to_string(),
+            serde_json::json!(active_duration),
+        );
+        map.insert(
+            "total_pause_duration".to_string(),
+            serde_json::json!(total_pause_duration),
+        );
+        map.insert(
+            "current_pause_duration".to_string(),
+            serde_json::json!(current_pause_duration),
+        );
     }
+    value
 }
 
 /// Get the meeting folder path for the current recording

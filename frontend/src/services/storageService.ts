@@ -50,6 +50,60 @@ class StorageService {
   async getMeeting(meetingId: string): Promise<Meeting> {
     return invoke<Meeting>("api_get_meeting", { meetingId });
   }
+
+  /**
+   * Update the title of a meeting Rust already created and finalised
+   * (issue #57 slice 2 — the meeting row and its transcripts are Rust's;
+   * this is the one field the frontend still owns post-stop, e.g. a title
+   * the user edited live that differs from the name recording started
+   * with).
+   * @param meetingId - ID of the already-existing meeting row
+   * @param title - The final title to set
+   */
+  async finalizeMeetingTitle(meetingId: string, title: string): Promise<void> {
+    await invoke("api_save_meeting_title", { meetingId, title });
+  }
+
+  /**
+   * List meetings an unclean shutdown left "interrupted" (issue #57 slice
+   * 2), most recent first.
+   */
+  async listInterruptedMeetings(): Promise<InterruptedMeeting[]> {
+    return invoke<InterruptedMeeting[]>("list_interrupted_meetings");
+  }
+
+  /**
+   * Recover one interrupted meeting: merges any `.checkpoints` audio still
+   * on disk and marks the row "completed". Its transcripts need no recovery
+   * work — they were already persisted live, up to whatever was flushed
+   * before the interruption.
+   */
+  async recoverMeeting(meetingId: string): Promise<RecoverMeetingResult> {
+    return invoke<RecoverMeetingResult>("recover_meeting", { meetingId });
+  }
+}
+
+export interface InterruptedMeeting {
+  meeting_id: string;
+  title: string;
+  folder_path?: string | null;
+  created_at: string;
+  segment_count: number;
+  has_audio_checkpoints: boolean;
+}
+
+export interface AudioRecoveryStatus {
+  status: string; // "success" | "partial" | "failed" | "none"
+  chunk_count: number;
+  estimated_duration_seconds: number;
+  audio_file_path?: string | null;
+  message: string;
+}
+
+export interface RecoverMeetingResult {
+  success: boolean;
+  meeting_id: string;
+  audio_recovery_status?: AudioRecoveryStatus | null;
 }
 
 // Export singleton instance

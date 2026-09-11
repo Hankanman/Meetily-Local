@@ -55,74 +55,88 @@ fn toggle_recording_handler<R: Runtime>(app: &AppHandle<R>) {
     focus_main_window(app);
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
-        if crate::is_recording().await {
-            // Immediately show stopping state
-            set_tray_state(&app_clone, RecordingState::Stopping);
+        use crate::audio::recording_phase::RecordingPhase;
 
-            log::info!("Tray toggle: Stopping recording...");
+        // Decide start vs. stop from the canonical recording-state machine
+        // rather than the `is_recording()` boolean: that flips false ~100ms
+        // into a stop while the drain/finalise below still owns the manager
+        // slot for seconds (issue #35), and it's never true during Starting
+        // either. Phase gives every intermediate state its own answer
+        // instead of collapsing them onto "not recording".
+        let phase = crate::audio::recording_phase::current_phase();
+        match phase {
+            RecordingPhase::Recording | RecordingPhase::Paused => {
+                // Immediately show stopping state
+                set_tray_state(&app_clone, RecordingState::Stopping);
 
-            // Generate save path (same as RecordingControls.tsx)
-            let data_dir = match app_clone.path().app_data_dir() {
-                Ok(dir) => dir,
-                Err(e) => {
-                    log::error!("Failed to get app data dir: {}", e);
-                    update_tray_menu_async(&app_clone).await;
-                    return;
-                }
-            };
+                log::info!("Tray toggle: Stopping recording...");
 
-            let timestamp = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
-            let save_path = data_dir.join(format!("recording-{}.wav", timestamp));
+                // Generate save path (same as RecordingControls.tsx)
+                let data_dir = match app_clone.path().app_data_dir() {
+                    Ok(dir) => dir,
+                    Err(e) => {
+                        log::error!("Failed to get app data dir: {}", e);
+                        update_tray_menu_async(&app_clone).await;
+                        return;
+                    }
+                };
 
-            // Call Rust stop_recording command (like pause/resume pattern)
-            let stop_result = crate::audio::recording_commands::stop_recording(
-                app_clone.clone(),
-                crate::audio::recording_commands::RecordingArgs {
-                    save_path: save_path.to_string_lossy().to_string(),
-                },
-            )
-            .await;
+                let timestamp = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+                let save_path = data_dir.join(format!("recording-{}.wav", timestamp));
 
-            // Handle result
-            match stop_result {
-                Ok(_) => {
-                    log::info!("Tray toggle: Recording stopped successfully");
+                // Call Rust stop_recording command (like pause/resume pattern)
+                let stop_result = crate::audio::recording_commands::stop_recording(
+                    app_clone.clone(),
+                    crate::audio::recording_commands::RecordingArgs {
+                        save_path: save_path.to_string_lossy().to_string(),
+                    },
+                )
+                .await;
 
-                    // Trigger frontend post-processing via event (works from any page)
-                    // (SQLite save, navigation, analytics)
-                    if let Err(e) = app_clone.emit("recording-stop-complete", true) {
-                        log::error!(
-                            "Tray toggle: Failed to emit recording-stop-complete event: {}",
-                            e
-                        );
+                // Handle result
+                match stop_result {
+                    Ok(_) => {
+                        log::info!("Tray toggle: Recording stopped successfully");
+
+                        // Trigger frontend post-processing via event (works from any page)
+                        // (SQLite save, navigation, analytics)
+                        if let Err(e) = app_clone.emit("recording-stop-complete", true) {
+                            log::error!(
+                                "Tray toggle: Failed to emit recording-stop-complete event: {}",
+                                e
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Tray toggle: Failed to stop recording: {}", e);
+                        // Revert tray state on error
+                        update_tray_menu_async(&app_clone).await;
                     }
                 }
-                Err(e) => {
-                    log::error!("Tray toggle: Failed to stop recording: {}", e);
-                    // Revert tray state on error
-                    update_tray_menu_async(&app_clone).await;
+            }
+            RecordingPhase::Idle => {
+                // Immediately show starting state
+                set_tray_state(&app_clone, RecordingState::Starting);
+
+                log::info!("Emitting start recording event from tray");
+                if let Some(window) = app_clone.get_webview_window("main") {
+                    let _ = window.eval("sessionStorage.setItem('autoStartRecording', 'true')"); // Set the flag to start recording automatically
+                    let _ = window.eval("window.location.assign('/')");
                 }
             }
-        } else if crate::audio::recording_commands::is_stop_in_progress() {
-            // A previous recording is still draining/finalising on the Rust
-            // side (transcription flush, audio merge) even though
-            // `is_recording()` has already gone false. Navigating now would
-            // reload the page mid-save and abort the in-flight SQLite write
-            // (issue #35) - so do nothing and let the user retry once the
-            // finalise completes. `start_recording` itself would refuse this
-            // too, but we want to avoid the destructive `location.assign`
-            // reload entirely, not just fail the start after it.
-            log::info!(
-                "Tray toggle: ignoring start - previous recording still finalising"
-            );
-        } else {
-            // Immediately show starting state
-            set_tray_state(&app_clone, RecordingState::Starting);
-
-            log::info!("Emitting start recording event from tray");
-            if let Some(window) = app_clone.get_webview_window("main") {
-                let _ = window.eval("sessionStorage.setItem('autoStartRecording', 'true')"); // Set the flag to start recording automatically
-                let _ = window.eval("window.location.assign('/')");
+            RecordingPhase::Starting
+            | RecordingPhase::Stopping
+            | RecordingPhase::Finalising
+            | RecordingPhase::Error => {
+                // A start or stop is already in flight (or the session just
+                // ended in error and hasn't reached Idle yet). Navigating
+                // now would reload the page mid-save and abort an in-flight
+                // SQLite write (issue #35) - so do nothing and let the user
+                // retry once the current phase settles.
+                log::info!(
+                    "Tray toggle: ignoring click - recording phase is {:?}",
+                    phase
+                );
             }
         }
     });
