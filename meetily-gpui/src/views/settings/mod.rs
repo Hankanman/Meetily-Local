@@ -10,6 +10,7 @@ mod appearance;
 mod beta;
 mod calendar;
 mod integrations;
+mod model_utils;
 mod notifications;
 mod recording;
 mod state;
@@ -68,6 +69,57 @@ impl SettingsView {
                         cx.notify();
                     }
                 }
+                // Ollama model manager (Settings → Summary, Ollama section):
+                // same three-event shape as the Whisper events above, just a
+                // different event-name prefix.
+                "ollama-model-download-progress" => {
+                    if let Some(payload) = event.decode::<DownloadProgress>() {
+                        cx.update_global::<state::SettingsCache, _>(|cache, _| {
+                            cache
+                                .ollama_pull_progress
+                                .insert(payload.model_name, payload.progress);
+                        });
+                        cx.notify();
+                    }
+                }
+                "ollama-model-download-complete" => {
+                    if let Some(payload) = event.decode::<DownloadComplete>() {
+                        cx.update_global::<state::SettingsCache, _>(|cache, _| {
+                            cache.ollama_pull_progress.remove(&payload.model_name);
+                        });
+                        state::refresh_ollama_models(cx.entity(), cx);
+                    }
+                }
+                "ollama-model-download-error" => {
+                    if let Some(payload) = event.decode::<DownloadError>() {
+                        cx.update_global::<state::SettingsCache, _>(|cache, _| {
+                            cache.ollama_pull_progress.remove(&payload.model_name);
+                            cache.ollama_error = Some(payload.error);
+                        });
+                        cx.notify();
+                    }
+                }
+                // Built-in AI model manager (Settings → Summary,
+                // "Built-in AI" section).
+                "builtin-ai-download-progress" => {
+                    if let Some(payload) = event.decode::<BuiltinDownloadProgress>() {
+                        let done = matches!(payload.status.as_str(), "completed" | "cancelled" | "error");
+                        cx.update_global::<state::SettingsCache, _>(|cache, _| {
+                            if done {
+                                cache.builtin_download_progress.remove(&payload.model);
+                            } else {
+                                cache
+                                    .builtin_download_progress
+                                    .insert(payload.model.clone(), payload.progress);
+                            }
+                        });
+                        if done {
+                            state::refresh_builtin_models(cx.entity(), cx);
+                        } else {
+                            cx.notify();
+                        }
+                    }
+                }
                 _ => {}
             }
         })
@@ -95,6 +147,13 @@ struct DownloadError {
     #[serde(rename = "modelName")]
     model_name: String,
     error: String,
+}
+
+#[derive(serde::Deserialize)]
+struct BuiltinDownloadProgress {
+    model: String,
+    progress: u8,
+    status: String,
 }
 
 impl Render for SettingsView {

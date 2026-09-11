@@ -3,6 +3,7 @@
 //! against the same Tauri-free core (`meetily_core::mcp_config`).
 
 use gpui_kit::component::{
+    button::Button,
     clipboard::Clipboard,
     h_flex, v_flex,
     label::Label,
@@ -52,6 +53,7 @@ fn info_item(view: &Entity<SettingsView>) -> SettingItem {
             Some(path) => format!("Binary not found at last known path: {}", path),
             None => "Binary not found — build meetily-mcp or set $MEETILY_MCP_BIN".to_string(),
         };
+        let reveal_path = info.binary_path.clone().filter(|_| info.binary_found);
 
         let bin_display = info
             .binary_path
@@ -66,11 +68,28 @@ fn info_item(view: &Entity<SettingsView>) -> SettingItem {
             .gap_3()
             .child(Label::new(format!("{}{}", db_line, db_exists)).text_color(cx.theme().muted_foreground))
             .child(
-                Label::new(binary_line).text_color(if info.binary_found {
-                    cx.theme().success
-                } else {
-                    cx.theme().danger
-                }),
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        Label::new(binary_line).text_color(if info.binary_found {
+                            cx.theme().success
+                        } else {
+                            cx.theme().danger
+                        }),
+                    )
+                    .children(reveal_path.map(|path| {
+                        Button::new("mcp-reveal-binary")
+                            .outline()
+                            .label("Show in file manager")
+                            .on_click(move |_, _, _cx| {
+                                if let Err(e) = meetily_core::mcp_config::reveal_mcp_binary(path.clone()) {
+                                    log::warn!("settings: failed to reveal MCP binary: {}", e);
+                                }
+                            })
+                    })),
             )
             .child(snippet_block(cx, "Claude Code", &claude_code_snippet))
             .child(snippet_block(cx, "Claude Desktop / other MCP JSON config", &json_snippet))

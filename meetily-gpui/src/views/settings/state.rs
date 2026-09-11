@@ -178,6 +178,30 @@ pub struct SettingsCache {
 
     /// "light" | "dark" | "system".
     pub theme_pref: String,
+
+    /// Live-fetched summary model lists, keyed by provider id
+    /// ("openai"/"claude"/"groq"/"openrouter"/"ollama") — populated
+    /// on-demand by `fetch_provider_models` (mirrors `ModelSettingsModal`'s
+    /// per-provider `models`/`openaiModels`/... state).
+    pub provider_models: HashMap<String, Vec<String>>,
+    pub provider_models_loading: HashMap<String, bool>,
+    pub provider_models_error: HashMap<String, String>,
+
+    /// Ollama model manager (Settings → Summary, Ollama section): models
+    /// currently installed on the configured endpoint, mirroring
+    /// `OllamaModelsList`. `ollama_pull_progress` is modelName -> percent
+    /// for a pull currently in progress.
+    pub ollama_installed: Vec<meetily_core::ollama::OllamaModel>,
+    pub ollama_installed_loading: bool,
+    pub ollama_pull_progress: HashMap<String, u8>,
+    pub ollama_error: Option<String>,
+
+    /// Built-in AI model manager (Settings → Summary, "Built-in AI"
+    /// section): live status of the local llama.cpp models, mirroring
+    /// `BuiltInModelManager`. `builtin_download_progress` is modelName ->
+    /// percent for a download currently in progress.
+    pub builtin_models: Vec<meetily_core::summary::summary_engine::ModelInfo>,
+    pub builtin_download_progress: HashMap<String, u8>,
 }
 
 impl Global for SettingsCache {}
@@ -756,6 +780,280 @@ pub fn calendar_refresh(cx: &mut App, view: Entity<SettingsView>, source_id: Str
             });
             let _ = view.update(cx, |_, cx| cx.notify());
         }
+    })
+    .detach();
+}
+
+/// Fetch the live model list for `provider` (Settings → Summary's model
+/// picker) and cache it in `provider_models`. Mirrors
+/// `ModelSettingsModal`'s `fetchOllamaModels`/`loadOpenAIModels`/etc: keys
+/// (openai/claude/groq) are read from SQLite server-side rather than kept in
+/// the in-memory cache, since `SettingsCache` deliberately never holds
+/// plaintext API keys once saved (see its doc comment).
+pub fn fetch_provider_models(cx: &mut App, view: Entity<SettingsView>, provider: String) {
+    {
+        let cache = cx.global_mut::<SettingsCache>();
+        cache.provider_models_loading.insert(provider.clone(), true);
+        cache.provider_models_error.remove(&provider);
+    }
+    let _ = view.update(cx, |_, cx| cx.notify());
+
+    let services = AppServices::global(cx);
+    let io = services.io.clone();
+    let pool = services.pool();
+    let ollama_endpoint = SettingsCache::global(cx).summary.ollama_endpoint.clone();
+
+    let provider_for_task = provider.clone();
+    cx.spawn(async move |cx| {
+        let result: Result<Vec<String>, String> = io
+            .spawn(async move {
+                match provider_for_task.as_str() {
+                    "ollama" => {
+                        let endpoint = if ollama_endpoint.is_empty() { None } else { Some(ollama_endpoint) };
+                        meetily_core::ollama::get_ollama_models(endpoint)
+                            .await
+                            .map(|models| models.into_iter().map(|m| m.name).collect())
+                    }
+                    "openrouter" => meetily_core::openrouter::get_openrouter_models()
+                        .await
+                        .map(|models| models.into_iter().map(|m| m.id).collect()),
+                    "openai" | "claude" | "groq" => {
+                        let key = match &pool {
+                            Some(pool) => SettingsRepository::get_api_key(pool, &provider_for_task)
+                                .await
+                                .ok()
+                                .flatten(),
+                            None => None,
+                        };
+                        match provider_for_task.as_str() {
+                            "openai" => meetily_core::openai::openai::get_openai_models(key)
+                                .await
+                                .map(|models| models.into_iter().map(|m| m.id).collect()),
+                            "claude" => meetily_core::anthropic::anthropic::get_anthropic_models(key)
+                                .await
+                                .map(|models| models.into_iter().map(|m| m.id).collect()),
+                            "groq" => meetily_core::groq::groq::get_groq_models(key)
+                                .await
+                                .map(|models| models.into_iter().map(|m| m.id).collect()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    _ => Ok(Vec::new()),
+                }
+            })
+            .await
+            .unwrap_or_else(|_| Err("model list fetch task panicked".to_string()));
+
+        let _ = cx.update(|cx| {
+            cx.update_global::<SettingsCache, _>(|cache, _| {
+                cache.provider_models_loading.insert(provider.clone(), false);
+                match result {
+                    Ok(models) => {
+                        cache.provider_models.insert(provider.clone(), models);
+                        cache.provider_models_error.remove(&provider);
+                    }
+                    Err(e) => {
+                        log::warn!("settings: failed to fetch {} models: {}", provider, e);
+                        cache.provider_models_error.insert(provider, e);
+                    }
+                }
+            });
+        });
+        let _ = view.update(cx, |_, cx| cx.notify());
+    })
+    .detach();
+}
+
+/// Refresh the Ollama-installed model list (Settings → Summary, Ollama
+/// model manager) against the configured endpoint. Mirrors
+/// `fetchOllamaModels`.
+pub fn refresh_ollama_models(view: Entity<SettingsView>, cx: &mut App) {
+    cx.global_mut::<SettingsCache>().ollama_installed_loading = true;
+    let _ = view.update(cx, |_, cx| cx.notify());
+
+    let services = AppServices::global(cx);
+    let io = services.io.clone();
+    let ollama_endpoint = SettingsCache::global(cx).summary.ollama_endpoint.clone();
+
+    cx.spawn(async move |cx| {
+        let endpoint = if ollama_endpoint.is_empty() { None } else { Some(ollama_endpoint) };
+        let result = io.spawn(meetily_core::ollama::get_ollama_models(endpoint)).await;
+
+        let _ = cx.update(|cx| {
+            cx.update_global::<SettingsCache, _>(|cache, _| {
+                cache.ollama_installed_loading = false;
+                match result {
+                    Ok(Ok(models)) => {
+                        cache.ollama_installed = models;
+                        cache.ollama_error = None;
+                    }
+                    Ok(Err(e)) => {
+                        cache.ollama_installed = Vec::new();
+                        cache.ollama_error = Some(e);
+                    }
+                    Err(_) => {
+                        cache.ollama_error = Some("model list refresh task panicked".to_string());
+                    }
+                }
+            });
+        });
+        let _ = view.update(cx, |_, cx| cx.notify());
+    })
+    .detach();
+}
+
+/// Pull an Ollama model by name (Settings → Summary, Ollama model manager's
+/// "Download" button). Progress arrives via the `ollama-model-download-*`
+/// core events, mirrored into `ollama_pull_progress` by `SettingsView`.
+pub fn pull_ollama_model(cx: &mut App, view: &Entity<SettingsView>, model_name: String) {
+    let services = AppServices::global(cx);
+    let sink = services.sink.clone();
+    let io = services.io.clone();
+    let ollama_endpoint = SettingsCache::global(cx).summary.ollama_endpoint.clone();
+
+    {
+        let cache = cx.global_mut::<SettingsCache>();
+        cache.ollama_pull_progress.insert(model_name.clone(), 0);
+        cache.ollama_error = None;
+    }
+    let _ = view.update(cx, |_, cx| cx.notify());
+
+    io.spawn(async move {
+        let endpoint = if ollama_endpoint.is_empty() { None } else { Some(ollama_endpoint) };
+        if let Err(e) = meetily_core::ollama::pull_ollama_model_with_progress(sink, model_name.clone(), endpoint)
+            .await
+        {
+            log::warn!("settings: failed to pull Ollama model '{}': {}", model_name, e);
+        }
+    });
+}
+
+/// Delete an installed Ollama model, then refresh the installed list.
+pub fn delete_ollama_model(cx: &mut App, view: Entity<SettingsView>, model_name: String) {
+    let services = AppServices::global(cx);
+    let io = services.io.clone();
+    let ollama_endpoint = SettingsCache::global(cx).summary.ollama_endpoint.clone();
+
+    cx.spawn(async move |cx| {
+        let endpoint = if ollama_endpoint.is_empty() { None } else { Some(ollama_endpoint) };
+        let result = io
+            .spawn(meetily_core::ollama::delete_ollama_model(model_name.clone(), endpoint))
+            .await;
+
+        if let Ok(Err(e)) = &result {
+            log::warn!("settings: failed to delete Ollama model '{}': {}", model_name, e);
+        }
+        let _ = cx.update(|cx| {
+            refresh_ollama_models(view.clone(), cx);
+        });
+    })
+    .detach();
+}
+
+/// List the built-in AI models with live status (Settings → Summary,
+/// "Built-in AI" section). Mirrors `BuiltInModelManager.fetchModels`.
+pub fn refresh_builtin_models(view: Entity<SettingsView>, cx: &mut App) {
+    let services = AppServices::global(cx);
+    let io = services.io.clone();
+    let manager_slot = services.builtin_manager_slot();
+
+    cx.spawn(async move |cx| {
+        let result = io
+            .spawn(async move {
+                let manager = meetily_core::summary::summary_engine::service::ensure_manager(&manager_slot)
+                    .await?;
+                Ok::<_, String>(manager.list_models().await)
+            })
+            .await;
+
+        if let Ok(Ok(models)) = result {
+            let _ = cx.update(|cx| {
+                cx.update_global::<SettingsCache, _>(|cache, _| {
+                    cache.builtin_models = models;
+                });
+            });
+            let _ = view.update(cx, |_, cx| cx.notify());
+        } else if let Ok(Err(e)) = result {
+            log::warn!("settings: failed to list built-in AI models: {}", e);
+        }
+    })
+    .detach();
+}
+
+/// Download a built-in AI model. Progress arrives via
+/// `builtin-ai-download-progress`, mirrored by `SettingsView`, which also
+/// calls `refresh_builtin_models` once the download settles.
+pub fn download_builtin_model(cx: &mut App, view: &Entity<SettingsView>, model_name: String) {
+    let services = AppServices::global(cx);
+    let sink = services.sink.clone();
+    let io = services.io.clone();
+    let manager_slot = services.builtin_manager_slot();
+
+    cx.global_mut::<SettingsCache>()
+        .builtin_download_progress
+        .insert(model_name.clone(), 0);
+    let _ = view.update(cx, |_, cx| cx.notify());
+
+    io.spawn(async move {
+        match meetily_core::summary::summary_engine::service::ensure_manager(&manager_slot).await {
+            Ok(manager) => {
+                if let Err(e) = meetily_core::summary::summary_engine::service::download_builtin_ai_model(
+                    manager,
+                    model_name.clone(),
+                    sink,
+                )
+                .await
+                {
+                    log::warn!("settings: failed to download built-in AI model '{}': {}", model_name, e);
+                }
+            }
+            Err(e) => log::warn!("settings: built-in AI model manager unavailable: {}", e),
+        }
+    });
+}
+
+/// Cancel an in-progress built-in AI model download.
+pub fn cancel_builtin_download(cx: &mut App, view: Entity<SettingsView>, model_name: String) {
+    let services = AppServices::global(cx);
+    let io = services.io.clone();
+    let manager_slot = services.builtin_manager_slot();
+
+    cx.global_mut::<SettingsCache>()
+        .builtin_download_progress
+        .remove(&model_name);
+    let _ = view.update(cx, |_, cx| cx.notify());
+
+    io.spawn(async move {
+        if let Ok(manager) = meetily_core::summary::summary_engine::service::ensure_manager(&manager_slot).await {
+            if let Err(e) = manager.cancel_download(&model_name).await {
+                log::warn!("settings: failed to cancel built-in AI download '{}': {}", model_name, e);
+            }
+        }
+    });
+}
+
+/// Delete a downloaded (or corrupted) built-in AI model, then refresh the
+/// list.
+pub fn delete_builtin_model(view: Entity<SettingsView>, cx: &mut App, model_name: String) {
+    let services = AppServices::global(cx);
+    let io = services.io.clone();
+    let manager_slot = services.builtin_manager_slot();
+
+    cx.spawn(async move |cx| {
+        let result = io
+            .spawn(async move {
+                let manager = meetily_core::summary::summary_engine::service::ensure_manager(&manager_slot)
+                    .await?;
+                manager.delete_model(&model_name).await.map_err(|e| e.to_string())
+            })
+            .await;
+
+        if let Ok(Err(e)) = result {
+            log::warn!("settings: failed to delete built-in AI model: {}", e);
+        }
+        let _ = cx.update(|cx| {
+            refresh_builtin_models(view.clone(), cx);
+        });
     })
     .detach();
 }

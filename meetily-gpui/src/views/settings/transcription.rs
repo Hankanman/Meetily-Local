@@ -95,10 +95,50 @@ fn model_row(view: &Entity<SettingsView>, model: meetily_core::whisper_engine::M
         };
 
         let is_downloading = matches!(status, ModelStatus::Downloading { .. }) || progress.is_some();
-        let can_download = !matches!(status, ModelStatus::Available) && !is_downloading;
+        let is_corrupted = matches!(status, ModelStatus::Corrupted { .. });
+        let is_available = matches!(status, ModelStatus::Available);
+        let can_download = !is_available && !is_downloading;
 
         let download_name = name.clone();
         let download_view = view.clone();
+
+        let mut actions = h_flex().gap_2();
+
+        if is_downloading {
+            let cancel_name = name.clone();
+            let cancel_view = view.clone();
+            actions = actions.child(
+                Button::new(SharedString::from(format!("cancel-{}", name)))
+                    .outline()
+                    .label("Cancel")
+                    .on_click(move |_, _, cx| {
+                        cancel_download(cx, &cancel_view, cancel_name.clone());
+                    }),
+            );
+        } else {
+            actions = actions.child(
+                Button::new(SharedString::from(format!("download-{}", name)))
+                    .outline()
+                    .label(if is_corrupted { "Re-download" } else { "Download" })
+                    .disabled(!can_download)
+                    .on_click(move |_, _, cx| {
+                        start_download(cx, &download_view, download_name.clone());
+                    }),
+            );
+        }
+
+        if (is_available || is_corrupted) && !is_downloading {
+            let delete_name = name.clone();
+            let delete_view = view.clone();
+            actions = actions.child(
+                Button::new(SharedString::from(format!("delete-{}", name)))
+                    .outline()
+                    .label("Delete")
+                    .on_click(move |_, _, cx| {
+                        delete_model(cx, &delete_view, delete_name.clone());
+                    }),
+            );
+        }
 
         h_flex()
             .w_full()
@@ -115,15 +155,7 @@ fn model_row(view: &Entity<SettingsView>, model: meetily_core::whisper_engine::M
                             .text_color(cx.theme().muted_foreground),
                     ),
             )
-            .child(
-                Button::new(SharedString::from(format!("download-{}", name)))
-                    .outline()
-                    .label(if is_downloading { "Downloading…" } else { "Download" })
-                    .disabled(!can_download)
-                    .on_click(move |_, _, cx| {
-                        start_download(cx, &download_view, download_name.clone());
-                    }),
-            )
+            .child(actions)
             .into_any_element()
     })
 }
@@ -148,4 +180,44 @@ fn start_download(cx: &mut App, view: &Entity<SettingsView>, model_name: String)
             log::warn!("settings: failed to download model '{}': {}", model_name, e);
         }
     });
+}
+
+/// Cancel an in-progress Whisper model download.
+fn cancel_download(cx: &mut App, view: &Entity<SettingsView>, model_name: String) {
+    let services = crate::app_state::AppServices::global(cx);
+    let io = services.io.clone();
+
+    {
+        let cache = cx.global_mut::<SettingsCache>();
+        cache.download_progress.remove(&model_name);
+    }
+    let _ = view.update(cx, |_, cx| cx.notify());
+
+    io.spawn(async move {
+        if let Err(e) = meetily_core::whisper_engine::whisper_cancel_download(model_name.clone()).await {
+            log::warn!("settings: failed to cancel model download '{}': {}", model_name, e);
+        }
+    });
+}
+
+/// Delete a downloaded (or corrupted) Whisper model, then re-scan the
+/// catalog so its status flips back to Missing.
+fn delete_model(cx: &mut App, view: &Entity<SettingsView>, model_name: String) {
+    let services = crate::app_state::AppServices::global(cx);
+    let io = services.io.clone();
+    let view = view.clone();
+
+    cx.spawn(async move |cx| {
+        let result = io
+            .spawn(meetily_core::whisper_engine::whisper_delete_corrupted_model(model_name.clone()))
+            .await;
+
+        if let Ok(Err(e)) = result {
+            log::warn!("settings: failed to delete model '{}': {}", model_name, e);
+        }
+        let _ = cx.update(|cx| {
+            super::state::load(view.clone(), cx);
+        });
+    })
+    .detach();
 }

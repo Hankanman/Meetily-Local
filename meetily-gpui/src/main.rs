@@ -60,9 +60,14 @@ fn main() {
         bootstrap::spawn_background_init(
             sink.clone(),
             db.as_ref().map(|db| db.pool().clone()),
-            model_manager,
+            model_manager.clone(),
         );
     }
+    // Same slot `spawn_background_init` pre-warms above — the Settings
+    // page's built-in-AI model manager (`views/settings/summary.rs`) reads
+    // and writes through this, exactly like the Tauri shell's
+    // `tauri::State<ModelManagerState>`.
+    let builtin_manager = meetily_core::summary::summary_engine::ModelManagerState(model_manager);
     // `AppServices::set_db` fills this in later, without a restart, once
     // first-launch onboarding creates the database (see `root.rs` /
     // `views/onboarding`). Wrapped in a lock (rather than moved into
@@ -87,6 +92,7 @@ fn main() {
             sink: sink.clone(),
             core_events,
             db,
+            builtin_manager,
         });
 
         let mut window_options = TitleBar::window_options();

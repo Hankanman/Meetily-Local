@@ -6,6 +6,7 @@ use gpui_kit::{App, Entity, Global};
 use meetily_core::audio::recording_service::RecordingContext;
 use meetily_core::database::manager::DatabaseManager;
 use meetily_core::events::SharedEventSink;
+use meetily_core::summary::summary_engine::ModelManagerState;
 
 use crate::core_events::CoreEvents;
 use crate::runtime::Io;
@@ -25,6 +26,10 @@ pub struct AppServices {
     pub core_events: Entity<CoreEvents>,
     /// `None` on a first launch until onboarding creates the database.
     pub db: DbSlot,
+    /// Shared slot for the built-in-AI (summary) model manager — the same
+    /// `ModelManagerState` the Tauri shell manages via `tauri::State`.
+    /// Lazily initialized on first use by `service::ensure_manager`.
+    pub builtin_manager: ModelManagerState,
 }
 
 impl Global for AppServices {}
@@ -49,6 +54,16 @@ impl AppServices {
     /// restart. Called once, at the end of onboarding's setup step.
     pub fn set_db(&self, db: DatabaseManager) {
         *self.db.write().unwrap() = Some(db);
+    }
+
+    /// Clone of the shared slot backing the built-in-AI model manager, for
+    /// passing into `summary_engine::service` calls off the main thread.
+    pub fn builtin_manager_slot(
+        &self,
+    ) -> std::sync::Arc<
+        tokio::sync::Mutex<Option<std::sync::Arc<meetily_core::summary::summary_engine::model_manager::ModelManager>>>,
+    > {
+        self.builtin_manager.0.clone()
     }
 
     /// Context for `meetily_core::audio::recording_service` calls.
