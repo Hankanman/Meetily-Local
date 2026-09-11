@@ -49,12 +49,24 @@ pub struct ActionItemsRepository;
 impl ActionItemsRepository {
     /// Insert one item. `source` should be one of [`SOURCE_SUMMARY`],
     /// [`SOURCE_MANUAL`], [`SOURCE_AGENT`]. New items always start `open`.
+    ///
+    /// `item.text` is trimmed and rejected if empty — the same rule
+    /// [`Self::update`] enforces — so every caller (Tauri command, GPUI
+    /// view, extractor) gets validation for free instead of reimplementing
+    /// it at the call site.
     pub async fn create(
         pool: &SqlitePool,
         meeting_id: &str,
         item: &NewActionItem,
         source: &str,
     ) -> Result<ActionItem, SqlxError> {
+        let text = item.text.trim();
+        if text.is_empty() {
+            return Err(SqlxError::Protocol(
+                "action item text cannot be empty".to_string(),
+            ));
+        }
+
         let id = format!("action-{}", Uuid::new_v4());
         let now = Utc::now().to_rfc3339();
 
@@ -66,7 +78,7 @@ impl ActionItemsRepository {
         )
         .bind(&id)
         .bind(meeting_id)
-        .bind(&item.text)
+        .bind(text)
         .bind(&item.assignee)
         .bind(&item.due_hint)
         .bind(STATUS_OPEN)
