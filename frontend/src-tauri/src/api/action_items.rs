@@ -61,11 +61,6 @@ pub async fn create_action_item<R: Runtime>(
     assignee: Option<String>,
     due_hint: Option<String>,
 ) -> Result<ActionItem, String> {
-    let text = text.trim().to_string();
-    if text.is_empty() {
-        return Err("Action item text cannot be empty".to_string());
-    }
-
     let item = NewActionItem {
         text,
         assignee: assignee.and_then(non_empty),

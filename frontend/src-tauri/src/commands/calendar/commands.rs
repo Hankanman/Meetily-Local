@@ -1,15 +1,9 @@
-use std::path::PathBuf;
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
 
-use crate::calendar::fetcher;
 use crate::calendar::models::{CalendarEvent, CalendarSourceRow};
 use crate::calendar::repository::CalendarRepository;
-use crate::calendar::snapshot::{
-    self, lookup_meeting_folder, CalendarEventSnapshot, SNAPSHOT_FILENAME,
-};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,21 +65,7 @@ pub async fn calendar_add_source<R: Runtime>(
     url: String,
     label: Option<String>,
 ) -> Result<CalendarSource, String> {
-    let trimmed = url.trim();
-    if trimmed.is_empty() {
-        return Err("Calendar URL cannot be empty".to_string());
-    }
-    if !(trimmed.starts_with("http://")
-        || trimmed.starts_with("https://")
-        || trimmed.starts_with("webcal://"))
-    {
-        return Err("Calendar URL must start with http(s):// or webcal://".to_string());
-    }
-    let normalized = if let Some(rest) = trimmed.strip_prefix("webcal://") {
-        format!("https://{}", rest)
-    } else {
-        trimmed.to_string()
-    };
+    let normalized = crate::calendar::normalize_calendar_url(&url)?;
 
     let row = CalendarRepository::add_source(
         state.db_manager.pool(),
@@ -115,32 +95,11 @@ pub async fn calendar_refresh_source<R: Runtime>(
     source_id: String,
 ) -> Result<RefreshResult, String> {
     let pool = state.db_manager.pool();
-    let source = CalendarRepository::get_source(pool, &source_id)
-        .await
-        .map_err(err)?
-        .ok_or_else(|| format!("Calendar source {} not found", source_id))?;
-
-    match fetcher::fetch_and_expand(&source.url).await {
-        Ok(occurrences) => {
-            let count = CalendarRepository::replace_events(pool, &source_id, &occurrences)
-                .await
-                .map_err(err)?;
-            CalendarRepository::mark_source_fetched(pool, &source_id, None)
-                .await
-                .map_err(err)?;
-            Ok(RefreshResult {
-                source_id,
-                event_count: count,
-            })
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            CalendarRepository::mark_source_fetched(pool, &source_id, Some(&msg))
-                .await
-                .map_err(err)?;
-            Err(msg)
-        }
-    }
+    let event_count = crate::calendar::refresh_source(pool, &source_id).await?;
+    Ok(RefreshResult {
+        source_id,
+        event_count,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,70 +138,12 @@ pub async fn calendar_link_meeting<R: Runtime>(
     meeting_id: String,
     event_id: Option<String>,
 ) -> Result<bool, String> {
-    let pool = state.db_manager.pool();
-
-    let updated = CalendarRepository::link_meeting(pool, &meeting_id, event_id.as_deref())
-        .await
-        .map_err(err)?;
-
-    if !updated {
-        return Ok(false);
-    }
-
-    // Best-effort sidecar write so a portable copy of the event details
-    // travels with the recording folder (alongside metadata.json /
-    // transcripts.json). Failure here doesn't roll back the DB link —
-    // the link is still valid; the user just won't get the offline
-    // snapshot. We log so it's debuggable.
-    let folder = match lookup_meeting_folder(pool, &meeting_id).await {
-        Ok(Some(p)) => Some(PathBuf::from(p)),
-        Ok(None) => None,
-        Err(e) => {
-            log::warn!(
-                "calendar snapshot: meeting folder lookup failed for {}: {}",
-                meeting_id,
-                e
-            );
-            None
-        }
-    };
-
-    if let Some(folder) = folder {
-        if let Some(event_id_ref) = event_id.as_deref() {
-            match CalendarRepository::get_event(pool, event_id_ref).await {
-                Ok(Some(event)) => {
-                    let snapshot_data = CalendarEventSnapshot::from_event(&event);
-                    if let Err(e) = snapshot::write_snapshot(&folder, &snapshot_data) {
-                        log::warn!(
-                            "calendar snapshot: failed to write {} for meeting {}: {}",
-                            SNAPSHOT_FILENAME,
-                            meeting_id,
-                            e
-                        );
-                    }
-                }
-                Ok(None) => log::warn!(
-                    "calendar snapshot: event {} not found when writing snapshot for meeting {}",
-                    event_id_ref,
-                    meeting_id
-                ),
-                Err(e) => log::warn!(
-                    "calendar snapshot: get_event {} failed: {}",
-                    event_id_ref,
-                    e
-                ),
-            }
-        } else if let Err(e) = snapshot::delete_snapshot(&folder) {
-            log::warn!(
-                "calendar snapshot: failed to delete {} for meeting {}: {}",
-                SNAPSHOT_FILENAME,
-                meeting_id,
-                e
-            );
-        }
-    }
-
-    Ok(true)
+    meetily_core::calendar::service::link_meeting_with_snapshot(
+        state.db_manager.pool(),
+        &meeting_id,
+        event_id.as_deref(),
+    )
+    .await
 }
 
 #[tauri::command]

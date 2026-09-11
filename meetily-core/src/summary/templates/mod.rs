@@ -12,8 +12,9 @@
 //!
 //! # Usage
 //!
-//! ```rust
-//! use crate::summary::templates;
+//! ```no_run
+//! use meetily_core::summary::templates;
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!
 //! // Load a specific template
 //! let template = templates::get_template("daily_standup")?;
@@ -26,6 +27,8 @@
 //!
 //! // List available templates
 //! let available = templates::list_templates();
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # Custom Templates

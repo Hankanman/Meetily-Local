@@ -226,7 +226,7 @@ pub struct MeetingDetails {
     pub transcripts: Vec<MeetingTranscript>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeetingTranscript {
     pub id: String,
     pub text: String,

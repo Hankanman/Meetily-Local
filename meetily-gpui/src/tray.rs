@@ -1,0 +1,242 @@
+//! StatusNotifierItem tray icon: Start/Stop recording, Open Parley (focus
+//! the main window), Quit. Mirrors `frontend/src-tauri/src/tray.rs`'s menu
+//! shape where sensible, built on `gpui-tray` the way
+//! `spikes/gpui-shell/src/tray.rs` proved out.
+//!
+//! The menu is kept in sync with the canonical recording-state machine by
+//! subscribing to the `recording-state` core event on [`CoreEvents`] — the
+//! same event the Tauri shell's `TrayRefreshingSink` reacts to — rather than
+//! polling. A tray failure (no StatusNotifierItem host running) is logged
+//! and otherwise ignored: the rest of the app must keep working without a
+//! tray icon.
+
+use gpui_kit::component::Root;
+use gpui_kit::*;
+use gpui_tray::{Icon, Tray};
+
+use meetily_core::audio::recording_phase::RecordingPhase;
+use meetily_core::audio::recording_service::{self, RecordingArgs, StartRequest};
+
+use crate::app_state::AppServices;
+use crate::core_events::CoreEvent;
+use crate::notifications;
+
+actions!(
+    parley_tray,
+    [TrayStartRecording, TrayStopRecording, TrayOpenParley, TrayQuit]
+);
+
+/// The main window, stashed here so the tray's "Open Parley" action can
+/// bring it back to the front. Set once, right after `main.rs` opens the
+/// window.
+pub struct MainWindow(pub WindowHandle<Root>);
+
+impl Global for MainWindow {}
+
+/// Current recording phase, mirrored from `recording-state` core events so
+/// the tray menu can be rebuilt synchronously (`gpui-tray`'s `menu` builder
+/// takes a plain `Fn(&mut App) -> Vec<MenuItem>`, no async).
+#[derive(Clone, Copy)]
+struct TrayPhase(RecordingPhase);
+
+impl Default for TrayPhase {
+    fn default() -> Self {
+        Self(RecordingPhase::Idle)
+    }
+}
+
+impl Global for TrayPhase {}
+
+struct AppTray {
+    tray: Tray,
+}
+
+impl Global for AppTray {}
+
+/// A simple filled circle, red while idle/stopped-ish, matching the
+/// spike's icon. `gpui-tray::Tray::set_icon` could recolor this live; out
+/// of scope for phase 1.
+fn tray_icon() -> gpui_tray::Result<Icon> {
+    const SIZE: u32 = 32;
+    let mut rgba = vec![0_u8; (SIZE * SIZE * 4) as usize];
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let dx = x as i32 - 15;
+            let dy = y as i32 - 15;
+            if dx * dx + dy * dy <= 13 * 13 {
+                let offset = ((y * SIZE + x) * 4) as usize;
+                rgba[offset..offset + 4].copy_from_slice(&[220, 70, 70, 255]);
+            }
+        }
+    }
+    Icon::from_rgba(rgba, SIZE, SIZE)
+}
+
+fn disabled(item: MenuItem, disabled: bool) -> MenuItem {
+    item.disabled(disabled)
+}
+
+fn build_menu(cx: &mut App) -> Vec<MenuItem> {
+    use RecordingPhase::*;
+
+    let phase = cx.try_global::<TrayPhase>().copied().unwrap_or_default().0;
+
+    let status_label = match phase {
+        Idle => "Not recording",
+        Starting => "Starting…",
+        Recording => "Recording…",
+        Paused => "Paused",
+        Stopping => "Stopping…",
+        Finalising => "Finalising…",
+        Error => "Recording error",
+    };
+
+    let can_start = matches!(phase, Idle);
+    let can_stop = matches!(phase, Recording | Paused);
+
+    vec![
+        disabled(MenuItem::action(status_label, NoAction), true),
+        MenuItem::separator(),
+        disabled(
+            MenuItem::action("Start recording", TrayStartRecording),
+            !can_start,
+        ),
+        disabled(
+            MenuItem::action("Stop recording", TrayStopRecording),
+            !can_stop,
+        ),
+        MenuItem::separator(),
+        MenuItem::action("Open Parley", TrayOpenParley),
+        MenuItem::action("Quit", TrayQuit),
+    ]
+}
+
+/// Focus/raise the main window. Best-effort: logs if the window has already
+/// been closed (shouldn't happen — the window only closes via
+/// `request_quit`, which also tears the tray down).
+fn open_parley(cx: &mut App) {
+    let Some(main_window) = cx.try_global::<MainWindow>() else {
+        log::warn!("tray: Open Parley clicked before the main window was registered");
+        return;
+    };
+    let handle = main_window.0;
+    if let Err(e) = handle.update(cx, |_, window, _cx| window.activate_window()) {
+        log::warn!("tray: failed to activate the main window: {}", e);
+    }
+}
+
+fn start_recording_from_tray(cx: &mut App) {
+    let services = AppServices::global(cx);
+    let io = services.io.clone();
+    let ctx = services.recording_context();
+    io.spawn(async move {
+        let hooks = recording_service::default_start_hooks(ctx.pool.clone());
+        if let Err(e) = recording_service::start(
+            ctx,
+            hooks,
+            StartRequest {
+                mic_device_name: None,
+                system_device_name: None,
+                meeting_name: None,
+            },
+        )
+        .await
+        {
+            log::error!("tray: failed to start recording: {}", e);
+        }
+    });
+}
+
+fn stop_recording_from_tray(cx: &mut App) {
+    let services = AppServices::global(cx);
+    let ctx = services.recording_context();
+    let save_path = meetily_core::paths::app_data_dir()
+        .map(|dir| {
+            let timestamp = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
+            dir.join(format!("recording-{}.wav", timestamp))
+                .to_string_lossy()
+                .to_string()
+        })
+        .unwrap_or_else(|_| "recording.wav".to_string());
+    services.io.spawn(async move {
+        if let Err(e) = recording_service::stop(ctx, RecordingArgs { save_path }).await {
+            log::error!("tray: failed to stop recording: {}", e);
+        }
+    });
+}
+
+/// Register tray actions and build the tray icon. Call once at startup,
+/// after `AppServices` and `MainWindow` globals are set. The caller should
+/// treat an `Err` as non-fatal (log and keep running without a tray icon —
+/// e.g. no StatusNotifierItem host on the session bus).
+pub fn install(cx: &mut App) -> gpui_tray::Result<()> {
+    cx.set_global(TrayPhase::default());
+
+    cx.on_action(|_: &TrayStartRecording, cx: &mut App| {
+        log::info!("tray: start recording");
+        start_recording_from_tray(cx);
+    });
+    cx.on_action(|_: &TrayStopRecording, cx: &mut App| {
+        log::info!("tray: stop recording");
+        stop_recording_from_tray(cx);
+    });
+    cx.on_action(|_: &TrayOpenParley, cx: &mut App| {
+        log::info!("tray: open Parley");
+        open_parley(cx);
+    });
+    cx.on_action(|_: &TrayQuit, cx: &mut App| {
+        log::info!("tray: quit");
+        crate::request_quit(cx);
+    });
+
+    let tray = Tray::builder()
+        .icon(tray_icon()?)
+        .title("Parley")
+        .tooltip("Parley")
+        .menu(build_menu)
+        .build(cx)?;
+    cx.set_global(AppTray { tray });
+    log::info!("tray: StatusNotifierItem registered");
+
+    let services = AppServices::global(cx);
+    let core_events = services.core_events.clone();
+    cx.subscribe(&core_events, |_core_events, event: &CoreEvent, cx| {
+        match event.name.as_str() {
+            "recording-state" => {
+                let Some(snapshot) =
+                    event.decode::<meetily_core::audio::recording_phase::RecordingSnapshot>()
+                else {
+                    return;
+                };
+                cx.set_global(TrayPhase(snapshot.phase));
+                refresh(cx);
+            }
+            "recording-started" => notifications::maybe_notify(cx, notifications::Kind::Started),
+            "recording-stopped" => notifications::maybe_notify(cx, notifications::Kind::Stopped),
+            _ => {}
+        }
+    })
+    .detach();
+
+    Ok(())
+}
+
+/// Rebuild the tray menu from the current `TrayPhase`. Cheap; called on
+/// every `recording-state` event.
+fn refresh(cx: &mut App) {
+    if let Some(tray) = cx.try_global::<AppTray>() {
+        let tray = tray.tray.clone();
+        if let Err(e) = tray.refresh_menu(cx) {
+            log::warn!("tray: failed to refresh menu: {}", e);
+        }
+    }
+}
+
+/// Tear the tray down (best-effort). Called from `request_quit` before the
+/// window closes, mirroring the Tauri tray's `close` on Quit.
+pub fn shutdown(cx: &mut App) {
+    if let Some(tray) = cx.try_global::<AppTray>() {
+        let tray = tray.tray.clone();
+        let _ = tray.close(cx);
+    }
+}

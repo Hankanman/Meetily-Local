@@ -22,10 +22,12 @@ macro_rules! perf_debug {
 
 pub mod anthropic;
 pub mod audio;
+pub mod bootstrap;
 pub mod calendar;
 pub mod config;
 pub mod database;
 pub mod events;
+pub mod export;
 pub mod groq;
 pub mod llm_providers;
 pub mod mcp_config;

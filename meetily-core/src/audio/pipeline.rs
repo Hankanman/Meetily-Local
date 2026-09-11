@@ -733,19 +733,24 @@ impl AudioPipeline {
                     if self.processed_chunks % 200 == 0
                         || self.last_summary_time.elapsed().as_secs() >= 60
                     {
-                        let avg_level = if chunk.data.is_empty() {
-                            0.0
-                        } else {
-                            chunk.data.iter().map(|&x| x.abs()).sum::<f32>()
-                                / chunk.data.len() as f32
-                        };
-                        perf_debug!(
-                            "Pipeline processed {} chunks, current chunk: {} ({} samples, avg level {:.4})",
-                            self.processed_chunks,
-                            chunk.chunk_id,
-                            chunk.data.len(),
-                            avg_level
-                        );
+                        // Only computed in debug builds: `perf_debug!` compiles
+                        // to nothing in release, and this sums a whole chunk.
+                        #[cfg(debug_assertions)]
+                        {
+                            let avg_level = if chunk.data.is_empty() {
+                                0.0
+                            } else {
+                                chunk.data.iter().map(|&x| x.abs()).sum::<f32>()
+                                    / chunk.data.len() as f32
+                            };
+                            perf_debug!(
+                                "Pipeline processed {} chunks, current chunk: {} ({} samples, avg level {:.4})",
+                                self.processed_chunks,
+                                chunk.chunk_id,
+                                chunk.data.len(),
+                                avg_level
+                            );
+                        }
                         self.last_summary_time = std::time::Instant::now();
                     }
 

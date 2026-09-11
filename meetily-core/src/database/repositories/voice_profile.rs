@@ -184,12 +184,24 @@ impl VoiceProfilesRepository {
     /// Update a profile's display fields (name + optional email). Replaces the
     /// previous narrow `rename` API — every UI surface for editing a profile
     /// shows both fields together, so the command does too.
+    ///
+    /// `name` is trimmed and rejected if empty; `email` is trimmed and blank
+    /// values are normalised to `NULL` — every caller (Tauri command, GPUI
+    /// view) gets this for free instead of reimplementing it.
     pub async fn update_profile(
         pool: &SqlitePool,
         id: &str,
         name: &str,
         email: Option<&str>,
     ) -> Result<bool, SqlxError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(SqlxError::Protocol(
+                "voice profile name cannot be empty".to_string(),
+            ));
+        }
+        let email = email.map(str::trim).filter(|s| !s.is_empty());
+
         let now = Utc::now().to_rfc3339();
         let res = sqlx::query(
             "UPDATE voice_profiles SET name = ?, email = ?, updated_at = ? WHERE id = ?",
