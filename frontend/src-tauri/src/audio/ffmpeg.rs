@@ -262,10 +262,9 @@ pub struct FfmpegStatus {
 }
 
 /// Report whether ffmpeg is currently available and, if so, where it was
-/// found. Used by the settings UI to show install status without
-/// triggering a download (see [`ensure_ffmpeg_installed`] for that).
-#[tauri::command]
-pub async fn ffmpeg_status() -> FfmpegStatus {
+/// found (core logic behind the `ffmpeg_status` Tauri command in
+/// `ffmpeg_commands.rs`). Never downloads anything.
+pub fn ffmpeg_status() -> FfmpegStatus {
     match find_ffmpeg_path_with_source() {
         Some((path, source)) => FfmpegStatus {
             installed: true,

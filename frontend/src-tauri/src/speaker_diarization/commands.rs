@@ -50,7 +50,7 @@ pub async fn speaker_model_status() -> Result<SpeakerModelStatus, String> {
 /// already present and non-empty, returns immediately.
 #[command]
 pub async fn speaker_model_download<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    download_speaker_model(crate::events::shared_sink(&app)).await
+    download_speaker_model(crate::tauri_events::shared_sink(&app)).await
 }
 
 /// Tauri-free core of [`speaker_model_download`].

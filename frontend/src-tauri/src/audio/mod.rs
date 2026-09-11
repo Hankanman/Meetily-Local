@@ -2,10 +2,12 @@
 pub mod audio_processing;
 pub mod aec;
 pub mod clip;
+pub mod clip_commands;
 pub mod decoder;
 pub mod playback;
 pub mod encode;
 pub mod ffmpeg;
+pub mod ffmpeg_commands;
 pub mod vad;
 
 // Device model + PipeWire-backed discovery
@@ -18,12 +20,14 @@ pub mod pw;
 // Recording system
 pub mod hardware_detector;
 pub mod incremental_saver;
+pub mod incremental_saver_commands;
 pub mod pipeline;
 pub mod recording_commands;
 pub mod recording_manager;
 pub mod recording_service;
 pub mod recording_phase;
 pub mod recording_preferences;
+pub mod recording_preferences_commands;
 pub mod recording_saver;
 pub mod recording_state;
 pub mod simple_level_monitor;
@@ -47,9 +51,11 @@ pub mod constants;
 
 // Retranscription module (re-process stored audio with different settings)
 pub mod retranscription;
+pub mod retranscription_commands;
 
 // Import module (import external audio files as new meetings)
 pub mod import;
+pub mod import_commands;
 
 pub use devices::{list_audio_devices, trigger_audio_permission, AudioDevice, DeviceType};
 

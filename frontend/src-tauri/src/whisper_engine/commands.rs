@@ -349,7 +349,7 @@ pub async fn whisper_download_model(
     app_handle: tauri::AppHandle,
     model_name: String,
 ) -> Result<(), String> {
-    download_model_with_progress(crate::events::shared_sink(&app_handle), model_name).await
+    download_model_with_progress(crate::tauri_events::shared_sink(&app_handle), model_name).await
 }
 
 #[command]

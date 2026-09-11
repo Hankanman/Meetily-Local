@@ -262,7 +262,7 @@ pub async fn pull_ollama_model<R: Runtime>(
     model_name: String,
     endpoint: Option<String>,
 ) -> Result<(), String> {
-    pull_ollama_model_with_progress(crate::events::shared_sink(&app_handle), model_name, endpoint)
+    pull_ollama_model_with_progress(crate::tauri_events::shared_sink(&app_handle), model_name, endpoint)
         .await
 }
 

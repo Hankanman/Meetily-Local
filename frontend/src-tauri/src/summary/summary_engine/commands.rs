@@ -197,7 +197,7 @@ pub async fn builtin_ai_download_model<R: Runtime>(
             .clone() // Clone the Arc, not the ModelManager
     };
 
-    download_builtin_ai_model(manager, model_name, crate::events::shared_sink(&app)).await
+    download_builtin_ai_model(manager, model_name, crate::tauri_events::shared_sink(&app)).await
 }
 
 /// Cancel an ongoing model download
@@ -220,7 +220,7 @@ pub async fn builtin_ai_cancel_download<R: Runtime>(
         .await
         .map_err(|e| e.to_string())?;
 
-    let _ = crate::events::shared_sink(&app).emit_event(
+    let _ = crate::tauri_events::shared_sink(&app).emit_event(
         "builtin-ai-download-progress",
         &serde_json::json!({
             "model": model_name,

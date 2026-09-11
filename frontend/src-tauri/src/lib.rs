@@ -24,12 +24,15 @@ pub mod calendar;
 pub mod config;
 pub mod database;
 pub mod events;
+pub mod tauri_events;
 pub mod groq;
 pub mod llm_providers;
 pub mod mcp_config;
+pub mod mcp_config_commands;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;
+pub mod onboarding_commands;
 pub mod paths;
 pub mod openai;
 pub mod openrouter;
@@ -41,6 +44,7 @@ pub mod utils;
 pub mod whisper_engine;
 
 use audio::{list_audio_devices, trigger_audio_permission};
+use events::EventSinkExt;
 use log::{error as log_error, info as log_info};
 use notifications::commands::NotificationManagerState;
 use std::sync::Arc;
@@ -176,7 +180,7 @@ async fn start_audio_level_monitoring<R: Runtime>(
         system_device
     );
 
-    audio::simple_level_monitor::start_monitoring(events::shared_sink(&app), mic_device, system_device)
+    audio::simple_level_monitor::start_monitoring(tauri_events::shared_sink(&app), mic_device, system_device)
         .await
         .map_err(|e| format!("Failed to start audio level monitoring: {}", e))
 }
@@ -539,6 +543,32 @@ pub(crate) async fn download_file_to(url: &str, dest: &std::path::Path) -> anyho
     Ok(())
 }
 
+/// Initialize the database on app startup: handles first-launch detection
+/// and conditional setup. Thin Tauri shell around
+/// `database::setup::prepare_database_on_startup` (Tauri-free) — this is
+/// just the part that manages the resulting `DatabaseManager` as app state
+/// or, on a first launch, schedules the delayed `first-launch-detected`
+/// event once the window and its React listeners are ready.
+async fn initialize_database_on_startup<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    match database::setup::prepare_database_on_startup().await? {
+        database::setup::StartupOutcome::FirstLaunch => {
+            // Delay event emission to ensure window is ready and React listeners are registered
+            let app_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                app_handle
+                    .emit_event("first-launch-detected", &())
+                    .expect("Failed to emit first-launch-detected event");
+                log_info!("Emitted first-launch-detected after delay");
+            });
+        }
+        database::setup::StartupOutcome::Initialized(db_manager) => {
+            app.manage(state::AppState { db_manager });
+        }
+    }
+    Ok(())
+}
+
 /// Guards against handling a close/exit request more than once (issue #30):
 /// both `WindowEvent::CloseRequested` and `RunEvent::ExitRequested` can fire
 /// for the same user action (e.g. closing the last window), and each of them
@@ -719,7 +749,7 @@ pub fn run() {
 
             // Initialize database (handles first launch detection and conditional setup)
             tauri::async_runtime::block_on(async {
-                database::setup::initialize_database_on_startup(&_app.handle()).await
+                initialize_database_on_startup(&_app.handle()).await
             })
             .expect("Failed to initialize database");
 
@@ -805,7 +835,7 @@ pub fn run() {
             stop_audio_level_monitoring,
             is_audio_level_monitoring,
             ffmpeg_ensure_installed,
-            audio::ffmpeg::ffmpeg_status,
+            audio::ffmpeg_commands::ffmpeg_status,
             // Recording pause/resume commands
             audio::recording_commands::pause_recording,
             audio::recording_commands::resume_recording,
@@ -818,9 +848,9 @@ pub fn run() {
             // Post-meeting auto-refine (background high-accuracy re-pass)
             audio::recording_commands::trigger_post_meeting_refine,
             // Audio recovery commands (for transcript recovery feature)
-            audio::incremental_saver::recover_audio_from_checkpoints,
-            audio::incremental_saver::cleanup_checkpoints,
-            audio::incremental_saver::has_audio_checkpoints,
+            audio::incremental_saver_commands::recover_audio_from_checkpoints,
+            audio::incremental_saver_commands::cleanup_checkpoints,
+            audio::incremental_saver_commands::has_audio_checkpoints,
             // Interrupted-meeting recovery (issue #57 slice 2: DB-driven,
             // replaces the old IndexedDB scan)
             audio::recovery_commands::list_interrupted_meetings,
@@ -855,9 +885,9 @@ pub fn run() {
             api::api_get_custom_openai_config,
             api::api_test_custom_openai_connection,
             // Action items + meeting notes
-            audio::clip::get_meeting_audio_clip,
-            audio::clip::play_meeting_audio_clip,
-            audio::clip::stop_meeting_audio_clip,
+            audio::clip_commands::get_meeting_audio_clip,
+            audio::clip_commands::play_meeting_audio_clip,
+            audio::clip_commands::stop_meeting_audio_clip,
             api::action_items::start_live_action_extraction,
             api::action_items::stop_live_action_extraction,
             api::action_items::list_action_items,
@@ -892,11 +922,11 @@ pub fn run() {
             summary::summary_engine::commands::builtin_ai_get_available_summary_model,
             summary::summary_engine::commands::builtin_ai_get_recommended_model,
             openrouter::get_openrouter_models,
-            audio::recording_preferences::get_recording_preferences,
-            audio::recording_preferences::set_recording_preferences,
-            audio::recording_preferences::get_default_recordings_folder_path,
-            audio::recording_preferences::open_recordings_folder,
-            audio::recording_preferences::select_recording_folder,
+            audio::recording_preferences_commands::get_recording_preferences,
+            audio::recording_preferences_commands::set_recording_preferences,
+            audio::recording_preferences_commands::get_default_recordings_folder_path,
+            audio::recording_preferences_commands::open_recordings_folder,
+            audio::recording_preferences_commands::select_recording_folder,
             // Language preference commands
             set_language_preference,
             // Notification system commands
@@ -921,28 +951,28 @@ pub fn run() {
             database::commands::get_database_directory,
             database::commands::open_database_folder,
             // MCP server config surface (Settings → Integrations)
-            mcp_config::get_mcp_server_info,
-            mcp_config::reveal_mcp_binary,
+            mcp_config_commands::get_mcp_server_info,
+            mcp_config_commands::reveal_mcp_binary,
             whisper_engine::commands::open_models_folder,
             // Onboarding commands
-            onboarding::get_onboarding_status,
-            onboarding::save_onboarding_status_cmd,
-            onboarding::reset_onboarding_status_cmd,
-            onboarding::complete_onboarding,
+            onboarding_commands::get_onboarding_status,
+            onboarding_commands::save_onboarding_status_cmd,
+            onboarding_commands::reset_onboarding_status_cmd,
+            onboarding_commands::complete_onboarding,
             // Frontend UI config commands (language, confidence indicator,
             // auto-summary, provider model cache, ...)
-            database::repositories::setting::api_get_ui_config,
-            database::repositories::setting::api_save_ui_config,
+            database::commands::api_get_ui_config,
+            database::commands::api_save_ui_config,
             // Retranscription commands
-            audio::retranscription::start_retranscription_command,
-            audio::retranscription::cancel_retranscription_command,
-            audio::retranscription::is_retranscription_in_progress_command,
+            audio::retranscription_commands::start_retranscription_command,
+            audio::retranscription_commands::cancel_retranscription_command,
+            audio::retranscription_commands::is_retranscription_in_progress_command,
             // Import audio commands
-            audio::import::select_and_validate_audio_command,
-            audio::import::validate_audio_file_command,
-            audio::import::start_import_audio_command,
-            audio::import::cancel_import_command,
-            audio::import::is_import_in_progress_command,
+            audio::import_commands::select_and_validate_audio_command,
+            audio::import_commands::validate_audio_file_command,
+            audio::import_commands::start_import_audio_command,
+            audio::import_commands::cancel_import_command,
+            audio::import_commands::is_import_in_progress_command,
             // Calendar / ICS commands
             calendar::commands::calendar_list_sources,
             calendar::commands::calendar_add_source,

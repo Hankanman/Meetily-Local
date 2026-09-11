@@ -44,21 +44,6 @@ impl<S: EventSink + ?Sized> EventSink for Arc<S> {
     }
 }
 
-// --- Tauri shell implementation --------------------------------------------
-// Lives here until the core is split into its own crate, at which point it
-// moves to the Tauri shell alongside the command handlers.
-
-impl<R: tauri::Runtime> EventSink for tauri::AppHandle<R> {
-    fn emit_value(&self, event: &str, payload: serde_json::Value) -> Result<(), String> {
-        tauri::Emitter::emit(self, event, payload).map_err(|e| e.to_string())
-    }
-}
-
-/// Wrap a Tauri `AppHandle` as a [`SharedEventSink`] for long-lived tasks.
-pub fn shared_sink<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> SharedEventSink {
-    Arc::new(app.clone())
-}
-
 // --- Sinks for tests and headless use --------------------------------------
 
 /// Discards every event.

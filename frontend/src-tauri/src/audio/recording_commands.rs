@@ -48,7 +48,7 @@ fn db_pool<R: Runtime>(app: &AppHandle<R>) -> Option<sqlx::SqlitePool> {
 }
 
 /// Forwards every event to the wrapped `AppHandle` like a plain
-/// `events::shared_sink`, and additionally refreshes the tray menu whenever
+/// `tauri_events::shared_sink`, and additionally refreshes the tray menu whenever
 /// it sees a `recording-state` event. This is how tray refresh is driven now
 /// that orchestration lives in `recording_service` (which has no `AppHandle`
 /// and so cannot call `tray::update_tray_menu` itself): every phase
@@ -279,7 +279,7 @@ pub async fn trigger_post_meeting_refine<R: Runtime>(
         match db_pool(&app) {
             Some(pool) => {
                 if let Err(e) = crate::speaker_diarization::commands::refine_and_persist(
-                    &crate::events::shared_sink(&app),
+                    &crate::tauri_events::shared_sink(&app),
                     &pool,
                     &meeting_id,
                 )
@@ -299,7 +299,7 @@ pub async fn trigger_post_meeting_refine<R: Runtime>(
         }
 
         super::retranscription::spawn_auto_refine(
-            crate::events::shared_sink(&app),
+            crate::tauri_events::shared_sink(&app),
             db_pool(&app),
             meeting_id,
             meeting_folder_path,

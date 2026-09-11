@@ -19,7 +19,6 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::{AppHandle, Runtime};
 
 /// Filename of the MCP server binary produced by `cargo build -p meetily-mcp`.
 const MCP_BIN_NAME: &str = "meetily-mcp";
@@ -116,10 +115,9 @@ fn locate_binary() -> Option<PathBuf> {
 
 /// Report the DB path plus a best-effort location for the `meetily-mcp` binary
 /// so the Integrations settings panel can render client-registration config.
-#[tauri::command]
-pub async fn get_mcp_server_info<R: Runtime>(
-    _app: AppHandle<R>,
-) -> Result<McpServerInfo, String> {
+/// Core logic behind the `get_mcp_server_info` Tauri command in
+/// `mcp_config_commands.rs`.
+pub fn get_mcp_server_info() -> Result<McpServerInfo, String> {
     let db_path = crate::paths::app_data_dir()?.join("meeting_minutes.sqlite");
 
     let db_is_default = default_db_path()
@@ -139,9 +137,9 @@ pub async fn get_mcp_server_info<R: Runtime>(
 }
 
 /// Open the folder containing the `meetily-mcp` binary in the system file
-/// manager, so the user can grab its path or confirm it's there.
-#[tauri::command]
-pub async fn reveal_mcp_binary(path: String) -> Result<(), String> {
+/// manager, so the user can grab its path or confirm it's there. Core logic
+/// behind the `reveal_mcp_binary` Tauri command in `mcp_config_commands.rs`.
+pub fn reveal_mcp_binary(path: String) -> Result<(), String> {
     let path = PathBuf::from(&path);
     let dir = if path.is_file() {
         path.parent().map(Path::to_path_buf)
