@@ -8,7 +8,9 @@
 //! double-navigation can't clobber the currently-shown meeting with a
 //! stale response (see `cx.spawn` closures below).
 
+mod calendar_format;
 mod format;
+mod speaker_chip;
 
 use std::time::Duration;
 
@@ -22,12 +24,20 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::IconNameExt as _;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use meetily_core::database::models::{MeetingDetails, MeetingTranscript};
+use meetily_core::calendar::models::CalendarEvent;
+use meetily_core::calendar::repository::CalendarRepository;
+use meetily_core::calendar::service::link_meeting_with_snapshot;
+use meetily_core::database::models::{MeetingDetails, MeetingTranscript, VoiceProfile};
 use meetily_core::database::repositories::meeting::MeetingsRepository;
 use meetily_core::database::repositories::setting::SettingsRepository;
 use meetily_core::database::repositories::summary::SummaryProcessesRepository;
+use meetily_core::database::repositories::voice_profile::VoiceProfilesRepository;
+use meetily_core::speaker_diarization::service::{merge_cluster_into_profile_core, promote_speaker_to_profile_core};
 use meetily_core::summary::markdown_export;
 use meetily_core::summary::service::SummaryService;
 use zorite_editor::{EditorState, SyntaxStyle};
@@ -35,6 +45,35 @@ use zorite_editor::{EditorState, SyntaxStyle};
 use crate::app_state::AppServices;
 use crate::runtime::Io;
 use crate::shell::{self, Route};
+
+/// ±N days around the meeting's `created_at` when fetching nearby calendar
+/// events for the link picker. Mirrors `CalendarEventPicker.tsx`'s
+/// `WINDOW_DAYS`.
+const CALENDAR_WINDOW_DAYS: i64 = 7;
+
+/// One open speaker-edit panel: rename a named voice profile, or promote /
+/// merge an unnamed "Speaker N" cluster. Mirrors
+/// `EditableSpeakerChip.tsx`'s per-chip popover state, scoped to a single
+/// segment at a time (see [`MeetingView::speaker_edit`]).
+#[derive(Clone)]
+struct SpeakerEditState {
+    /// Uniquely identifies which chip this panel belongs to (segment id +
+    /// label), so a stray async response for a since-closed/reopened panel
+    /// is dropped instead of applied.
+    key: String,
+    speaker: String,
+    voice_profile_id: Option<String>,
+    name_input: Entity<InputState>,
+    email_input: Entity<InputState>,
+    profiles: Vec<VoiceProfile>,
+    profiles_loading: bool,
+    /// `Some(profile_id)` = fold this cluster into that existing profile;
+    /// `None` = create/rename via `name_input`/`email_input`. Only
+    /// meaningful for an unnamed cluster (named-profile edits always rename).
+    merge_target: Option<String>,
+    saving: bool,
+    error: Option<String>,
+}
 
 /// The full Lucide catalog (as opposed to `gpui_kit::component::IconName`,
 /// which only carries a curated default subset — most of the icons this
@@ -104,6 +143,26 @@ pub struct MeetingView {
     retranscribe_progress_message: String,
     retranscribe_error: Option<String>,
 
+    // -- Calendar event link --------------------------------------------
+    calendar_event: Option<CalendarEvent>,
+    calendar_loading: bool,
+    calendar_mutating: bool,
+    calendar_picker_open: bool,
+    /// `None` while the picker's event fetch is in flight.
+    calendar_picker_events: Option<Vec<CalendarEvent>>,
+    calendar_picker_query: Entity<InputState>,
+    calendar_picker_error: Option<String>,
+
+    // -- Per-segment speaker chip edit -----------------------------------
+    speaker_edit: Option<SpeakerEditState>,
+
+    // -- Per-segment audio playback ---------------------------------------
+    /// Segment id currently playing, if any.
+    playing_segment: Option<String>,
+    /// Segment id whose clip is being extracted (between click and playback
+    /// actually starting), if any.
+    loading_segment: Option<String>,
+
     _subscriptions: Vec<Subscription>,
 }
 
@@ -126,6 +185,7 @@ impl MeetingView {
                 "retranscription-progress" => this.on_retranscription_progress(event, cx),
                 "retranscription-complete" => this.on_retranscription_complete(event, cx),
                 "retranscription-error" => this.on_retranscription_error(event, cx),
+                meetily_core::audio::playback::PLAYBACK_ENDED_EVENT => this.on_segment_playback_ended(cx),
                 _ => {}
             }
         })];
@@ -135,6 +195,8 @@ impl MeetingView {
         let selected_template = format::resolve_default_template(None, &template_ids);
         let custom_prompt =
             cx.new(|cx| InputState::new(window, cx).placeholder("Custom instructions (optional)…"));
+        let calendar_picker_query =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search events…"));
 
         let view = Self {
             meeting_id: None,
@@ -168,6 +230,16 @@ impl MeetingView {
             retranscribe_progress_pct: 0,
             retranscribe_progress_message: String::new(),
             retranscribe_error: None,
+            calendar_event: None,
+            calendar_loading: false,
+            calendar_mutating: false,
+            calendar_picker_open: false,
+            calendar_picker_events: None,
+            calendar_picker_query,
+            calendar_picker_error: None,
+            speaker_edit: None,
+            playing_segment: None,
+            loading_segment: None,
             _subscriptions: subscriptions,
         };
         view.load_default_template(cx);
@@ -231,6 +303,14 @@ impl MeetingView {
         self.retranscribe_error = None;
         self.retranscribe_progress_pct = 0;
         self.retranscribe_progress_message = String::new();
+        self.calendar_event = None;
+        self.calendar_loading = true;
+        self.calendar_picker_open = false;
+        self.calendar_picker_events = None;
+        self.calendar_picker_error = None;
+        self.speaker_edit = None;
+        self.playing_segment = None;
+        self.loading_segment = None;
         self.summary_state.update(cx, |state, cx| state.set_text("", cx));
         cx.notify();
 
@@ -278,6 +358,11 @@ impl MeetingView {
         // Existing summary (if any), and resume polling if one is already
         // in flight (e.g. started from the Tauri UI).
         self.refresh_summary(generation, cx);
+        self.load_calendar_event(generation, cx);
+
+        // A clip from the previous meeting shouldn't keep playing once we've
+        // navigated away from its transcript.
+        meetily_core::audio::playback::stop();
     }
 
     fn apply_meeting_details(&mut self, details: MeetingDetails, _cx: &mut Context<Self>) {
@@ -881,6 +966,413 @@ impl MeetingView {
         })
         .detach();
     }
+
+    // ---- Calendar event link -------------------------------------------
+    // Mirrors `CalendarEventPanel.tsx` / `CalendarEventPicker.tsx`, calling
+    // the same core fns the Tauri `calendar_get_event_for_meeting` /
+    // `calendar_list_events` / `calendar_link_meeting` commands wrap.
+
+    fn load_calendar_event(&mut self, generation: u64, cx: &mut Context<Self>) {
+        let Some(pool) = AppServices::global(cx).pool() else {
+            self.calendar_loading = false;
+            return;
+        };
+        let Some(id) = self.meeting_id.clone() else {
+            self.calendar_loading = false;
+            return;
+        };
+        let io = Io::global(cx);
+        cx.spawn(async move |this, cx| {
+            let result = io
+                .spawn(async move { CalendarRepository::get_event_for_meeting(&pool, &id).await })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                this.calendar_loading = false;
+                match result {
+                    Ok(Ok(event)) => this.calendar_event = event,
+                    Ok(Err(e)) => log::warn!("meeting: get_event_for_meeting failed: {e}"),
+                    Err(e) => log::warn!("meeting: get_event_for_meeting task panicked: {e}"),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Open the "link a calendar event" picker, fetching events within
+    /// `±CALENDAR_WINDOW_DAYS` of the meeting's `created_at` (falling back
+    /// to "now" if unknown) — mirrors the picker's default anchor/window.
+    fn open_calendar_picker(&mut self, cx: &mut Context<Self>) {
+        self.calendar_picker_open = true;
+        self.calendar_picker_events = None;
+        self.calendar_picker_error = None;
+        cx.notify();
+
+        let Some(pool) = AppServices::global(cx).pool() else {
+            self.calendar_picker_error = Some("No database — complete onboarding first.".into());
+            return;
+        };
+        let anchor = self.created_at.unwrap_or_else(chrono::Utc::now);
+        let window = chrono::Duration::days(CALENDAR_WINDOW_DAYS);
+        let from = anchor - window;
+        let to = anchor + window;
+        let io = Io::global(cx);
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let result = io
+                .spawn(async move { CalendarRepository::list_events_in_range(&pool, from, to).await })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != generation || !this.calendar_picker_open {
+                    return;
+                }
+                match result {
+                    Ok(Ok(mut events)) => {
+                        calendar_format::sort_by_proximity(&mut events, anchor, |e| e.start_at);
+                        this.calendar_picker_events = Some(events);
+                    }
+                    Ok(Err(e)) => this.calendar_picker_error = Some(e.to_string()),
+                    Err(e) => this.calendar_picker_error = Some(format!("Task panicked: {e}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn close_calendar_picker(&mut self, cx: &mut Context<Self>) {
+        self.calendar_picker_open = false;
+        cx.notify();
+    }
+
+    /// Link (or, with `event_id: None`, unlink) the meeting to a calendar
+    /// event — mirrors `linkMeetingToCalendarEvent`.
+    fn pick_calendar_event(&mut self, event_id: Option<String>, cx: &mut Context<Self>) {
+        let Some(id) = self.meeting_id.clone() else {
+            return;
+        };
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        self.calendar_mutating = true;
+        cx.notify();
+
+        let io = Io::global(cx);
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let event_id_for_task = event_id.clone();
+            let result = io
+                .spawn(async move {
+                    link_meeting_with_snapshot(&pool, &id, event_id_for_task.as_deref()).await
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                this.calendar_mutating = false;
+                match result {
+                    Ok(Ok(true)) => {
+                        this.calendar_picker_open = false;
+                        this.load_calendar_event(generation, cx);
+                    }
+                    Ok(Ok(false)) => log::warn!("meeting: calendar link no-op (meeting not found)"),
+                    Ok(Err(e)) => notify(cx, Notification::error(format!("Couldn't link that calendar event: {e}"))),
+                    Err(e) => notify(cx, Notification::error(format!("Calendar link task panicked: {e}"))),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn unlink_calendar_event(&mut self, cx: &mut Context<Self>) {
+        self.pick_calendar_event(None, cx);
+    }
+
+    // ---- Per-segment speaker chip edit -----------------------------------
+    // Mirrors `EditableSpeakerChip.tsx`: rename a named voice profile across
+    // meetings, or (for an unnamed "Speaker N" cluster) either promote it to
+    // a brand-new profile scoped to this meeting's rename, or merge it into
+    // an existing profile.
+
+    /// Toggle the edit panel for one transcript segment's speaker chip.
+    /// Clicking the already-open chip's own label closes it.
+    fn toggle_speaker_edit(
+        &mut self,
+        segment_id: String,
+        speaker: String,
+        voice_profile_id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = format!("{segment_id}:{speaker}");
+        if self.speaker_edit.as_ref().is_some_and(|s| s.key == key) {
+            self.speaker_edit = None;
+            cx.notify();
+            return;
+        }
+
+        let name_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("e.g. Alice Smith").default_value(speaker.clone()));
+        let email_input = cx.new(|cx| InputState::new(window, cx).placeholder("Email (optional)"));
+        self.speaker_edit = Some(SpeakerEditState {
+            key: key.clone(),
+            speaker: speaker.clone(),
+            voice_profile_id: voice_profile_id.clone(),
+            name_input,
+            email_input,
+            profiles: Vec::new(),
+            profiles_loading: true,
+            merge_target: None,
+            saving: false,
+            error: None,
+        });
+        cx.notify();
+
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let io = Io::global(cx);
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let result = io.spawn(async move { VoiceProfilesRepository::list_all(&pool).await }).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                let Some(state) = this.speaker_edit.as_mut() else {
+                    return;
+                };
+                if state.key != key {
+                    return;
+                }
+                state.profiles_loading = false;
+                if let Ok(Ok(profiles)) = result {
+                    // Named-profile edit: prefill the email field from the
+                    // profile's stored value (name is already prefilled from
+                    // the displayed label).
+                    if let Some(vp_id) = state.voice_profile_id.clone() {
+                        if let Some(me) = profiles.iter().find(|p| p.id == vp_id) {
+                            let email = me.email.clone().unwrap_or_default();
+                            state.email_input.update(cx, |s, cx| s.set_value(email, window, cx));
+                        }
+                    }
+                    state.profiles = profiles;
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn close_speaker_edit(&mut self, cx: &mut Context<Self>) {
+        self.speaker_edit = None;
+        cx.notify();
+    }
+
+    /// Cycle the unnamed-cluster panel's merge target through
+    /// "Create new speaker…" then each existing profile, in order —
+    /// gpui-kit has no dropdown-list widget in use elsewhere in this view,
+    /// so this mirrors the same cycle-button pattern already used for the
+    /// summary template picker.
+    fn cycle_speaker_merge_target(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.speaker_edit.as_mut() else {
+            return;
+        };
+        if state.profiles.is_empty() {
+            return;
+        }
+        let options: Vec<Option<String>> =
+            std::iter::once(None).chain(state.profiles.iter().map(|p| Some(p.id.clone()))).collect();
+        let current = options.iter().position(|o| *o == state.merge_target).unwrap_or(0);
+        state.merge_target = options[(current + 1) % options.len()].clone();
+        cx.notify();
+    }
+
+    fn save_speaker_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.speaker_edit.as_ref() else {
+            return;
+        };
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let Some(meeting_id) = self.meeting_id.clone() else {
+            return;
+        };
+        let speaker = state.speaker.clone();
+        let voice_profile_id = state.voice_profile_id.clone();
+        let merge_target = state.merge_target.clone();
+        let name = state.name_input.read(cx).value().trim().to_string();
+        let email = {
+            let raw = state.email_input.read(cx).value().trim().to_string();
+            if raw.is_empty() { None } else { Some(raw) }
+        };
+        if !speaker_chip::can_save_speaker_edit(merge_target.as_deref(), &name) {
+            return;
+        }
+        let key = state.key.clone();
+
+        {
+            let state = self.speaker_edit.as_mut().unwrap();
+            state.saving = true;
+            state.error = None;
+        }
+        cx.notify();
+
+        let io = Io::global(cx);
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let outcome: Result<(), String> = if let Some(profile_id) = merge_target {
+                match io
+                    .spawn(async move { merge_cluster_into_profile_core(&pool, &meeting_id, &speaker, &profile_id).await })
+                    .await
+                {
+                    Ok(Ok(_)) => Ok(()),
+                    Ok(Err(e)) => Err(e),
+                    Err(e) => Err(format!("Merge task panicked: {e}")),
+                }
+            } else if let Some(vp_id) = voice_profile_id {
+                match io
+                    .spawn(async move { VoiceProfilesRepository::update_profile(&pool, &vp_id, &name, email.as_deref()).await })
+                    .await
+                {
+                    Ok(Ok(_)) => Ok(()),
+                    Ok(Err(e)) => Err(e.to_string()),
+                    Err(e) => Err(format!("Update task panicked: {e}")),
+                }
+            } else {
+                match io
+                    .spawn(async move {
+                        promote_speaker_to_profile_core(&pool, &speaker, &name, email.as_deref(), &meeting_id).await
+                    })
+                    .await
+                {
+                    Ok(Ok(_)) => Ok(()),
+                    Ok(Err(e)) => Err(e),
+                    Err(e) => Err(format!("Promote task panicked: {e}")),
+                }
+            };
+
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                let still_open = this.speaker_edit.as_ref().is_some_and(|s| s.key == key);
+                match outcome {
+                    Ok(()) => {
+                        this.speaker_edit = None;
+                        this.reload_transcript(cx);
+                    }
+                    Err(e) if still_open => {
+                        let state = this.speaker_edit.as_mut().unwrap();
+                        state.saving = false;
+                        state.error = Some(e);
+                    }
+                    Err(_) => {}
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    // ---- Per-segment audio playback --------------------------------------
+    // Mirrors `SegmentAudioContext.tsx`: only one clip plays at a time,
+    // played natively (not in-webview — moot here, there is no webview) via
+    // the same core fns the Tauri `play_meeting_audio_clip` /
+    // `stop_meeting_audio_clip` commands wrap.
+
+    fn toggle_segment_playback(
+        &mut self,
+        segment_id: String,
+        start_secs: f64,
+        end_secs: f64,
+        source: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.playing_segment.as_deref() == Some(segment_id.as_str())
+            || self.loading_segment.as_deref() == Some(segment_id.as_str())
+        {
+            self.stop_segment_playback(cx);
+            return;
+        }
+        self.play_segment(segment_id, start_secs, end_secs, source, cx);
+    }
+
+    fn play_segment(
+        &mut self,
+        segment_id: String,
+        start_secs: f64,
+        end_secs: f64,
+        source: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(meeting_id) = self.meeting_id.clone() else {
+            return;
+        };
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        self.playing_segment = None;
+        self.loading_segment = Some(segment_id.clone());
+        cx.notify();
+
+        let sink = AppServices::global(cx).sink.clone();
+        let io = Io::global(cx);
+        let generation = self.generation;
+        let segment_for_task = segment_id.clone();
+        cx.spawn(async move |this, cx| {
+            let result: Result<(), String> = match io
+                .spawn(async move {
+                    let bytes = meetily_core::audio::clip::extract_clip_wav(
+                        &pool,
+                        &meeting_id,
+                        start_secs,
+                        end_secs,
+                        source.as_deref(),
+                    )
+                    .await?;
+                    let (samples, sample_rate, channels) = meetily_core::audio::clip::parse_wav_pcm16(&bytes)?;
+                    meetily_core::audio::playback::play_pcm_i16(&sink, samples, sample_rate, channels)
+                })
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => Err(format!("Clip playback task panicked: {e}")),
+            };
+
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != generation || this.loading_segment.as_deref() != Some(segment_for_task.as_str())
+                {
+                    return;
+                }
+                this.loading_segment = None;
+                match result {
+                    Ok(()) => this.playing_segment = Some(segment_for_task),
+                    Err(e) => notify(cx, Notification::error(e)),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn stop_segment_playback(&mut self, cx: &mut Context<Self>) {
+        self.playing_segment = None;
+        self.loading_segment = None;
+        cx.notify();
+        meetily_core::audio::playback::stop();
+    }
+
+    fn on_segment_playback_ended(&mut self, cx: &mut Context<Self>) {
+        self.playing_segment = None;
+        self.loading_segment = None;
+        cx.notify();
+    }
 }
 
 /// Show a notification on the main window from a context that doesn't carry
@@ -893,6 +1385,101 @@ fn notify(cx: &mut App, notification: Notification) {
             window.push_notification(notification, cx);
         });
     }
+}
+
+/// The inline speaker-edit panel shown under a transcript row when its chip
+/// is open — mirrors `EditableSpeakerChip.tsx`'s popover body, rendered
+/// inline (below the row) instead of in a floating overlay so it works
+/// cleanly inside the virtualized `uniform_list`. Free function (not a
+/// method) because the `uniform_list` row closure only has `&mut App`, not
+/// `&mut Context<MeetingView>`.
+fn render_speaker_edit_panel(state: &SpeakerEditState, entity: Entity<MeetingView>, cx: &mut App) -> AnyElement {
+    let is_named_profile = state.voice_profile_id.is_some();
+    let merging = state.merge_target.is_some();
+    let merge_target_profile = state.merge_target.as_ref().and_then(|id| state.profiles.iter().find(|p| &p.id == id));
+    let name = state.name_input.read(cx).value().trim().to_string();
+    let can_save = speaker_chip::can_save_speaker_edit(state.merge_target.as_deref(), &name) && !state.saving;
+
+    let mut panel = v_flex()
+        .w_full()
+        .gap_2()
+        .mt_1()
+        .p_3()
+        .rounded_md()
+        .border_1()
+        .border_color(ActiveTheme::theme(cx).border)
+        .bg(ActiveTheme::theme(cx).muted.opacity(0.3))
+        .child(div().text_sm().font_semibold().child(speaker_chip::edit_panel_title(is_named_profile)));
+
+    if !is_named_profile && !state.profiles.is_empty() {
+        let label = merge_target_profile.map(|p| p.name.clone()).unwrap_or_else(|| "Create new speaker…".to_string());
+        let entity_for_cycle = entity.clone();
+        panel = panel.child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(div().text_xs().text_color(ActiveTheme::theme(cx).muted_foreground).child("Target"))
+                .child(
+                    Button::new("cycle-speaker-merge-target")
+                        .outline()
+                        .label(label)
+                        .on_click(move |_, _, cx| {
+                            entity_for_cycle.update(cx, |this, cx| this.cycle_speaker_merge_target(cx));
+                        }),
+                ),
+        );
+    }
+
+    if merging {
+        if let Some(target) = merge_target_profile {
+            panel = panel.child(
+                div()
+                    .text_xs()
+                    .text_color(ActiveTheme::theme(cx).muted_foreground)
+                    .child(format!(
+                        "This cluster's samples will be folded into {}{}, and every transcript from this meeting \
+                         will be relabelled.",
+                        target.name,
+                        target.email.as_deref().map(|e| format!(" ({e})")).unwrap_or_default(),
+                    )),
+            );
+        }
+    } else {
+        panel = panel
+            .child(div().w_full().child(Input::new(&state.name_input)))
+            .child(div().w_full().child(Input::new(&state.email_input)));
+    }
+
+    if let Some(err) = &state.error {
+        panel = panel.child(div().text_xs().text_color(ActiveTheme::theme(cx).danger).child(err.clone()));
+    }
+
+    let entity_cancel = entity.clone();
+    let entity_save = entity.clone();
+    panel.child(
+        h_flex()
+            .gap_2()
+            .child(
+                Button::new("save-speaker-edit")
+                    .primary()
+                    .label(if state.saving { "Saving…" } else if merging { "Merge" } else { "Save" })
+                    .loading(state.saving)
+                    .disabled(!can_save)
+                    .on_click(move |_, _, cx| {
+                        entity_save.update(cx, |this, cx| this.save_speaker_edit(cx));
+                    }),
+            )
+            .child(
+                Button::new("cancel-speaker-edit")
+                    .ghost()
+                    .label("Cancel")
+                    .disabled(state.saving)
+                    .on_click(move |_, _, cx| {
+                        entity_cancel.update(cx, |this, cx| this.close_speaker_edit(cx));
+                    }),
+            ),
+    )
+    .into_any_element()
 }
 
 fn syntax_style(cx: &App) -> SyntaxStyle {
@@ -935,6 +1522,8 @@ impl Render for MeetingView {
         v_flex()
             .size_full()
             .child(self.render_header(cx))
+            .child(self.render_calendar_row(cx))
+            .when(self.calendar_picker_open, |this| this.child(self.render_calendar_picker(cx)))
             .when(self.retranscribe_open, |this| this.child(self.render_retranscribe(cx)))
             .child(
                 h_flex()
@@ -1085,6 +1674,242 @@ impl MeetingView {
             )
     }
 
+    /// The calendar-event link row shown under the header — mirrors
+    /// `CalendarEventPanel.tsx`.
+    fn render_calendar_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.calendar_loading {
+            return div().into_any_element();
+        }
+        let row = h_flex()
+            .w_full()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .px_4()
+            .py_2()
+            .border_b_1()
+            .border_color(cx.theme().border);
+
+        let Some(event) = self.calendar_event.clone() else {
+            return row
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .text_color(cx.theme().muted_foreground)
+                        .text_sm()
+                        .child(Lucide::Calendar.view(cx))
+                        .child("Not linked to a calendar event."),
+                )
+                .child(
+                    Button::new("link-calendar-event")
+                        .ghost()
+                        .icon(Lucide::Link2)
+                        .label("Link event")
+                        .disabled(self.calendar_mutating)
+                        .on_click(cx.listener(|this, _, _, cx| this.open_calendar_picker(cx))),
+                )
+                .into_any_element();
+        };
+
+        let attendee_count = event.attendees.len();
+        row.child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(Lucide::Calendar.view(cx))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_medium()
+                                .child(event.summary.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "(untitled event)".to_string())),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(calendar_format::format_time_range(event.start_at, event.end_at)),
+                )
+                .when_some(event.location.clone().filter(|l| !l.is_empty()), |el, loc| {
+                    el.child(
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(Lucide::MapPin.view(cx))
+                            .child(loc),
+                    )
+                })
+                .when(attendee_count > 0, |el| {
+                    el.child(
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(Lucide::Users.view(cx))
+                            .child(format!("{attendee_count} attendee{}", if attendee_count == 1 { "" } else { "s" })),
+                    )
+                }),
+        )
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    Button::new("change-calendar-event")
+                        .ghost()
+                        .label("Change")
+                        .disabled(self.calendar_mutating)
+                        .on_click(cx.listener(|this, _, _, cx| this.open_calendar_picker(cx))),
+                )
+                .child(
+                    Button::new("unlink-calendar-event")
+                        .ghost()
+                        .icon(Lucide::Link2Off)
+                        .label("Unlink")
+                        .disabled(self.calendar_mutating)
+                        .on_click(cx.listener(|this, _, _, cx| this.unlink_calendar_event(cx))),
+                ),
+        )
+        .into_any_element()
+    }
+
+    /// "Link calendar event" picker: events within `±CALENDAR_WINDOW_DAYS`
+    /// of the meeting's `created_at`, closest-first — mirrors
+    /// `CalendarEventPicker.tsx`.
+    fn render_calendar_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let anchor = self.created_at.unwrap_or_else(chrono::Utc::now);
+        let current_id = self.calendar_event.as_ref().map(|e| e.id.clone());
+
+        let mut body = v_flex()
+            .w_full()
+            .gap_2()
+            .p_4()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().muted.opacity(0.3))
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .child(div().text_sm().font_semibold().child("Link calendar event"))
+                    .child(
+                        Button::new("close-calendar-picker")
+                            .ghost()
+                            .icon(Lucide::X)
+                            .on_click(cx.listener(|this, _, _, cx| this.close_calendar_picker(cx))),
+                    ),
+            );
+
+        if let Some(err) = &self.calendar_picker_error {
+            body = body.child(div().text_xs().text_color(cx.theme().danger).child(err.clone()));
+        }
+
+        if self.calendar_picker_events.is_some() {
+            body = body.child(div().w_full().child(Input::new(&self.calendar_picker_query)));
+        }
+
+        let query = self.calendar_picker_query.read(cx).value().trim().to_lowercase();
+        let filtered: Option<Vec<CalendarEvent>> = self.calendar_picker_events.as_ref().map(|events| {
+            if query.is_empty() {
+                events.clone()
+            } else {
+                events
+                    .iter()
+                    .filter(|e| {
+                        e.summary.as_deref().unwrap_or_default().to_lowercase().contains(&query)
+                            || e.location.as_deref().unwrap_or_default().to_lowercase().contains(&query)
+                    })
+                    .cloned()
+                    .collect()
+            }
+        });
+
+        match &filtered {
+            None => {
+                body = body.child(div().text_xs().text_color(cx.theme().muted_foreground).child("Loading…"));
+            }
+            Some(events) if events.is_empty() => {
+                body = body.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!(
+                            "No events within ±{CALENDAR_WINDOW_DAYS} days of the recording. Try refreshing your \
+                             calendar in Settings."
+                        )),
+                );
+            }
+            Some(events) => {
+                body = body.child(
+                    v_flex()
+                        .w_full()
+                        .gap_1()
+                        .max_h(px(280.))
+                        .overflow_y_scrollbar()
+                        .children(events.iter().take(30).map(|e| {
+                            let is_current = current_id.as_deref() == Some(e.id.as_str());
+                            let event_id = e.id.clone();
+                            h_flex()
+                                .id(SharedString::from(format!("calendar-event-{}", e.id)))
+                                .w_full()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .px_2()
+                                .py_1()
+                                .rounded_md()
+                                .when(is_current, |el| el.bg(cx.theme().accent.opacity(0.4)))
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .gap_0p5()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .overflow_hidden()
+                                                .child(e.summary.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| "(untitled event)".to_string())),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(format!(
+                                                    "{} · {}",
+                                                    e.start_at.with_timezone(&chrono::Local).format("%a %b %-d, %-I:%M %p"),
+                                                    calendar_format::format_offset(e.start_at, anchor),
+                                                )),
+                                        ),
+                                )
+                                .child(
+                                    Button::new(SharedString::from(format!("pick-calendar-event-{}", e.id)))
+                                        .when(is_current, |b| b.outline())
+                                        .when(!is_current, |b| b.ghost())
+                                        .label(if is_current { "Linked" } else { "Link" })
+                                        .disabled(self.calendar_mutating || is_current)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.pick_calendar_event(Some(event_id.clone()), cx)
+                                        })),
+                                )
+                                .into_any_element()
+                        })),
+                );
+            }
+        }
+
+        body
+    }
+
     fn render_retranscribe(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let model_label = self
             .retranscribe_model_index
@@ -1206,6 +2031,11 @@ impl MeetingView {
 
         let transcripts = self.transcripts.clone();
         let count = transcripts.len();
+        let entity = cx.entity();
+        let meeting_id = self.meeting_id.clone();
+        let speaker_edit = self.speaker_edit.clone();
+        let playing_segment = self.playing_segment.clone();
+        let loading_segment = self.loading_segment.clone();
 
         v_flex()
             .size_full()
@@ -1217,21 +2047,86 @@ impl MeetingView {
                             let t = &transcripts[ix];
                             let time = format::segment_timestamp(t.audio_start_time, &t.timestamp);
                             let speaker = t.speaker.clone().unwrap_or_else(|| "Speaker".to_string());
-                            v_flex()
+                            let editable = speaker_chip::can_edit_speaker(&speaker, t.voice_profile_id.as_deref());
+                            let row_key = format!("{}:{speaker}", t.id);
+                            let is_editing_this_row = speaker_edit.as_ref().is_some_and(|s| s.key == row_key);
+
+                            let can_play = meeting_id.is_some()
+                                && t.audio_end_time.is_some_and(|end| end > t.audio_start_time.unwrap_or(0.0));
+                            let is_playing = playing_segment.as_deref() == Some(t.id.as_str());
+                            let is_loading_clip = loading_segment.as_deref() == Some(t.id.as_str());
+
+                            let mut header_row = h_flex().gap_2().items_center().text_xs().text_color(cx.theme().muted_foreground);
+
+                            if can_play {
+                                let segment_id = t.id.clone();
+                                let start = t.audio_start_time.unwrap_or(0.0);
+                                let end = t.audio_end_time.unwrap_or(start);
+                                let source = t.source.clone();
+                                let entity = entity.clone();
+                                header_row = header_row.child(
+                                    Button::new(SharedString::from(format!("play-segment-{}", t.id)))
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(if is_playing { Lucide::Square } else { Lucide::Play })
+                                        .loading(is_loading_clip)
+                                        .tooltip(if is_playing { "Stop" } else { "Play this segment" })
+                                        .on_click(move |_, _, cx| {
+                                            entity.update(cx, |this, cx| {
+                                                this.toggle_segment_playback(
+                                                    segment_id.clone(),
+                                                    start,
+                                                    end,
+                                                    source.clone(),
+                                                    cx,
+                                                )
+                                            });
+                                        }),
+                                );
+                            }
+
+                            if editable {
+                                let segment_id = t.id.clone();
+                                let speaker_for_click = speaker.clone();
+                                let voice_profile_id = t.voice_profile_id.clone();
+                                let entity = entity.clone();
+                                header_row = header_row.child(
+                                    Button::new(SharedString::from(format!("edit-speaker-{row_key}")))
+                                        .ghost()
+                                        .xsmall()
+                                        .label(speaker.clone())
+                                        .on_click(move |_, window, cx| {
+                                            entity.update(cx, |this, cx| {
+                                                this.toggle_speaker_edit(
+                                                    segment_id.clone(),
+                                                    speaker_for_click.clone(),
+                                                    voice_profile_id.clone(),
+                                                    window,
+                                                    cx,
+                                                )
+                                            });
+                                        }),
+                                );
+                            } else {
+                                header_row = header_row.child(speaker.clone());
+                            }
+                            header_row = header_row.child(time);
+
+                            let mut row = v_flex()
                                 .w_full()
                                 .gap_1()
                                 .px_4()
                                 .py_2()
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(speaker)
-                                        .child(time),
-                                )
-                                .child(div().text_sm().child(t.text.clone()))
-                                .into_any_element()
+                                .child(header_row)
+                                .child(div().text_sm().child(t.text.clone()));
+
+                            if is_editing_this_row {
+                                if let Some(state) = speaker_edit.as_ref() {
+                                    row = row.child(render_speaker_edit_panel(state, entity.clone(), cx));
+                                }
+                            }
+
+                            row.into_any_element()
                         })
                         .collect::<Vec<_>>()
                 })

@@ -238,6 +238,23 @@ impl SpeakersView {
         });
     }
 
+    /// True while self-voice enrollment is actively recording from the mic —
+    /// the shell checks this before letting the user navigate away, so the
+    /// microphone doesn't stay open on an abandoned enrollment session.
+    pub fn is_enrollment_recording(&self) -> bool {
+        self.self_mode == SelfVoiceMode::Recording
+    }
+
+    /// Called by the shell when navigating away from this page while
+    /// enrollment is recording: cancels the in-flight enrollment exactly
+    /// like the "Cancel" button, without requiring the page to still be on
+    /// screen. A no-op otherwise.
+    pub fn on_leave(&mut self, cx: &mut Context<Self>) {
+        if self.is_enrollment_recording() {
+            self.cancel_self_voice_record(cx);
+        }
+    }
+
     fn save_self_voice_name(&mut self, cx: &mut Context<Self>) {
         let Some(pool) = AppServices::global(cx).pool() else {
             return;
