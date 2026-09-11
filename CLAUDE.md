@@ -25,7 +25,9 @@ Root-level scripts (recommended — handle CUDA/Vulkan env setup and the `llama-
 ./dev.sh vulkan               # AMD/Intel Vulkan
 ./dev.sh cpu                  # CPU-only
 ./dev.sh frontend             # frontend-only (next dev), no Tauri shell — fastest UI loop
+./dev.sh gpui [cuda|vulkan|cpu]   # GPUI shell (meetily-gpui) via cargo run — no Next.js/pnpm
 ./build.sh                    # production build (same mode selection as dev.sh)
+./build.sh gpui [cuda|vulkan|cpu] # release build + AppImage of the GPUI shell (Parley-*.AppImage)
 ./clean.sh                    # nuke target/ + node_modules/ + Next.js caches
 ```
 
@@ -82,6 +84,11 @@ planned alongside the Tauri one):
   `notifications/`, `api/`, and every `#[tauri::command]` under
   `src/commands/<domain>/`. It re-exports the core's top-level modules
   (`crate::audio`, `crate::summary`, …) so shell code uses the same paths.
+- **`meetily-gpui/`** (bin `meetily-gpui`) — GPUI shell, work in progress: a
+  second desktop UI on GPUI + gpui-kit that links `meetily-core` directly
+  (no webview, no IPC — core → UI goes through the same `EventSink` trait).
+  Run it with `./dev.sh gpui`, package it with `./build.sh gpui` (see
+  `meetily-gpui/packaging/linux/`).
 
 Core → UI communication goes through the `events::EventSink` trait
 (`emit_event(name, &payload)`), never an `AppHandle`. The shell wraps its
