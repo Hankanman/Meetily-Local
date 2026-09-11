@@ -43,7 +43,7 @@ pub async fn speaker_model_status() -> Result<SpeakerModelStatus, String> {
 /// already present and non-empty, returns immediately.
 #[command]
 pub async fn speaker_model_download<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    service::download_speaker_model(crate::events::shared_sink(&app)).await
+    service::download_speaker_model(crate::tauri_events::shared_sink(&app)).await
 }
 
 /// Ensure the pyannote segmentation model (used only for the accurate

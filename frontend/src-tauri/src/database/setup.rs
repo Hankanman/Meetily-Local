@@ -1,14 +1,25 @@
 use log::{info, warn};
-use tauri::{AppHandle, Manager};
 
 use super::manager::DatabaseManager;
 use super::repositories::meeting::MeetingsRepository;
-use crate::events::EventSinkExt;
-use crate::state::AppState;
 
-/// Initialize database on app startup
-/// Handles first launch detection and conditional initialization
-pub async fn initialize_database_on_startup(app: &AppHandle) -> Result<(), String> {
+/// Outcome of [`prepare_database_on_startup`] for the Tauri shell to act on:
+/// either this is the first launch (nothing to manage yet — the shell
+/// notifies the frontend once its window/listeners are ready) or the
+/// database is open and ready to be registered as app state.
+pub enum StartupOutcome {
+    FirstLaunch,
+    Initialized(DatabaseManager),
+}
+
+/// Tauri-free core of database startup: first-launch detection and, on a
+/// normal launch, opening the database and sweeping any meeting row a
+/// previous run left `"recording"` (crash marker, issue #57 slice 2) to
+/// `"interrupted"` so the recovery dialog can find it via a plain status
+/// query. The Tauri shell (`initialize_database_on_startup` in
+/// `lib.rs`/`setup_commands.rs`) manages the returned `DatabaseManager` as
+/// app state and emits `first-launch-detected` on `StartupOutcome::FirstLaunch`.
+pub async fn prepare_database_on_startup() -> Result<StartupOutcome, String> {
     // Check if this is the first launch (no database exists yet)
     let is_first_launch = DatabaseManager::is_first_launch()
         .await
@@ -16,40 +27,30 @@ pub async fn initialize_database_on_startup(app: &AppHandle) -> Result<(), Strin
 
     if is_first_launch {
         info!("First launch detected - will notify window when ready");
-
-        // Delay event emission to ensure window is ready and React listeners are registered
-        let app_handle = app.clone();
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            app_handle
-                .emit_event("first-launch-detected", &())
-                .expect("Failed to emit first-launch-detected event");
-            info!("Emitted first-launch-detected after delay");
-        });
-    } else {
-        // Normal flow - initialize database immediately
-        let db_manager = DatabaseManager::new_default()
-            .await
-            .map_err(|e| format!("Failed to initialize database manager: {}", e))?;
-
-        let pool = db_manager.pool().clone();
-        app.manage(AppState { db_manager });
-        info!("Database initialized successfully");
-
-        // Crash marker (issue #57 slice 2): a meeting row still "recording"
-        // at this point predates this very process — the app that created
-        // it never reached `stop_recording`'s finalisation (a crash, kill,
-        // or forced shutdown). Sweep them to "interrupted" once, here, so
-        // the recovery dialog can find them via a plain status query.
-        match MeetingsRepository::mark_stale_recording_meetings_interrupted(&pool).await {
-            Ok(0) => {}
-            Ok(n) => info!(
-                "Marked {} meeting(s) left 'recording' by a previous run as 'interrupted'",
-                n
-            ),
-            Err(e) => warn!("Failed to sweep stale 'recording' meetings at startup: {}", e),
-        }
+        return Ok(StartupOutcome::FirstLaunch);
     }
 
-    Ok(())
+    // Normal flow - initialize database immediately
+    let db_manager = DatabaseManager::new_default()
+        .await
+        .map_err(|e| format!("Failed to initialize database manager: {}", e))?;
+
+    let pool = db_manager.pool().clone();
+    info!("Database initialized successfully");
+
+    // Crash marker (issue #57 slice 2): a meeting row still "recording"
+    // at this point predates this very process — the app that created
+    // it never reached `stop_recording`'s finalisation (a crash, kill,
+    // or forced shutdown). Sweep them to "interrupted" once, here, so
+    // the recovery dialog can find them via a plain status query.
+    match MeetingsRepository::mark_stale_recording_meetings_interrupted(&pool).await {
+        Ok(0) => {}
+        Ok(n) => info!(
+            "Marked {} meeting(s) left 'recording' by a previous run as 'interrupted'",
+            n
+        ),
+        Err(e) => warn!("Failed to sweep stale 'recording' meetings at startup: {}", e),
+    }
+
+    Ok(StartupOutcome::Initialized(db_manager))
 }

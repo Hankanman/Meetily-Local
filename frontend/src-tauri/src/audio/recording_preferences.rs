@@ -1,12 +1,10 @@
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager, Runtime};
 
 use anyhow::{anyhow, Result};
 
 use crate::database::repositories::setting::{SettingsRepository, KEY_RECORDING_PREFERENCES};
-use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RecordingPreferences {
@@ -111,14 +109,6 @@ pub fn generate_recording_filename(format: &str) -> String {
     format!("recording_{}.{}", timestamp, format)
 }
 
-/// Fetch the SQLite pool, if `AppState` has been managed yet. `None` early
-/// in startup — e.g. on a first-launch cold start, before the frontend has
-/// created the database.
-fn db_pool<R: Runtime>(app: &AppHandle<R>) -> Option<sqlx::SqlitePool> {
-    app.try_state::<AppState>()
-        .map(|s| s.db_manager.pool().clone())
-}
-
 /// One-time, read-only import of recording preferences from the legacy
 /// tauri-plugin-store JSON file (`recording_preferences.json`), written
 /// before this moved to SQLite. Read directly off disk (same `$APPDATA`
@@ -215,17 +205,18 @@ pub async fn load_recording_preferences(
     Ok(prefs)
 }
 
-/// Save recording preferences to the database
-pub async fn save_recording_preferences<R: Runtime>(
-    app: &AppHandle<R>,
+/// Save recording preferences to the database. `pool` is resolved by the
+/// caller (typically via `AppState`'s Tauri-managed pool), so this module
+/// itself never depends on Tauri.
+pub async fn save_recording_preferences(
+    pool: Option<sqlx::SqlitePool>,
     preferences: &RecordingPreferences,
 ) -> Result<()> {
     info!("Saving recording preferences: save_folder={:?}, auto_save={}, format={}, mic={:?}, system={:?}",
           preferences.save_folder, preferences.auto_save, preferences.file_format,
           preferences.preferred_mic_device, preferences.preferred_system_device);
 
-    let pool =
-        db_pool(app).ok_or_else(|| anyhow!("Database not yet initialized — try again shortly"))?;
+    let pool = pool.ok_or_else(|| anyhow!("Database not yet initialized — try again shortly"))?;
     SettingsRepository::set_setting(&pool, KEY_RECORDING_PREFERENCES, preferences)
         .await
         .map_err(|e| anyhow!("Failed to save recording preferences: {}", e))?;
@@ -236,64 +227,6 @@ pub async fn save_recording_preferences<R: Runtime>(
     ensure_recordings_directory(&preferences.save_folder)?;
 
     Ok(())
-}
-
-/// Tauri commands for recording preferences
-#[tauri::command]
-pub async fn get_recording_preferences<R: Runtime>(
-    app: AppHandle<R>,
-) -> Result<RecordingPreferences, String> {
-    load_recording_preferences(db_pool(&app))
-        .await
-        .map_err(|e| format!("Failed to load recording preferences: {}", e))
-}
-
-#[tauri::command]
-pub async fn set_recording_preferences<R: Runtime>(
-    app: AppHandle<R>,
-    preferences: RecordingPreferences,
-) -> Result<(), String> {
-    save_recording_preferences(&app, &preferences)
-        .await
-        .map_err(|e| format!("Failed to save recording preferences: {}", e))
-}
-
-#[tauri::command]
-pub async fn get_default_recordings_folder_path() -> Result<String, String> {
-    let path = get_default_recordings_folder();
-    Ok(path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-pub async fn open_recordings_folder<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    let preferences = load_recording_preferences(db_pool(&app))
-        .await
-        .map_err(|e| format!("Failed to load preferences: {}", e))?;
-
-    // Ensure directory exists before trying to open it
-    ensure_recordings_directory(&preferences.save_folder)
-        .map_err(|e| format!("Failed to create directory: {}", e))?;
-
-    let folder_path = preferences.save_folder.to_string_lossy().to_string();
-
-    std::process::Command::new("xdg-open")
-        .arg(&folder_path)
-        .spawn()
-        .map_err(|e| format!("Failed to open folder: {}", e))?;
-
-    info!("Opened recordings folder: {}", folder_path);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn select_recording_folder<R: Runtime>(
-    _app: AppHandle<R>,
-) -> Result<Option<String>, String> {
-    // Use Tauri's dialog to select folder
-    // For now, return None - this would need to be implemented with tauri-plugin-dialog
-    // when it's available in the Cargo.toml
-    warn!("Folder selection not yet implemented - using dialog plugin");
-    Ok(None)
 }
 
 #[cfg(test)]

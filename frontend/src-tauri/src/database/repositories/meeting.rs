@@ -1,4 +1,4 @@
-use crate::api::{MeetingDetails, MeetingTranscript};
+use crate::database::models::{MeetingDetails, MeetingTranscript};
 use crate::database::models::{MeetingModel, Transcript};
 use chrono::Utc;
 use sqlx::{Connection, Error as SqlxError, SqliteConnection, SqlitePool};

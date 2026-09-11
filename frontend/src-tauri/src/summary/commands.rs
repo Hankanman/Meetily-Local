@@ -217,7 +217,7 @@ pub async fn api_process_transcript<R: Runtime>(
     let meeting_id_clone = m_id.clone();
     tokio::spawn(async move {
         SummaryService::process_transcript_background(
-            crate::events::shared_sink(&app),
+            crate::tauri_events::shared_sink(&app),
             pool,
             meeting_id_clone.clone(),
             text,

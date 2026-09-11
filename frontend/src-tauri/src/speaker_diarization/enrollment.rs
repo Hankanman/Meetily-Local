@@ -169,7 +169,7 @@ pub async fn start_self_voice_enrollment<R: Runtime>(
     app: AppHandle<R>,
     mic_device: Option<String>,
 ) -> Result<(), String> {
-    start_self_voice_enrollment_with_sink(crate::events::shared_sink(&app), mic_device).await
+    start_self_voice_enrollment_with_sink(crate::tauri_events::shared_sink(&app), mic_device).await
 }
 
 /// Tauri-free core of [`start_self_voice_enrollment`] — opens the capture

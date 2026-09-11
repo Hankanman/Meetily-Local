@@ -7,12 +7,8 @@
 //! fail with "element appsink not found". We therefore play the extracted PCM
 //! natively (see [`crate::audio::playback`]) rather than in the webview.
 
-use base64::Engine;
-use tauri::{AppHandle, Runtime};
-
 use crate::audio::ffmpeg::find_ffmpeg_path;
 use crate::database::models::MeetingModel;
-use crate::state::AppState;
 
 /// Upper bound on clip length, guarding against a bogus range producing a huge
 /// extraction. Real transcript segments are seconds long.
@@ -22,7 +18,7 @@ const MAX_CLIP_SECS: f64 = 120.0;
 /// (mono 16 kHz PCM s16le). Shared by the native-playback command and the
 /// legacy base64 command. Errors with a user-facing message when the meeting
 /// has no saved recording.
-pub(crate) async fn extract_clip_wav(
+pub async fn extract_clip_wav(
     pool: &sqlx::SqlitePool,
     meeting_id: &str,
     start_secs: f64,
@@ -129,55 +125,11 @@ pub(crate) async fn extract_clip_wav(
     Ok(bytes)
 }
 
-/// Extract `[start_secs, end_secs]` of a meeting's recording as a base64 WAV
-/// (mono 16 kHz PCM). Kept for compatibility; playback now goes through
-/// [`play_meeting_audio_clip`] and the native audio path.
-#[tauri::command]
-pub async fn get_meeting_audio_clip<R: Runtime>(
-    _app: AppHandle<R>,
-    state: tauri::State<'_, AppState>,
-    meeting_id: String,
-    start_secs: f64,
-    end_secs: f64,
-    source: Option<String>,
-) -> Result<String, String> {
-    let pool = state.db_manager.pool();
-    let bytes = extract_clip_wav(pool, &meeting_id, start_secs, end_secs, source.as_deref()).await?;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
-}
-
-/// Play `[start_secs, end_secs]` of a meeting's recording through the native
-/// audio output. Returns as soon as playback starts; a `segment-playback-ended`
-/// event fires when the clip finishes on its own (see [`crate::audio::playback`]).
-#[tauri::command]
-pub async fn play_meeting_audio_clip<R: Runtime>(
-    app: AppHandle<R>,
-    state: tauri::State<'_, AppState>,
-    meeting_id: String,
-    start_secs: f64,
-    end_secs: f64,
-    source: Option<String>,
-) -> Result<(), String> {
-    let pool = state.db_manager.pool();
-    let bytes = extract_clip_wav(pool, &meeting_id, start_secs, end_secs, source.as_deref()).await?;
-    let (samples, sample_rate, channels) =
-        tokio::task::spawn_blocking(move || parse_wav_pcm16(&bytes))
-            .await
-            .map_err(|e| format!("Clip decode task failed: {}", e))??;
-    crate::audio::playback::play_pcm_i16(&crate::events::shared_sink(&app), samples, sample_rate, channels)
-}
-
-/// Stop any transcript-segment clip that's currently playing.
-#[tauri::command]
-pub fn stop_meeting_audio_clip() {
-    crate::audio::playback::stop();
-}
-
 /// Minimal reader for the PCM WAV clips we generate (RIFF/WAVE, integer PCM,
 /// 16-bit). Scans chunks rather than assuming a fixed 44-byte header, since
 /// ffmpeg may interleave extra metadata chunks. Returns the interleaved i16
 /// samples plus sample rate and channel count.
-fn parse_wav_pcm16(bytes: &[u8]) -> Result<(Vec<i16>, u32, u16), String> {
+pub fn parse_wav_pcm16(bytes: &[u8]) -> Result<(Vec<i16>, u32, u16), String> {
     if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         return Err("Clip is not a WAV file.".to_string());
     }

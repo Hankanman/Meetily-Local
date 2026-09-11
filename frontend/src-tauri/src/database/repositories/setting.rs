@@ -1,8 +1,6 @@
 use crate::database::models::{Setting, TranscriptSetting};
-use crate::state::AppState;
 use crate::summary::CustomOpenAIConfig;
 use sqlx::SqlitePool;
-use tauri::State;
 
 // ===== NAMESPACED JSON SETTING KEYS =====
 //
@@ -451,35 +449,4 @@ impl SettingsRepository {
         })?;
         Self::set_setting_json(pool, key, &json).await
     }
-}
-
-// ===== FRONTEND UI CONFIG COMMANDS =====
-//
-// Thin Tauri commands backing ConfigContext's previously-localStorage-only
-// preferences (primary language, confidence indicator toggle, auto-summary
-// toggle, per-provider model cache, ...). The shape is owned entirely by the
-// frontend — the backend just persists whatever JSON blob it's handed.
-
-/// Gets the saved frontend UI config blob, or `None` if nothing has been saved yet.
-#[tauri::command]
-pub async fn api_get_ui_config(
-    state: State<'_, AppState>,
-) -> std::result::Result<Option<serde_json::Value>, String> {
-    let pool = state.db_manager.pool();
-    SettingsRepository::get_setting_json(pool, KEY_UI_CONFIG)
-        .await
-        .map(|opt| opt.and_then(|json| serde_json::from_str(&json).ok()))
-        .map_err(|e| format!("Failed to load UI config: {}", e))
-}
-
-/// Saves the frontend UI config blob (full replace).
-#[tauri::command]
-pub async fn api_save_ui_config(
-    state: State<'_, AppState>,
-    config: serde_json::Value,
-) -> std::result::Result<(), String> {
-    let pool = state.db_manager.pool();
-    SettingsRepository::set_setting(pool, KEY_UI_CONFIG, &config)
-        .await
-        .map_err(|e| format!("Failed to save UI config: {}", e))
 }

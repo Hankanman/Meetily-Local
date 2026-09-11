@@ -1,4 +1,5 @@
-use crate::api::{TranscriptSearchResult, TranscriptSegment};
+use crate::audio::common::TranscriptSegment;
+use crate::database::models::TranscriptSearchResult;
 use chrono::Utc;
 use sqlx::{Connection, Error as SqlxError, SqlitePool};
 use tracing::{error, info};

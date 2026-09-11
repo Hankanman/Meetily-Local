@@ -17,7 +17,7 @@ pub async fn pull_ollama_model<R: Runtime>(
     endpoint: Option<String>,
 ) -> Result<(), String> {
     client::pull_ollama_model_with_progress(
-        crate::events::shared_sink(&app_handle),
+        crate::tauri_events::shared_sink(&app_handle),
         model_name,
         endpoint,
     )

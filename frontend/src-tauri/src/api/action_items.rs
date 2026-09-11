@@ -216,7 +216,7 @@ pub async fn start_live_action_extraction<R: Runtime>(
         .ok_or_else(|| "No summary model configured. Set one in settings first.".to_string())?;
 
     crate::summary::live_action_items::start(
-        crate::events::shared_sink(&app),
+        crate::tauri_events::shared_sink(&app),
         pool.clone(),
         config.provider,
         config.model,

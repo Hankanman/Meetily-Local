@@ -8,7 +8,6 @@ use crate::config::DEFAULT_WHISPER_MODEL;
 use crate::database::repositories::setting::SettingsRepository;
 use crate::database::repositories::transcript::TranscriptsRepository;
 use crate::events::{EventSink, EventSinkExt, SharedEventSink};
-use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
 use anyhow::{anyhow, Result};
 use log::{debug, error, info, warn};
@@ -17,10 +16,9 @@ use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, Runtime};
 
 /// Global flag to track if retranscription is in progress
-static RETRANSCRIPTION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+pub(crate) static RETRANSCRIPTION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 /// Global flag to signal cancellation
 static RETRANSCRIPTION_CANCELLED: AtomicBool = AtomicBool::new(false);
@@ -95,31 +93,10 @@ pub fn cancel_retranscription() {
     RETRANSCRIPTION_CANCELLED.store(true, Ordering::SeqCst);
 }
 
-/// Start retranscription of a meeting's audio
-pub async fn start_retranscription<R: Runtime>(
-    app: AppHandle<R>,
-    meeting_id: String,
-    meeting_folder_path: String,
-    language: Option<String>,
-    model: Option<String>,
-    provider: Option<String>,
-) -> Result<RetranscriptionResult> {
-    let pool = app
-        .try_state::<AppState>()
-        .map(|s| s.db_manager.pool().clone());
-    start_retranscription_with(
-        crate::events::shared_sink(&app),
-        pool,
-        meeting_id,
-        meeting_folder_path,
-        language,
-        model,
-        provider,
-    )
-    .await
-}
-
-/// Tauri-free core of [`start_retranscription`].
+/// Start retranscription of a meeting's audio. Takes an already-resolved
+/// event sink and DB pool (the Tauri shell's `start_retranscription` in
+/// `retranscription_commands.rs` resolves both from a live `AppHandle`), so
+/// this module never depends on Tauri.
 pub async fn start_retranscription_with(
     sink: SharedEventSink,
     pool: Option<SqlitePool>,
@@ -851,70 +828,11 @@ async fn run_auto_refine(
     result.map(|_| ())
 }
 
-// Tauri commands
-
 /// Response when retranscription is started
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetranscriptionStarted {
     pub meeting_id: String,
     pub message: String,
-}
-
-// Start retranscription (Beta gated using configContext.betaFeatures)
-#[tauri::command]
-pub async fn start_retranscription_command<R: Runtime>(
-    app: AppHandle<R>,
-    meeting_id: String,
-    meeting_folder_path: String,
-    language: Option<String>,
-    model: Option<String>,
-    provider: Option<String>,
-) -> Result<RetranscriptionStarted, String> {
-    // Check if retranscription is already in progress (guard will be acquired in start_retranscription)
-    if RETRANSCRIPTION_IN_PROGRESS.load(Ordering::SeqCst) {
-        return Err("Retranscription already in progress".to_string());
-    }
-
-    // Clone values for the spawned task
-    let meeting_id_clone = meeting_id.clone();
-
-    // Spawn the retranscription in a background task
-    tauri::async_runtime::spawn(async move {
-        let result = start_retranscription(
-            app,
-            meeting_id_clone,
-            meeting_folder_path,
-            language,
-            model,
-            provider,
-        )
-        .await;
-
-        // Errors are already emitted as events in start_retranscription
-        // so we just log here for debugging
-        if let Err(e) = result {
-            error!("Retranscription failed: {}", e);
-        }
-    });
-
-    Ok(RetranscriptionStarted {
-        meeting_id,
-        message: "Retranscription started".to_string(),
-    })
-}
-
-#[tauri::command]
-pub async fn cancel_retranscription_command() -> Result<(), String> {
-    if !is_retranscription_in_progress() {
-        return Err("No retranscription in progress".to_string());
-    }
-    cancel_retranscription();
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn is_retranscription_in_progress_command() -> bool {
-    is_retranscription_in_progress()
 }
 
 #[cfg(test)]

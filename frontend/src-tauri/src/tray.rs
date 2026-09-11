@@ -292,7 +292,7 @@ async fn get_current_recording_state() -> RecordingState {
 /// - At least one Whisper model is downloaded and available.
 async fn check_can_record<R: Runtime>(app: &AppHandle<R>) -> bool {
     // First check if onboarding is complete
-    let onboarding_complete = match crate::onboarding::load_onboarding_status(app).await {
+    let onboarding_complete = match crate::onboarding_commands::load_onboarding_status_for_app(app).await {
         Ok(status) => status.completed,
         Err(e) => {
             log::warn!(

@@ -203,3 +203,47 @@ pub struct TranscriptSetting {
     #[serde(rename = "openaiApiKey")]
     pub openai_api_key: Option<String>,
 }
+
+// --- Command-facing DTOs built by the repositories ------------------------
+// Serialised straight to the frontend, so field names and serde attributes
+// are part of the UI contract.
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TranscriptSearchResult {
+    pub id: String,
+    pub title: String,
+    #[serde(rename = "matchContext")]
+    pub match_context: String,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MeetingDetails {
+    pub id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub transcripts: Vec<MeetingTranscript>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MeetingTranscript {
+    pub id: String,
+    pub text: String,
+    pub timestamp: String,
+    // Recording-relative timestamps for audio-transcript synchronization
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_start_time: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_end_time: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_profile_id: Option<String>,
+    /// Audio stream ("mic" | "system") this segment came from, for source-aware
+    /// per-segment playback. Null for older rows / imports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
