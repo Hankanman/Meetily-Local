@@ -4,8 +4,10 @@
 
 mod app_state;
 mod core_events;
+mod notifications;
 mod runtime;
 mod shell;
+mod tray;
 mod views;
 
 use std::sync::Arc;
@@ -96,6 +98,16 @@ fn main() {
                     false
                 });
             });
+
+            cx.update(|cx| {
+                cx.set_global(tray::MainWindow(window));
+                if let Err(e) = tray::install(cx) {
+                    log::warn!(
+                        "Tray unavailable (no StatusNotifierItem host?), continuing without one: {}",
+                        e
+                    );
+                }
+            });
         })
         .detach();
     });
@@ -120,7 +132,10 @@ pub fn request_quit(cx: &mut App) {
     let ctx = services.recording_context();
     cx.spawn(async move |cx| {
         let _ = io.spawn(bootstrap::finish_recording_for_exit(ctx)).await;
-        cx.update(|cx| cx.quit());
+        cx.update(|cx| {
+            tray::shutdown(cx);
+            cx.quit();
+        });
     })
     .detach();
 }
