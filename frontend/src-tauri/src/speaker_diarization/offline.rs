@@ -53,10 +53,10 @@ pub fn diarize_offline(
         segmentation: OfflineSpeakerSegmentationModelConfig {
             pyannote: OfflineSpeakerSegmentationPyannoteModelConfig {
                 model: Some(segmentation_model.to_string_lossy().into_owned()),
-                // Required by this sherpa-onnx crate version; PR's original
-                // code predates the field being added upstream. Value is the
-                // crate's own default.
-                window_shift_ratio: 0.1,
+                // Newer sherpa-onnx releases add fields here (e.g.
+                // `window_shift_ratio`); defaulting the rest compiles against
+                // both the locked 1.13.2 and those, with the crate's defaults.
+                ..Default::default()
             },
             num_threads,
             debug: false,
