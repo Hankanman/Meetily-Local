@@ -1410,12 +1410,7 @@ impl MeetingView {
 /// a `Window` (an async task after an `.await`, or a core-event
 /// subscription callback) — via the `MainWindow` global stashed at startup.
 fn notify(cx: &mut App, notification: Notification) {
-    if let Some(main_window) = cx.try_global::<crate::tray::MainWindow>() {
-        let handle = main_window.0;
-        let _ = handle.update(cx, |_, window, cx| {
-            window.push_notification(notification, cx);
-        });
-    }
+    crate::ui::with_main_window(cx, |window, cx| window.push_notification(notification, cx));
 }
 
 /// The floating speaker-edit popover, rendered from the page root (outside

@@ -26,6 +26,11 @@ use meetily_core::audio::recording_preferences::{self, RecordingPreferences};
 use meetily_core::audio::recording_service::{self, RecordingArgs, StartRequest};
 use meetily_core::audio::simple_level_monitor;
 use meetily_core::audio::transcription::TranscriptUpdate;
+use meetily_core::calendar::repository::CalendarRepository;
+use meetily_core::database::repositories::setting::{
+    SettingsRepository, KEY_BETA_FEATURES,
+};
+use meetily_core::summary::live_action_items;
 
 use crate::app_state::AppServices;
 use crate::core_events::CoreEvent;
@@ -79,6 +84,51 @@ struct RecordingStoppedPayload {
     folder_path: Option<String>,
 }
 
+/// Wire shape of a `live-action-items` event's `items` entries (the
+/// private `LiveItem` in `meetily_core::summary::live_action_items`,
+/// mirrored the same way `PartialUpdatePayload` mirrors `partial_worker`'s).
+#[derive(Debug, Clone, Deserialize)]
+struct LiveActionItemPayload {
+    text: String,
+    #[allow(dead_code)]
+    assignee: Option<String>,
+    #[allow(dead_code)]
+    due_hint: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LiveActionItemsEvent {
+    items: Vec<LiveActionItemPayload>,
+}
+
+/// Only the one beta flag this view needs, read straight from
+/// `KEY_BETA_FEATURES` — mirrors `frontend/src/types/betaFeatures.ts`'s
+/// `BetaFeatures.liveActionItems` default (`false`). Deliberately not
+/// reusing `views::settings::state::BetaFeatures`: that module is private
+/// to the settings page (see its own doc comment on why a local mirror
+/// beats a shared type), the same pattern `notifications.rs`'s
+/// `SettingsMini` uses for the notification-settings row.
+#[derive(Debug, Deserialize, Default)]
+struct BetaFeaturesMini {
+    #[serde(default)]
+    live_action_items: bool,
+}
+
+/// Case/whitespace-insensitive dedupe key, mirroring
+/// `useLiveActionItems.ts`'s `key()`.
+fn action_item_key(text: &str) -> String {
+    text.to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_end_matches(['.', ' '])
+        .to_string()
+}
+
+fn is_active_phase(phase: RecordingPhase) -> bool {
+    matches!(phase, RecordingPhase::Recording | RecordingPhase::Paused)
+}
+
 /// Tracks the server-reported active recording duration so the header can
 /// tick locally between `recording-state` events instead of only updating
 /// on phase transitions. Re-based on every snapshot.
@@ -120,6 +170,14 @@ pub struct RecordingView {
     levels: Levels,
     refining: bool,
     pending_toasts: Vec<(NotificationType, String)>,
+    /// Provisional action items from the beta live extractor — see
+    /// `restart_live_action_items`/`stop_live_action_items`.
+    live_action_items: Vec<String>,
+    /// Calendar event matched at the moment recording started, stashed so
+    /// `stop`'s `recording-stopped` payload (which carries the fresh
+    /// `meeting_id`) can link the two. Mirrors
+    /// `frontend/src/lib/recordingCalendarLink.ts`'s sessionStorage handoff.
+    pending_calendar_event_id: Option<String>,
 }
 
 impl RecordingView {
@@ -166,6 +224,8 @@ impl RecordingView {
             levels: Levels::default(),
             refining: false,
             pending_toasts: Vec::new(),
+            live_action_items: Vec::new(),
+            pending_calendar_event_id: None,
         };
 
         this.sync_initial_state(window, cx);
@@ -379,6 +439,28 @@ impl RecordingView {
                     cx.notify();
                 }
             }
+            "live-action-items" => {
+                if let Some(payload) = event.decode::<LiveActionItemsEvent>() {
+                    let mut seen: std::collections::HashSet<String> = self
+                        .live_action_items
+                        .iter()
+                        .map(|t| action_item_key(t))
+                        .collect();
+                    let mut added = false;
+                    for item in payload.items {
+                        let key = action_item_key(&item.text);
+                        if seen.contains(&key) {
+                            continue;
+                        }
+                        seen.insert(key);
+                        self.live_action_items.push(item.text);
+                        added = true;
+                    }
+                    if added {
+                        cx.notify();
+                    }
+                }
+            }
             "audio-levels" => {
                 if let Some(update) =
                     event.decode::<meetily_core::audio::simple_level_monitor::AudioLevelUpdate>()
@@ -425,6 +507,34 @@ impl RecordingView {
                                 folder_path,
                             ));
                         }
+
+                        // Link to the calendar event matched at start time
+                        // (if any), now that a `meeting_id` exists. Mirrors
+                        // `useRecordingStop.ts`'s `consumePendingCalendarEventId`
+                        // + `linkMeetingToCalendarEvent` call — failure is
+                        // non-fatal, matching React's try/catch.
+                        if let Some(event_id) = self.pending_calendar_event_id.take() {
+                            if let Some(pool) = AppServices::global(cx).pool() {
+                                let meeting_id = meeting_id.clone();
+                                AppServices::global(cx).io.spawn(async move {
+                                    if let Err(e) = meetily_core::calendar::service::link_meeting_with_snapshot(
+                                        &pool,
+                                        &meeting_id,
+                                        Some(&event_id),
+                                    )
+                                    .await
+                                    {
+                                        log::warn!(
+                                            "failed to link meeting {} to calendar event {}: {}",
+                                            meeting_id,
+                                            event_id,
+                                            e
+                                        );
+                                    }
+                                });
+                            }
+                        }
+
                         navigate(Route::Meeting(meeting_id), cx);
                     }
                 }
@@ -451,9 +561,43 @@ impl RecordingView {
         if entering_starting {
             self.clear_transcript(cx);
         }
+
+        let was_active = is_active_phase(self.snapshot.phase);
+        let now_active = is_active_phase(snapshot.phase);
+        if !was_active && now_active {
+            self.live_action_items.clear();
+            self.restart_live_action_items(cx);
+        } else if was_active && !now_active {
+            live_action_items::stop();
+        }
+
         self.elapsed.rebase(&snapshot);
         self.snapshot = snapshot;
         cx.notify();
+    }
+
+    /// Start the beta live action-item extractor, mirroring
+    /// `useLiveActionItems.ts`: only when the Beta flag is on, and
+    /// best-effort (a missing model config just means no live items).
+    fn restart_live_action_items(&mut self, cx: &mut Context<Self>) {
+        let services = AppServices::global(cx);
+        let io = services.io.clone();
+        let sink = services.sink.clone();
+        let Some(pool) = services.pool() else { return };
+        io.spawn(async move {
+            let beta = SettingsRepository::get_setting::<BetaFeaturesMini>(&pool, KEY_BETA_FEATURES)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            if !beta.live_action_items {
+                return;
+            }
+            let Ok(Some(config)) = SettingsRepository::get_model_config(&pool).await else {
+                return;
+            };
+            live_action_items::start(sink, pool, config.provider, config.model);
+        });
     }
 
     fn clear_transcript(&mut self, cx: &mut Context<Self>) {
@@ -520,17 +664,52 @@ impl RecordingView {
         let services = AppServices::global(cx);
         let io = services.io.clone();
         let ctx = services.recording_context();
-        let meeting_name = self.meeting_name.read(cx).value().to_string();
+        let pool = services.pool();
+        let typed_name = self.meeting_name.read(cx).value().to_string();
         let mic = self.mic_selection(cx);
         let system = self.system_selection(cx);
 
-        let req = StartRequest {
-            mic_device_name: Some(mic),
-            system_device_name: Some(system),
-            meeting_name: Some(meeting_name),
-        };
-
         cx.spawn(async move |this, cx| {
+            // Find the calendar event happening right now (if any), mirroring
+            // `recordingCalendarLink.ts`'s `prepareRecordingMetadata`: its
+            // summary becomes the meeting title, and its id is stashed so
+            // the `recording-stopped` handler can link the two once a
+            // `meeting_id` exists.
+            let matched_event = match &pool {
+                Some(pool) => CalendarRepository::find_event_for_now(pool).await.ok().flatten(),
+                None => None,
+            };
+
+            let (meeting_name, event_id) = match &matched_event {
+                Some(event) => {
+                    let summary = event.summary.clone().unwrap_or_default();
+                    let title = if summary.trim().is_empty() { typed_name } else { summary };
+                    (title, Some(event.id.clone()))
+                }
+                None => (typed_name, None),
+            };
+
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.pending_calendar_event_id = event_id;
+                if let Some(event) = &matched_event {
+                    this.meeting_name.update(cx, |state, cx| {
+                        state.set_value(meeting_name.clone(), window, cx);
+                    });
+                    this.toast(
+                        NotificationType::Info,
+                        format!(
+                            "Linked to \"{}\" from your calendar",
+                            event.summary.clone().unwrap_or_else(|| meeting_name.clone())
+                        ),
+                    );
+                }
+            });
+
+            let req = StartRequest {
+                mic_device_name: Some(mic),
+                system_device_name: Some(system),
+                meeting_name: Some(meeting_name),
+            };
             let handle = io.spawn(async move {
                 let hooks = recording_service::default_start_hooks(ctx.pool.clone());
                 recording_service::start(ctx, hooks, req).await
@@ -793,6 +972,26 @@ impl Render for RecordingView {
                             .child(div().text_sm().italic().text_color(cx.theme().muted_foreground).child(text))
                     },
                 )))
+            })
+            .when(!self.live_action_items.is_empty(), |parent| {
+                parent.child(
+                    v_flex()
+                        .gap_1()
+                        .p_3()
+                        .rounded(cx.theme().radius)
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_semibold()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Action items (live, beta)"),
+                        )
+                        .children(self.live_action_items.iter().map(|text| {
+                            div().text_sm().child(format!("• {}", text))
+                        })),
+                )
             })
     }
 }

@@ -10,6 +10,7 @@ mod root;
 mod runtime;
 mod shell;
 mod tray;
+mod ui;
 mod views;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -123,6 +124,7 @@ fn main() {
                         e
                     );
                 }
+                notifications::start_meeting_reminder_loop(cx);
             });
         })
         .detach();
