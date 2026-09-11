@@ -83,27 +83,25 @@ fn build_context<R: Runtime>(app: &AppHandle<R>) -> RecordingContext {
 }
 
 /// Build the two shell-side hooks `recording_service::start` needs mid-flow.
-///
-/// `// TODO(WP-E reconcile)`: `transcription::validate_transcription_model_ready`
-/// and `speaker_diarization::commands::try_init_for_recording` still take an
-/// `AppHandle` on this branch; another work package (WP-E) is converting
-/// both to Tauri-free signatures concurrently. Once that lands, drop these
-/// two hooks and call the functions directly from `recording_service::start`
-/// instead of through this closure indirection.
+/// Both underlying functions are Tauri-free (`Option<&SqlitePool>`), so the
+/// hooks just close over the pool resolved once from the live `AppHandle`.
 fn build_start_hooks<R: Runtime>(app: &AppHandle<R>) -> StartHooks {
-    let app_for_validate = app.clone();
-    let app_for_diarizer = app.clone();
+    let pool_for_validate = db_pool(app);
+    let pool_for_diarizer = db_pool(app);
     StartHooks {
         validate_transcription_model: Box::new(move || {
             Box::pin(async move {
-                transcription::validate_transcription_model_ready(&app_for_validate).await
+                transcription::validate_transcription_model_ready(pool_for_validate.as_ref())
+                    .await
             })
         }),
         init_speaker_diarizer: Box::new(move || {
             Box::pin(async move {
-                crate::speaker_diarization::commands::try_init_for_recording(&app_for_diarizer)
-                    .await
-                    .map_err(|e| e.to_string())
+                crate::speaker_diarization::commands::try_init_for_recording(
+                    pool_for_diarizer.as_ref(),
+                )
+                .await
+                .map_err(|e| e.to_string())
             })
         }),
     }
@@ -278,17 +276,34 @@ pub async fn trigger_post_meeting_refine<R: Runtime>(
     tauri::async_runtime::spawn(async move {
         // Never let a speaker-refinement failure block the transcription
         // pass — they're independent improvements to the same meeting.
-        if let Err(e) =
-            crate::speaker_diarization::commands::refine_and_persist(&app, &meeting_id).await
-        {
-            log::warn!(
-                "Speaker refinement failed for meeting {}: {} (transcript labels left as recorded)",
-                meeting_id,
-                e
-            );
+        match db_pool(&app) {
+            Some(pool) => {
+                if let Err(e) = crate::speaker_diarization::commands::refine_and_persist(
+                    &crate::events::shared_sink(&app),
+                    &pool,
+                    &meeting_id,
+                )
+                .await
+                {
+                    log::warn!(
+                        "Speaker refinement failed for meeting {}: {} (transcript labels left as recorded)",
+                        meeting_id,
+                        e
+                    );
+                }
+            }
+            None => log::warn!(
+                "No DB pool available; skipping speaker refinement for meeting {}",
+                meeting_id
+            ),
         }
 
-        super::retranscription::spawn_auto_refine(app, meeting_id, meeting_folder_path);
+        super::retranscription::spawn_auto_refine(
+            crate::events::shared_sink(&app),
+            db_pool(&app),
+            meeting_id,
+            meeting_folder_path,
+        );
     });
     Ok(())
 }

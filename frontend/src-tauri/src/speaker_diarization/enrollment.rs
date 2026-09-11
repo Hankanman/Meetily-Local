@@ -45,9 +45,10 @@
 
 use anyhow::{anyhow, Result};
 use serde::Serialize;
+use sqlx::SqlitePool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use tauri::{command, AppHandle, Emitter, Manager, Runtime};
+use tauri::{command, AppHandle, Manager, Runtime};
 
 use crate::audio::audio_processing::{audio_to_mono, resample_audio};
 use crate::audio::pw::{PwCaptureStream, PwStreamEvent, CAPTURE_CHANNELS, CAPTURE_RATE};
@@ -55,6 +56,7 @@ use crate::audio::recording_state::DeviceType;
 use crate::audio::stream::capture_target_for;
 use crate::audio::vad::extract_enrollment_speech_16k;
 use crate::database::repositories::voice_profile::VoiceProfilesRepository;
+use crate::events::{EventSinkExt, SharedEventSink};
 use crate::speaker_diarization::embedding_math::average_and_normalize;
 use crate::speaker_diarization::{
     default_model_path, model::model_is_ready, SpeakerEmbedder, SELF_SPEAKER_LABEL,
@@ -167,6 +169,16 @@ pub async fn start_self_voice_enrollment<R: Runtime>(
     app: AppHandle<R>,
     mic_device: Option<String>,
 ) -> Result<(), String> {
+    start_self_voice_enrollment_with_sink(crate::events::shared_sink(&app), mic_device).await
+}
+
+/// Tauri-free core of [`start_self_voice_enrollment`] — opens the capture
+/// stream and spawns the progress-emitting task against `sink` instead of an
+/// `AppHandle`.
+pub async fn start_self_voice_enrollment_with_sink(
+    sink: SharedEventSink,
+    mic_device: Option<String>,
+) -> Result<(), String> {
     // The mic is capturable by more than one PipeWire client at once, so this
     // would technically "work" mid-meeting — but the user would be enrolling
     // over the top of a live conversation, which is neither what they mean nor
@@ -260,8 +272,8 @@ pub async fn start_self_voice_enrollment<R: Runtime>(
                 target_secs: TARGET_CAPTURE_SECS,
                 can_save: captured >= min_samples,
             };
-            if app
-                .emit("self-voice-enrollment-progress", &progress)
+            if sink
+                .emit_event("self-voice-enrollment-progress", &progress)
                 .is_err()
             {
                 break;
@@ -295,6 +307,17 @@ pub async fn finish_self_voice_enrollment<R: Runtime>(
     app: AppHandle<R>,
     name: Option<String>,
 ) -> Result<SelfVoiceStatus, String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or_else(|| "AppState unavailable".to_string())?;
+    finish_self_voice_enrollment_with_pool(state.db_manager.pool(), name).await
+}
+
+/// Tauri-free core of [`finish_self_voice_enrollment`].
+pub async fn finish_self_voice_enrollment_with_pool(
+    pool: &SqlitePool,
+    name: Option<String>,
+) -> Result<SelfVoiceStatus, String> {
     GENERATION.fetch_add(1, Ordering::SeqCst);
 
     let samples = tokio::task::spawn_blocking(take_current_session)
@@ -318,11 +341,6 @@ pub async fn finish_self_voice_enrollment<R: Runtime>(
             .map_err(|e| format!("Enrollment processing task failed: {}", e))?
             .map_err(|e| e.to_string())?;
 
-    let state = app
-        .try_state::<AppState>()
-        .ok_or_else(|| "AppState unavailable".to_string())?;
-    let pool = state.db_manager.pool();
-
     let label = self_label_or_default(name.as_deref());
     let profile_id = VoiceProfilesRepository::upsert_self(
         pool,
@@ -343,7 +361,7 @@ pub async fn finish_self_voice_enrollment<R: Runtime>(
     // The profile matcher is built once per recording session, so an enrollment
     // done while a diarizer is loaded takes effect on the next recording. That
     // is fine — enrollment is blocked during recording anyway.
-    self_voice_status(app.clone()).await
+    self_voice_status_with_pool(pool).await
 }
 
 /// The label the user's own voice shows up as. Trims the supplied name and
@@ -387,7 +405,7 @@ pub async fn rename_self_voice_profile<R: Runtime>(
         label
     );
 
-    self_voice_status(app.clone()).await
+    self_voice_status_with_pool(pool).await
 }
 
 /// Whether the user has enrolled their voice, plus enough detail for the
@@ -397,8 +415,11 @@ pub async fn self_voice_status<R: Runtime>(app: AppHandle<R>) -> Result<SelfVoic
     let state = app
         .try_state::<AppState>()
         .ok_or_else(|| "AppState unavailable".to_string())?;
-    let pool = state.db_manager.pool();
+    self_voice_status_with_pool(state.db_manager.pool()).await
+}
 
+/// Tauri-free core of [`self_voice_status`].
+pub async fn self_voice_status_with_pool(pool: &SqlitePool) -> Result<SelfVoiceStatus, String> {
     let model_ready = default_model_path()
         .map(|p| model_is_ready(&p))
         .unwrap_or(false);

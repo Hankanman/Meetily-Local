@@ -6,12 +6,13 @@ use crate::audio::vad::get_speech_chunks_with_progress;
 use crate::config::DEFAULT_WHISPER_MODEL;
 use crate::database::repositories::setting::SettingsRepository;
 use crate::database::repositories::transcript::TranscriptsRepository;
-use crate::events::{EventSink, EventSinkExt};
+use crate::events::{EventSink, EventSinkExt, SharedEventSink};
 use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
 use anyhow::{anyhow, Result};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -256,6 +257,33 @@ pub async fn start_import<R: Runtime>(
     provider: Option<String>,
     num_speakers: i32,
 ) -> Result<ImportResult> {
+    let pool = app
+        .try_state::<AppState>()
+        .map(|s| s.db_manager.pool().clone());
+    start_import_with(
+        crate::events::shared_sink(&app),
+        pool,
+        source_path,
+        title,
+        language,
+        model,
+        provider,
+        num_speakers,
+    )
+    .await
+}
+
+/// Tauri-free core of [`start_import`].
+pub async fn start_import_with(
+    sink: SharedEventSink,
+    pool: Option<SqlitePool>,
+    source_path: String,
+    title: String,
+    language: Option<String>,
+    model: Option<String>,
+    provider: Option<String>,
+    num_speakers: i32,
+) -> Result<ImportResult> {
     // Acquire guard - ensures flag is cleared even on panic/early return
     let _guard = ImportGuard::acquire().map_err(|e| anyhow!(e))?;
 
@@ -263,7 +291,8 @@ pub async fn start_import<R: Runtime>(
     IMPORT_CANCELLED.store(false, Ordering::SeqCst);
 
     let result = run_import(
-        app.clone(),
+        &sink,
+        pool,
         source_path,
         title,
         language,
@@ -281,7 +310,7 @@ pub async fn start_import<R: Runtime>(
 
     match &result {
         Ok(res) => {
-            let _ = app.emit_event(
+            let _ = sink.emit_event(
                 "import-complete",
                 &serde_json::json!({
                     "meeting_id": res.meeting_id,
@@ -292,7 +321,7 @@ pub async fn start_import<R: Runtime>(
             );
         }
         Err(e) => {
-            let _ = app.emit_event(
+            let _ = sink.emit_event(
                 "import-error",
                 &ImportError {
                     error: e.to_string(),
@@ -305,8 +334,9 @@ pub async fn start_import<R: Runtime>(
 }
 
 /// Internal function to run import
-async fn run_import<R: Runtime>(
-    app: AppHandle<R>,
+async fn run_import(
+    sink: &SharedEventSink,
+    pool: Option<SqlitePool>,
     source_path: String,
     title: String,
     language: Option<String>,
@@ -329,7 +359,7 @@ async fn run_import<R: Runtime>(
         title, source_path, language, model
     );
 
-    emit_progress(&app, "copying", 5, "Creating meeting folder...");
+    emit_progress(sink, "copying", 5, "Creating meeting folder...");
 
     // Check for cancellation
     if IMPORT_CANCELLED.load(Ordering::SeqCst) {
@@ -341,7 +371,7 @@ async fn run_import<R: Runtime>(
     let meeting_folder = create_meeting_folder(&base_folder, &title, false)?;
 
     // Copy audio file to meeting folder
-    emit_progress(&app, "copying", 10, "Copying audio file...");
+    emit_progress(sink, "copying", 10, "Copying audio file...");
 
     let dest_filename = format!(
         "audio.{}",
@@ -365,14 +395,14 @@ async fn run_import<R: Runtime>(
         return Err(anyhow!("Import cancelled"));
     }
 
-    emit_progress(&app, "decoding", 15, "Decoding audio file...");
+    emit_progress(sink, "decoding", 15, "Decoding audio file...");
 
     // Decode the audio file with progress updates
-    let app_for_decode = app.clone();
+    let sink_for_decode = sink.clone();
     let decode_progress = Box::new(move |progress: u32, msg: &str| {
         // Map decode progress: 15% + (progress * 0.05) to go from 15% to 20%
         let overall_progress = 15 + ((progress as f32 * 0.05) as u32);
-        emit_progress(&app_for_decode, "decoding", overall_progress, msg);
+        emit_progress(&sink_for_decode, "decoding", overall_progress, msg);
         // Returning false aborts decode_audio_file_with_progress immediately,
         // same convention as the VAD progress callback below.
         !IMPORT_CANCELLED.load(Ordering::SeqCst)
@@ -391,7 +421,7 @@ async fn run_import<R: Runtime>(
         duration_seconds, decoded.sample_rate, decoded.channels
     );
 
-    emit_progress(&app, "resampling", 20, "Converting audio format...");
+    emit_progress(sink, "resampling", 20, "Converting audio format...");
 
     // Check for cancellation
     if IMPORT_CANCELLED.load(Ordering::SeqCst) {
@@ -400,11 +430,11 @@ async fn run_import<R: Runtime>(
     }
 
     // Convert to 16kHz mono format with progress updates
-    let app_for_resample = app.clone();
+    let sink_for_resample = sink.clone();
     let resample_progress = Box::new(move |progress: u32, msg: &str| {
         // Map resample progress: 20% + (progress * 0.05) to go from 20% to 25%
         let overall_progress = 20 + ((progress as f32 * 0.05) as u32);
-        emit_progress(&app_for_resample, "resampling", overall_progress, msg);
+        emit_progress(&sink_for_resample, "resampling", overall_progress, msg);
         !IMPORT_CANCELLED.load(Ordering::SeqCst)
     });
 
@@ -418,7 +448,7 @@ async fn run_import<R: Runtime>(
         audio_samples.len()
     );
 
-    emit_progress(&app, "vad", 25, "Detecting speech segments...");
+    emit_progress(sink, "vad", 25, "Detecting speech segments...");
 
     // Check for cancellation
     if IMPORT_CANCELLED.load(Ordering::SeqCst) {
@@ -431,7 +461,7 @@ async fn run_import<R: Runtime>(
     let audio_for_diar = audio_samples.clone();
 
     // Use VAD to find speech segments
-    let app_for_vad = app.clone();
+    let sink_for_vad = sink.clone();
 
     let speech_segments = tokio::task::spawn_blocking(move || {
         get_speech_chunks_with_progress(
@@ -440,7 +470,7 @@ async fn run_import<R: Runtime>(
             |vad_progress, segments_found| {
                 let overall_progress = 25 + (vad_progress as f32 * 0.05) as u32;
                 emit_progress(
-                    &app_for_vad,
+                    &sink_for_vad,
                     "vad",
                     overall_progress,
                     &format!(
@@ -467,7 +497,7 @@ async fn run_import<R: Runtime>(
         warn!("No speech detected in audio");
 
         // Emit warning to frontend
-        let _ = app.emit_event(
+        let _ = sink.emit_event(
             "import-warning",
             &ImportWarning {
                 warning: "No speech detected in audio file".to_string(),
@@ -487,11 +517,11 @@ async fn run_import<R: Runtime>(
         return Err(anyhow!("Import cancelled"));
     }
 
-    emit_progress(&app, "transcribing", 30, "Loading transcription engine...");
+    emit_progress(sink, "transcribing", 30, "Loading transcription engine...");
 
     // Initialize Whisper for the import job (only if there's anything to transcribe).
     let whisper_engine = if total_segments > 0 {
-        Some(get_or_init_whisper(&app, model.as_deref()).await?)
+        Some(get_or_init_whisper(pool.as_ref(), model.as_deref()).await?)
     } else {
         None
     };
@@ -500,7 +530,7 @@ async fn run_import<R: Runtime>(
     // disk). Imported audio is a single mixed stream — the diarizer just
     // clusters voices and matches stored profiles when available.
     let diarizer = if total_segments > 0 {
-        match crate::speaker_diarization::commands::build_diarizer(&app).await {
+        match crate::speaker_diarization::commands::build_diarizer(pool.as_ref()).await {
             Ok(d) => d,
             Err(e) => {
                 warn!(
@@ -536,22 +566,18 @@ async fn run_import<R: Runtime>(
     // segmentation over a long file is minutes of CPU.
     let offline_turns: Option<Vec<crate::speaker_diarization::offline::SpeakerTurn>> =
         if total_segments > 0 && diarizer.is_some() {
-            let prefs = super::recording_preferences::load_recording_preferences(
-                app.try_state::<AppState>().map(|s| s.db_manager.pool().clone()),
-            )
-            .await
-            .unwrap_or_default();
+            let prefs = super::recording_preferences::load_recording_preferences(pool.clone())
+                .await
+                .unwrap_or_default();
             let worth_it = num_speakers != 0 || duration_seconds > 60.0;
 
             if prefs.offline_diarization_on_import && worth_it {
-                match crate::speaker_diarization::commands::ensure_pyannote_segmentation_model(
-                    app.clone(),
-                )
-                .await
+                match crate::speaker_diarization::commands::ensure_pyannote_segmentation_model()
+                    .await
                 {
                     Ok(seg_path) => match crate::speaker_diarization::model::default_model_path() {
                         Some(emb_path) if emb_path.exists() => {
-                            emit_progress(&app, "diarizing", 28, "Analyzing speakers...");
+                            emit_progress(sink, "diarizing", 28, "Analyzing speakers...");
 
                             let seg_path = PathBuf::from(seg_path);
                             let samples = audio_for_diar;
@@ -623,7 +649,7 @@ async fn run_import<R: Runtime>(
         let engine = whisper_engine
             .clone()
             .expect("whisper_engine is Some when total_segments > 0");
-        let app_for_progress = app.clone();
+        let sink_for_progress = sink.clone();
         super::common::run_batch_transcription(
             &speech_segments,
             language.clone(),
@@ -634,7 +660,7 @@ async fn run_import<R: Runtime>(
             move |i, total, segment_duration_sec| {
                 let progress = 30 + ((i as f32 / total.max(1) as f32) * 50.0) as u32;
                 emit_progress(
-                    &app_for_progress,
+                    &sink_for_progress,
                     "transcribing",
                     progress,
                     &format!(
@@ -663,18 +689,16 @@ async fn run_import<R: Runtime>(
         }
     };
 
-    emit_progress(&app, "saving", 85, "Creating meeting...");
+    emit_progress(sink, "saving", 85, "Creating meeting...");
 
     // Create transcript segments
     let segments = create_transcript_segments(&all_transcripts);
 
     // Save to database
-    let app_state = app
-        .try_state::<AppState>()
-        .ok_or_else(|| anyhow!("App state not available"))?;
+    let pool = pool.ok_or_else(|| anyhow!("App state not available"))?;
 
     let meeting_id = create_meeting_with_transcripts(
-        app_state.db_manager.pool(),
+        &pool,
         &title,
         &segments,
         meeting_folder.to_string_lossy().to_string(),
@@ -682,7 +706,7 @@ async fn run_import<R: Runtime>(
     .await?;
 
     // Write transcripts.json and metadata.json to the meeting folder
-    emit_progress(&app, "saving", 90, "Writing transcript files...");
+    emit_progress(sink, "saving", 90, "Writing transcript files...");
 
     if let Err(e) = write_transcripts_json(&meeting_folder, &segments) {
         warn!("Failed to write transcripts.json: {}", e);
@@ -706,7 +730,7 @@ async fn run_import<R: Runtime>(
         warn!("Failed to write metadata.json: {}", e);
     }
 
-    emit_progress(&app, "complete", 100, "Import complete");
+    emit_progress(sink, "complete", 100, "Import complete");
 
     // Install the batch diarizer as current so the user can name "Speaker N"
     // on the just-imported meeting and reach this batch's embeddings (see
@@ -739,11 +763,13 @@ async fn run_import<R: Runtime>(
         // `recording_commands::trigger_post_meeting_refine`. Transcripts are
         // already persisted at this point (see `create_meeting_with_transcripts`
         // above), which `refine_and_persist` requires.
-        let app_for_refine = app.clone();
+        let sink_for_refine = sink.clone();
+        let pool_for_refine = pool.clone();
         let meeting_id_for_refine = meeting_id.clone();
-        tauri::async_runtime::spawn(async move {
+        tokio::spawn(async move {
             if let Err(e) = crate::speaker_diarization::commands::refine_and_persist(
-                &app_for_refine,
+                &sink_for_refine,
+                &pool_for_refine,
                 &meeting_id_for_refine,
             )
             .await
@@ -799,8 +825,8 @@ async fn create_meeting_with_transcripts(
 }
 
 /// Get or initialize the Whisper engine
-async fn get_or_init_whisper<R: Runtime>(
-    app: &AppHandle<R>,
+async fn get_or_init_whisper(
+    pool: Option<&SqlitePool>,
     requested_model: Option<&str>,
 ) -> Result<Arc<WhisperEngine>> {
     use crate::whisper_engine::commands::WHISPER_ENGINE;
@@ -814,7 +840,7 @@ async fn get_or_init_whisper<R: Runtime>(
         Some(e) => {
             let target_model = match requested_model {
                 Some(model) => model.to_string(),
-                None => get_configured_model(app).await?,
+                None => get_configured_model(pool).await?,
             };
 
             let current_model = e.get_current_model().await;
@@ -877,12 +903,10 @@ async fn get_or_init_whisper<R: Runtime>(
 /// Get the configured Whisper model from database, defaulting to
 /// [`DEFAULT_WHISPER_MODEL`] if nothing is saved or the saved provider isn't
 /// Whisper.
-async fn get_configured_model<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
-    let app_state = app
-        .try_state::<AppState>()
-        .ok_or_else(|| anyhow!("App state not available"))?;
+async fn get_configured_model(pool: Option<&SqlitePool>) -> Result<String> {
+    let pool = pool.ok_or_else(|| anyhow!("App state not available"))?;
 
-    let config = SettingsRepository::get_transcript_config(app_state.db_manager.pool())
+    let config = SettingsRepository::get_transcript_config(pool)
         .await
         .map_err(|e| anyhow!("Failed to query config: {}", e))?;
 

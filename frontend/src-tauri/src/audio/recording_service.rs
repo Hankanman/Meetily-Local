@@ -61,18 +61,17 @@ impl RecordingContext {
 /// parameter.
 type StartHook<T> = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send>;
 
-/// Shell-side calls `start()` needs at specific points mid-flow that still
-/// require an `AppHandle` on this branch. Both are being converted to
-/// Tauri-free signatures concurrently by another work package (WP-E); once
-/// that lands, these hooks go away and `start()` calls the functions
-/// directly. Until then `recording_commands.rs` builds them by closing over
-/// the `AppHandle`.
+/// Shell-side calls `start()` needs at specific points mid-flow. Both
+/// underlying functions (`transcription::validate_transcription_model_ready`,
+/// `speaker_diarization::commands::try_init_for_recording`) are Tauri-free
+/// (`Option<&SqlitePool>`), so `recording_commands::build_start_hooks` builds
+/// these by closing over the pool already resolved into `RecordingContext`
+/// rather than an `AppHandle`. Kept as hooks (rather than called directly
+/// here) so this module still doesn't need to know how the pool is sourced.
 pub struct StartHooks {
-    /// `// TODO(WP-E reconcile)`: currently
-    /// `transcription::validate_transcription_model_ready(&app)`.
+    /// Currently `transcription::validate_transcription_model_ready`.
     pub validate_transcription_model: StartHook<Result<(), String>>,
-    /// `// TODO(WP-E reconcile)`: currently
-    /// `speaker_diarization::commands::try_init_for_recording(&app)`.
+    /// Currently `speaker_diarization::commands::try_init_for_recording`.
     pub init_speaker_diarizer: StartHook<Result<bool, String>>,
 }
 

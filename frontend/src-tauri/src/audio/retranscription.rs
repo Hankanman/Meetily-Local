@@ -7,12 +7,13 @@ use crate::audio::vad::get_speech_chunks_with_progress;
 use crate::config::DEFAULT_WHISPER_MODEL;
 use crate::database::repositories::setting::SettingsRepository;
 use crate::database::repositories::transcript::TranscriptsRepository;
-use crate::events::{EventSink, EventSinkExt};
+use crate::events::{EventSink, EventSinkExt, SharedEventSink};
 use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
 use anyhow::{anyhow, Result};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -103,6 +104,31 @@ pub async fn start_retranscription<R: Runtime>(
     model: Option<String>,
     provider: Option<String>,
 ) -> Result<RetranscriptionResult> {
+    let pool = app
+        .try_state::<AppState>()
+        .map(|s| s.db_manager.pool().clone());
+    start_retranscription_with(
+        crate::events::shared_sink(&app),
+        pool,
+        meeting_id,
+        meeting_folder_path,
+        language,
+        model,
+        provider,
+    )
+    .await
+}
+
+/// Tauri-free core of [`start_retranscription`].
+pub async fn start_retranscription_with(
+    sink: SharedEventSink,
+    pool: Option<SqlitePool>,
+    meeting_id: String,
+    meeting_folder_path: String,
+    language: Option<String>,
+    model: Option<String>,
+    provider: Option<String>,
+) -> Result<RetranscriptionResult> {
     // Acquire guard - ensures flag is cleared even on panic/early return
     let _guard = RetranscriptionGuard::acquire().map_err(|e| anyhow!(e))?;
 
@@ -110,7 +136,8 @@ pub async fn start_retranscription<R: Runtime>(
     RETRANSCRIPTION_CANCELLED.store(false, Ordering::SeqCst);
 
     let result = run_retranscription(
-        app.clone(),
+        &sink,
+        pool,
         meeting_id.clone(),
         meeting_folder_path,
         language,
@@ -127,7 +154,7 @@ pub async fn start_retranscription<R: Runtime>(
 
     match &result {
         Ok(res) => {
-            let _ = app.emit_event(
+            let _ = sink.emit_event(
                 "retranscription-complete",
                 &serde_json::json!({
                     "meeting_id": res.meeting_id,
@@ -138,7 +165,7 @@ pub async fn start_retranscription<R: Runtime>(
             );
         }
         Err(e) => {
-            let _ = app.emit_event(
+            let _ = sink.emit_event(
                 "retranscription-error",
                 &RetranscriptionError {
                     meeting_id: meeting_id.clone(),
@@ -191,8 +218,9 @@ fn find_audio_file(folder: &Path) -> Result<PathBuf> {
 }
 
 /// Internal function to run retranscription
-async fn run_retranscription<R: Runtime>(
-    app: AppHandle<R>,
+async fn run_retranscription(
+    sink: &SharedEventSink,
+    pool: Option<SqlitePool>,
     meeting_id: String,
     meeting_folder_path: String,
     language: Option<String>,
@@ -210,7 +238,7 @@ async fn run_retranscription<R: Runtime>(
     );
 
     // Emit progress: decoding
-    emit_progress(&app, &meeting_id, "decoding", 5, "Decoding audio file...");
+    emit_progress(sink, &meeting_id, "decoding", 5, "Decoding audio file...");
 
     // Check for cancellation
     if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {
@@ -237,7 +265,7 @@ async fn run_retranscription<R: Runtime>(
     );
 
     emit_progress(
-        &app,
+        sink,
         &meeting_id,
         "decoding",
         15,
@@ -263,7 +291,7 @@ async fn run_retranscription<R: Runtime>(
         audio_samples.len()
     );
 
-    emit_progress(&app, &meeting_id, "vad", 20, "Detecting speech segments...");
+    emit_progress(sink, &meeting_id, "vad", 20, "Detecting speech segments...");
 
     // Check for cancellation
     if RETRANSCRIPTION_CANCELLED.load(Ordering::SeqCst) {
@@ -273,7 +301,7 @@ async fn run_retranscription<R: Runtime>(
     // Use VAD to find natural speech boundaries (same approach as live transcription)
     // IMPORTANT: Run VAD in a blocking task to avoid blocking the async runtime
     // For large files (35+ minutes), VAD processing can take several minutes
-    let app_for_vad = app.clone();
+    let sink_for_vad = sink.clone();
     let meeting_id_for_vad = meeting_id.clone();
 
     let speech_segments = tokio::task::spawn_blocking(move || {
@@ -284,7 +312,7 @@ async fn run_retranscription<R: Runtime>(
                 // Map VAD progress (0-100) to overall progress (20-25)
                 let overall_progress = 20 + (vad_progress as f32 * 0.05) as u32;
                 emit_progress(
-                    &app_for_vad,
+                    &sink_for_vad,
                     &meeting_id_for_vad,
                     "vad",
                     overall_progress,
@@ -317,7 +345,7 @@ async fn run_retranscription<R: Runtime>(
     }
 
     emit_progress(
-        &app,
+        sink,
         &meeting_id,
         "transcribing",
         25,
@@ -325,13 +353,13 @@ async fn run_retranscription<R: Runtime>(
     );
 
     // Initialize Whisper once (not per-segment)
-    let whisper_engine = Some(get_or_init_whisper(&app, model.as_deref()).await?);
+    let whisper_engine = Some(get_or_init_whisper(pool.as_ref(), model.as_deref()).await?);
 
     // Build a fresh diarizer for this batch (None if speaker model isn't
     // downloaded). The mixed-audio source means we can't recover mic vs
     // system identity — the diarizer just clusters voices it hears, and
     // matches against stored profiles when available.
-    let diarizer = match crate::speaker_diarization::commands::build_diarizer(&app).await {
+    let diarizer = match crate::speaker_diarization::commands::build_diarizer(pool.as_ref()).await {
         Ok(d) => d,
         Err(e) => {
             warn!(
@@ -353,7 +381,7 @@ async fn run_retranscription<R: Runtime>(
     let engine = whisper_engine
         .clone()
         .expect("whisper_engine is always Some at this point");
-    let app_for_progress = app.clone();
+    let sink_for_progress = sink.clone();
     let meeting_id_for_progress = meeting_id.clone();
     let batch_result = super::common::run_batch_transcription(
         &speech_segments,
@@ -369,7 +397,7 @@ async fn run_retranscription<R: Runtime>(
             // Calculate progress (25% to 80% range for transcription)
             let progress = 25 + ((i as f32 / total as f32) * 55.0) as u32;
             emit_progress(
-                &app_for_progress,
+                &sink_for_progress,
                 &meeting_id_for_progress,
                 "transcribing",
                 progress,
@@ -395,19 +423,16 @@ async fn run_retranscription<R: Runtime>(
         }
     };
 
-    emit_progress(&app, &meeting_id, "saving", 80, "Saving transcripts...");
+    emit_progress(sink, &meeting_id, "saving", 80, "Saving transcripts...");
 
     // Create transcript segments with proper timestamps from VAD
     let segments = create_transcript_segments(&all_transcripts);
 
     // Save to database
-    let app_state = app
-        .try_state::<AppState>()
-        .ok_or_else(|| anyhow!("App state not available"))?;
+    let pool = pool.ok_or_else(|| anyhow!("App state not available"))?;
 
     // Full delete+insert replace, in one transaction, to prevent data loss.
-    let pool = app_state.db_manager.pool();
-    TranscriptsRepository::replace_transcripts_for_meeting(pool, &meeting_id, &segments)
+    TranscriptsRepository::replace_transcripts_for_meeting(&pool, &meeting_id, &segments)
         .await
         .map_err(|e| anyhow!("Failed to replace transcripts: {}", e))?;
 
@@ -419,7 +444,7 @@ async fn run_retranscription<R: Runtime>(
 
     // Write updated transcripts.json and metadata.json to the meeting folder
     emit_progress(
-        &app,
+        sink,
         &meeting_id,
         "saving",
         90,
@@ -472,7 +497,7 @@ async fn run_retranscription<R: Runtime>(
     }
 
     emit_progress(
-        &app,
+        sink,
         &meeting_id,
         "complete",
         100,
@@ -527,8 +552,8 @@ fn emit_progress(sink: &dyn EventSink, meeting_id: &str, stage: &str, progress: 
 
 /// Get or initialize the Whisper engine, auto-loading the model if needed
 /// If `requested_model` is provided, ensures that specific model is loaded
-async fn get_or_init_whisper<R: Runtime>(
-    app: &AppHandle<R>,
+async fn get_or_init_whisper(
+    pool: Option<&SqlitePool>,
     requested_model: Option<&str>,
 ) -> Result<Arc<WhisperEngine>> {
     use crate::whisper_engine::commands::WHISPER_ENGINE;
@@ -543,7 +568,7 @@ async fn get_or_init_whisper<R: Runtime>(
             // Determine which model to use
             let target_model = match requested_model {
                 Some(model) => model.to_string(),
-                None => get_configured_whisper_model(app).await?,
+                None => get_configured_whisper_model(pool).await?,
             };
 
             // Check if the correct model is already loaded
@@ -616,10 +641,10 @@ async fn get_or_init_whisper<R: Runtime>(
 }
 
 /// Get the configured Whisper model name from the database
-async fn get_configured_whisper_model<R: Runtime>(app: &AppHandle<R>) -> Result<String> {
+async fn get_configured_whisper_model(pool: Option<&SqlitePool>) -> Result<String> {
     debug!("Getting configured Whisper model from database...");
 
-    let app_state = app.try_state::<AppState>().ok_or_else(|| {
+    let pool = pool.ok_or_else(|| {
         error!("App state not available");
         anyhow!("App state not available")
     })?;
@@ -627,7 +652,7 @@ async fn get_configured_whisper_model<R: Runtime>(app: &AppHandle<R>) -> Result<
     debug!("Querying transcript_settings table...");
 
     // Query the transcript settings from the database - get both provider and model
-    let result = SettingsRepository::get_transcript_config(app_state.db_manager.pool())
+    let result = SettingsRepository::get_transcript_config(pool)
         .await
         .map_err(|e| {
             error!("Failed to query transcript config: {}", e);
@@ -687,13 +712,15 @@ const AUTO_REFINE_MODEL_CANDIDATES: &[&str] = &["large-v3-q5_0", "large-v3"];
 /// immediately. Every skip/failure reason is logged; nothing is surfaced to
 /// the user as an error since the live transcript is already saved and
 /// stays authoritative unless/until this succeeds.
-pub fn spawn_auto_refine<R: Runtime>(
-    app: AppHandle<R>,
+pub fn spawn_auto_refine(
+    sink: SharedEventSink,
+    pool: Option<SqlitePool>,
     meeting_id: String,
     meeting_folder_path: String,
 ) {
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = run_auto_refine(app, meeting_id.clone(), meeting_folder_path).await {
+    tokio::spawn(async move {
+        if let Err(e) = run_auto_refine(sink, pool, meeting_id.clone(), meeting_folder_path).await
+        {
             info!("Auto-refine not performed for meeting {}: {}", meeting_id, e);
         }
     });
@@ -704,16 +731,14 @@ pub fn spawn_auto_refine<R: Runtime>(
 /// uses. Returns `Err` for any skip reason (disabled, already-best model,
 /// better model not downloaded, collision with an in-flight retranscription)
 /// as well as genuine failures — callers only care that it's not `Ok`.
-async fn run_auto_refine<R: Runtime>(
-    app: AppHandle<R>,
+async fn run_auto_refine(
+    sink: SharedEventSink,
+    pool: Option<SqlitePool>,
     meeting_id: String,
     meeting_folder_path: String,
 ) -> Result<()> {
     // Preference check.
-    let prefs = super::recording_preferences::load_recording_preferences(
-        app.try_state::<AppState>().map(|s| s.db_manager.pool().clone()),
-    )
-    .await?;
+    let prefs = super::recording_preferences::load_recording_preferences(pool.clone()).await?;
     if !prefs.auto_refine {
         return Err(anyhow!("auto-refine disabled in recording preferences"));
     }
@@ -729,7 +754,7 @@ async fn run_auto_refine<R: Runtime>(
 
     // Which model was used live? Only worth refining if a strictly
     // higher-accuracy one is available.
-    let live_model = get_configured_whisper_model(&app).await?;
+    let live_model = get_configured_whisper_model(pool.as_ref()).await?;
     if AUTO_REFINE_MODEL_CANDIDATES.contains(&live_model.as_str()) {
         return Err(anyhow!(
             "live model '{}' is already the high-accuracy tier, nothing to gain",
@@ -762,13 +787,14 @@ async fn run_auto_refine<R: Runtime>(
         "✨ Auto-refine starting for meeting {}: live model '{}' -> '{}'",
         meeting_id, live_model, target_model
     );
-    let _ = app.emit_event(
+    let _ = sink.emit_event(
         "meeting-refining",
         &serde_json::json!({ "meeting_id": meeting_id }),
     );
 
-    let result = start_retranscription(
-        app.clone(),
+    let result = start_retranscription_with(
+        sink.clone(),
+        pool,
         meeting_id.clone(),
         meeting_folder_path.clone(),
         None, // language: keep whatever auto-detect the live pass used
@@ -798,7 +824,7 @@ async fn run_auto_refine<R: Runtime>(
                 "✨ Auto-refine complete for meeting {} ({} segments, model '{}')",
                 meeting_id, res.segments_count, target_model
             );
-            let _ = app.emit_event(
+            let _ = sink.emit_event(
                 "meeting-refined",
                 &serde_json::json!({
                     "meeting_id": meeting_id,
@@ -815,7 +841,7 @@ async fn run_auto_refine<R: Runtime>(
                 "Auto-refine failed for meeting {} (live transcript preserved): {}",
                 meeting_id, e
             );
-            let _ = app.emit_event(
+            let _ = sink.emit_event(
                 "meeting-refine-failed",
                 &serde_json::json!({ "meeting_id": meeting_id, "error": e.to_string() }),
             );

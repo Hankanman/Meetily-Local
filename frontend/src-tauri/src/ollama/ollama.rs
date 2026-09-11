@@ -1,3 +1,4 @@
+use crate::events::{EventSinkExt, SharedEventSink};
 use crate::ollama::metadata::METADATA_CACHE;
 use futures_util::StreamExt;
 use once_cell::sync::Lazy;
@@ -6,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::process::Command;
 use std::sync::Arc;
-use tauri::{command, AppHandle, Emitter, Runtime};
+use tauri::{command, AppHandle, Runtime};
 use tokio::sync::RwLock;
 use tokio::time::{sleep, timeout, Duration};
 
@@ -261,6 +262,20 @@ pub async fn pull_ollama_model<R: Runtime>(
     model_name: String,
     endpoint: Option<String>,
 ) -> Result<(), String> {
+    pull_ollama_model_with_progress(crate::events::shared_sink(&app_handle), model_name, endpoint)
+        .await
+}
+
+/// Stream-download `model_name` from an Ollama server, reporting progress
+/// through `sink` via `ollama-model-download-progress` /
+/// `ollama-model-download-complete` / `ollama-model-download-error` — the
+/// same three events the command previously emitted directly through the
+/// `AppHandle`.
+pub async fn pull_ollama_model_with_progress(
+    sink: SharedEventSink,
+    model_name: String,
+    endpoint: Option<String>,
+) -> Result<(), String> {
     // Check if model is already being downloaded
     {
         let downloading = DOWNLOADING_MODELS.read().await;
@@ -319,9 +334,9 @@ pub async fn pull_ollama_model<R: Runtime>(
         }
 
         // Emit error event
-        let _ = app_handle.emit(
+        let _ = sink.emit_event(
             "ollama-model-download-error",
-            serde_json::json!({
+            &serde_json::json!({
                 "modelName": model_name,
                 "error": format!("HTTP {}: {}", status, error_text)
             }),
@@ -349,9 +364,9 @@ pub async fn pull_ollama_model<R: Runtime>(
                 downloading.remove(&model_name_clone);
             });
 
-            let _ = app_handle.emit(
+            let _ = sink.emit_event(
                 "ollama-model-download-error",
-                serde_json::json!({
+                &serde_json::json!({
                     "modelName": model_name,
                     "error": error_msg
                 }),
@@ -390,9 +405,9 @@ pub async fn pull_ollama_model<R: Runtime>(
                                 progress
                             );
 
-                            let _ = app_handle.emit(
+                            let _ = sink.emit_event(
                                 "ollama-model-download-progress",
-                                serde_json::json!({
+                                &serde_json::json!({
                                     "modelName": model_name,
                                     "progress": progress
                                 }),
@@ -413,9 +428,9 @@ pub async fn pull_ollama_model<R: Runtime>(
                         downloading.remove(&model_name);
                     }
 
-                    let _ = app_handle.emit(
+                    let _ = sink.emit_event(
                         "ollama-model-download-error",
-                        serde_json::json!({
+                        &serde_json::json!({
                             "modelName": model_name,
                             "error": error_msg
                         }),
@@ -434,9 +449,9 @@ pub async fn pull_ollama_model<R: Runtime>(
     }
 
     // Emit completion event
-    let _ = app_handle.emit(
+    let _ = sink.emit_event(
         "ollama-model-download-complete",
-        serde_json::json!({
+        &serde_json::json!({
             "modelName": model_name
         }),
     );

@@ -2,6 +2,7 @@
 
 use crate::database::repositories::transcript::TranscriptsRepository;
 use crate::database::repositories::voice_profile::{bytes_to_floats, VoiceProfilesRepository};
+use crate::events::{EventSinkExt, SharedEventSink};
 use crate::speaker_diarization::embedding_math::{average_and_normalize, merge_centroids};
 use crate::speaker_diarization::{
     current_diarizer, default_model_path, model::model_is_ready, model_download_url,
@@ -15,8 +16,9 @@ use crate::state::AppState;
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
 use std::sync::Arc;
-use tauri::{command, AppHandle, Emitter, Manager, Runtime};
+use tauri::{command, AppHandle, Manager, Runtime};
 use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Serialize)]
@@ -48,13 +50,18 @@ pub async fn speaker_model_status() -> Result<SpeakerModelStatus, String> {
 /// already present and non-empty, returns immediately.
 #[command]
 pub async fn speaker_model_download<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    download_speaker_model(crate::events::shared_sink(&app)).await
+}
+
+/// Tauri-free core of [`speaker_model_download`].
+pub async fn download_speaker_model(sink: SharedEventSink) -> Result<(), String> {
     let path = default_model_path()
         .ok_or_else(|| "Speaker models directory not initialized".to_string())?;
 
     if model_is_ready(&path) {
-        let _ = app.emit(
+        let _ = sink.emit_event(
             "speaker-model-download-complete",
-            serde_json::json!({ "alreadyPresent": true }),
+            &serde_json::json!({ "alreadyPresent": true }),
         );
         return Ok(());
     }
@@ -68,19 +75,19 @@ pub async fn speaker_model_download<R: Runtime>(app: AppHandle<R>) -> Result<(),
     let url = model_download_url();
     log::info!("Downloading speaker model from {} -> {}", url, path.display());
 
-    if let Err(e) = stream_download(&app, &url, &path).await {
+    if let Err(e) = stream_download(&sink, &url, &path).await {
         let _ = std::fs::remove_file(&path); // partial-file cleanup
         let msg = e.to_string();
-        let _ = app.emit(
+        let _ = sink.emit_event(
             "speaker-model-download-error",
-            serde_json::json!({ "error": &msg }),
+            &serde_json::json!({ "error": &msg }),
         );
         return Err(msg);
     }
 
-    let _ = app.emit(
+    let _ = sink.emit_event(
         "speaker-model-download-complete",
-        serde_json::json!({ "alreadyPresent": false }),
+        &serde_json::json!({ "alreadyPresent": false }),
     );
     Ok(())
 }
@@ -100,13 +107,7 @@ pub async fn speaker_model_download<R: Runtime>(app: AppHandle<R>) -> Result<(),
 /// progress-emitting `stream_download` above, since this runs silently in
 /// the background during import instead of behind a visible progress bar.
 #[command]
-pub async fn ensure_pyannote_segmentation_model<R: Runtime>(
-    // Not used today (no progress event is emitted for this quiet,
-    // background fetch — see doc comment), but kept as a parameter since
-    // every other model-download command in this file takes one, for a
-    // consistent signature and in case a progress event is added later.
-    _app: AppHandle<R>,
-) -> Result<String, String> {
+pub async fn ensure_pyannote_segmentation_model() -> Result<String, String> {
     let path = pyannote_segmentation_path()
         .ok_or_else(|| "Speaker models directory not initialized".to_string())?;
 
@@ -134,7 +135,7 @@ pub async fn ensure_pyannote_segmentation_model<R: Runtime>(
 /// Used by both the live recording path (via [`try_init_for_recording`])
 /// and batch jobs (import / retranscription) that want their own
 /// short-lived diarizer instance with fresh cluster IDs.
-pub async fn build_diarizer<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Arc<Diarizer>>> {
+pub async fn build_diarizer(pool: Option<&SqlitePool>) -> Result<Option<Arc<Diarizer>>> {
     let Some(path) = default_model_path() else {
         log::warn!("Speaker models dir not configured; skipping diarizer build");
         return Ok(None);
@@ -153,7 +154,7 @@ pub async fn build_diarizer<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Arc
     // Load all stored voice profiles whose embedding dim matches the model.
     // A mismatched-dim profile (e.g., from an older model) is skipped by the
     // matcher rather than failing the build.
-    let matcher = match build_profile_matcher(app, dim).await {
+    let matcher = match build_profile_matcher(pool, dim).await {
         Ok(m) => m,
         Err(e) => {
             log::warn!("Failed to load voice profiles: {} (continuing without)", e);
@@ -168,8 +169,8 @@ pub async fn build_diarizer<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Arc
 /// Build a diarizer and install it into the process-wide slot for the live
 /// recording path. Silent no-op (returns `Ok(false)`) if the model isn't on
 /// disk — recording proceeds with the "Speaker" placeholder.
-pub async fn try_init_for_recording<R: Runtime>(app: &AppHandle<R>) -> Result<bool> {
-    match build_diarizer(app).await? {
+pub async fn try_init_for_recording(pool: Option<&SqlitePool>) -> Result<bool> {
+    match build_diarizer(pool).await? {
         Some(diarizer) => {
             set_current_diarizer(Some(diarizer));
             log::info!("Speaker diarizer initialized for recording session");
@@ -189,14 +190,11 @@ pub fn shutdown_for_recording() {
     log::info!("Speaker diarizer retained post-stop for promote / refine actions");
 }
 
-async fn build_profile_matcher<R: Runtime>(
-    app: &AppHandle<R>,
+async fn build_profile_matcher(
+    pool: Option<&SqlitePool>,
     dim: usize,
 ) -> Result<Option<Arc<SpeakerProfileMatcher>>> {
-    let state = app
-        .try_state::<AppState>()
-        .ok_or_else(|| anyhow!("AppState unavailable; cannot load voice profiles"))?;
-    let pool = state.db_manager.pool();
+    let pool = pool.ok_or_else(|| anyhow!("DB pool unavailable; cannot load voice profiles"))?;
 
     let profiles = VoiceProfilesRepository::list_all(pool)
         .await
@@ -218,8 +216,8 @@ async fn build_profile_matcher<R: Runtime>(
     }
 }
 
-async fn stream_download<R: Runtime>(
-    app: &AppHandle<R>,
+async fn stream_download(
+    sink: &SharedEventSink,
     url: &str,
     dest: &std::path::Path,
 ) -> Result<()> {
@@ -251,9 +249,9 @@ async fn stream_download<R: Runtime>(
             // Emit only on 1% steps to avoid event flood for a 28MB download.
             if pct != last_pct {
                 last_pct = pct;
-                let _ = app.emit(
+                let _ = sink.emit_event(
                     "speaker-model-download-progress",
-                    serde_json::json!({ "progress": pct }),
+                    &serde_json::json!({ "progress": pct }),
                 );
             }
         }
@@ -738,7 +736,11 @@ pub async fn merge_cluster_into_profile<R: Runtime>(
 /// the history, and only the next `try_init_for_recording` replaces it. If
 /// the slot is empty anyway (speaker model never downloaded, so no diarizer
 /// was ever built) we log and skip.
-pub async fn refine_and_persist<R: Runtime>(app: &AppHandle<R>, meeting_id: &str) -> Result<usize> {
+pub async fn refine_and_persist(
+    sink: &SharedEventSink,
+    pool: &SqlitePool,
+    meeting_id: &str,
+) -> Result<usize> {
     let Some(diarizer) = current_diarizer() else {
         log::info!(
             "No diarizer available for meeting {} — skipping speaker refinement",
@@ -786,11 +788,6 @@ pub async fn refine_and_persist<R: Runtime>(app: &AppHandle<R>, meeting_id: &str
         return Ok(0);
     }
 
-    let state = app
-        .try_state::<AppState>()
-        .ok_or_else(|| anyhow!("AppState unavailable; cannot persist speaker refinement"))?;
-    let pool = state.db_manager.pool();
-
     let changed_count =
         TranscriptsRepository::update_speakers_by_sequence(pool, meeting_id, &updates)
             .await
@@ -808,9 +805,9 @@ pub async fn refine_and_persist<R: Runtime>(app: &AppHandle<R>, meeting_id: &str
         changed_count
     );
 
-    let _ = app.emit(
+    let _ = sink.emit_event(
         "speakers-refined",
-        serde_json::json!({
+        &serde_json::json!({
             "meeting_id": meeting_id,
             "changed_count": changed_count,
         }),

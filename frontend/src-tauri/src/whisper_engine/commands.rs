@@ -1,8 +1,9 @@
 use crate::config::WHISPER_MODEL_CATALOG;
+use crate::events::{EventSinkExt, SharedEventSink};
 use crate::whisper_engine::{ModelInfo, WhisperEngine};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tauri::{command, Emitter, Manager};
+use tauri::command;
 
 // Global whisper engine
 pub static WHISPER_ENGINE: Mutex<Option<Arc<WhisperEngine>>> = Mutex::new(None);
@@ -145,8 +146,15 @@ pub async fn whisper_has_available_models() -> Result<bool, String> {
     }
 }
 
-pub async fn whisper_validate_model_ready_with_config<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
+/// Ensure a Whisper model is loaded, resolving which one from the saved
+/// transcript config, and return its name. Reads the config straight from
+/// the DB pool (`provider`/`model` only — no API key needed here) rather
+/// than going through the `api_get_transcript_config` command, mirroring
+/// `audio::transcription::engine::get_or_init_whisper`. `pool` is `None`
+/// when `AppState` isn't managed yet (first-launch cold start), which is
+/// treated the same as "no saved config".
+pub async fn whisper_validate_model_ready_with_config(
+    pool: Option<&sqlx::SqlitePool>,
 ) -> Result<String, String> {
     let engine = {
         let guard = WHISPER_ENGINE.lock().unwrap();
@@ -163,38 +171,39 @@ pub async fn whisper_validate_model_ready_with_config<R: tauri::Runtime>(
         }
 
         // No model loaded - try to load user's configured model from transcript config
-        let model_to_load = match crate::api::api::api_get_transcript_config(
-            app.clone(),
-            app.state(),
-        )
-        .await
-        {
-            Ok(Some(config)) => {
-                log::info!(
-                    "Got transcript config from API - provider: {}, model: {}",
-                    config.provider,
-                    config.model
-                );
-                if config.provider == "localWhisper" && !config.model.is_empty() {
-                    log::info!("Using user's configured model: {}", config.model);
-                    Some(config.model)
-                } else {
+        let model_to_load = match pool {
+            Some(pool) => match crate::database::repositories::setting::SettingsRepository::get_transcript_config(pool).await {
+                Ok(Some(config)) => {
                     log::info!(
-                        "API config uses non-local provider ({}) or empty model, will auto-select",
-                        config.provider
+                        "Got transcript config from DB - provider: {}, model: {}",
+                        config.provider,
+                        config.model
+                    );
+                    if config.provider == "localWhisper" && !config.model.is_empty() {
+                        log::info!("Using user's configured model: {}", config.model);
+                        Some(config.model)
+                    } else {
+                        log::info!(
+                            "Saved config uses non-local provider ({}) or empty model, will auto-select",
+                            config.provider
+                        );
+                        None
+                    }
+                }
+                Ok(None) => {
+                    log::info!("No transcript config found in DB, will auto-select model");
+                    None
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to get transcript config from DB: {}, will auto-select model",
+                        e
                     );
                     None
                 }
-            }
-            Ok(None) => {
-                log::info!("No transcript config found in API, will auto-select model");
-                None
-            }
-            Err(e) => {
-                log::warn!(
-                    "Failed to get transcript config from API: {}, will auto-select model",
-                    e
-                );
+            },
+            None => {
+                log::warn!("No DB pool yet; will auto-select model");
                 None
             }
         };
@@ -266,9 +275,12 @@ pub async fn whisper_get_models_directory() -> Result<String, String> {
     }
 }
 
-#[command]
-pub async fn whisper_download_model(
-    app_handle: tauri::AppHandle,
+/// Download `model_name`, reporting progress through `sink` via
+/// `model-download-progress` / `model-download-complete` /
+/// `model-download-error` — the same three events the command previously
+/// emitted directly through the `AppHandle`.
+pub async fn download_model_with_progress(
+    sink: SharedEventSink,
     model_name: String,
 ) -> Result<(), String> {
     let engine = {
@@ -276,60 +288,68 @@ pub async fn whisper_download_model(
         guard.as_ref().cloned()
     };
 
-    if let Some(engine) = engine {
-        // Create progress callback that emits events
-        let app_handle_clone = app_handle.clone();
-        let model_name_clone = model_name.clone();
+    let Some(engine) = engine else {
+        return Err("Whisper engine not initialized".to_string());
+    };
 
-        let progress_callback = Box::new(move |progress: u8| {
-            log::info!("Download progress for {}: {}%", model_name_clone, progress);
+    // Create progress callback that emits events
+    let progress_sink = sink.clone();
+    let model_name_clone = model_name.clone();
 
-            // Emit download progress event
-            if let Err(e) = app_handle_clone.emit(
-                "model-download-progress",
-                serde_json::json!({
-                    "modelName": model_name_clone,
-                    "progress": progress
+    let progress_callback = Box::new(move |progress: u8| {
+        log::info!("Download progress for {}: {}%", model_name_clone, progress);
+
+        // Emit download progress event
+        if let Err(e) = progress_sink.emit_event(
+            "model-download-progress",
+            &serde_json::json!({
+                "modelName": model_name_clone,
+                "progress": progress
+            }),
+        ) {
+            log::error!("Failed to emit download progress event: {}", e);
+        }
+    });
+
+    let result = engine
+        .download_model(&model_name, Some(progress_callback))
+        .await;
+
+    match result {
+        Ok(()) => {
+            // Emit completion event
+            if let Err(e) = sink.emit_event(
+                "model-download-complete",
+                &serde_json::json!({
+                    "modelName": model_name
                 }),
             ) {
-                log::error!("Failed to emit download progress event: {}", e);
+                log::error!("Failed to emit download complete event: {}", e);
             }
-        });
-
-        let result = engine
-            .download_model(&model_name, Some(progress_callback))
-            .await;
-
-        match result {
-            Ok(()) => {
-                // Emit completion event
-                if let Err(e) = app_handle.emit(
-                    "model-download-complete",
-                    serde_json::json!({
-                        "modelName": model_name
-                    }),
-                ) {
-                    log::error!("Failed to emit download complete event: {}", e);
-                }
-                Ok(())
-            }
-            Err(e) => {
-                // Emit error event
-                if let Err(emit_e) = app_handle.emit(
-                    "model-download-error",
-                    serde_json::json!({
-                        "modelName": model_name,
-                        "error": e.to_string()
-                    }),
-                ) {
-                    log::error!("Failed to emit download error event: {}", emit_e);
-                }
-                Err(format!("Failed to download model: {}", e))
-            }
+            Ok(())
         }
-    } else {
-        Err("Whisper engine not initialized".to_string())
+        Err(e) => {
+            // Emit error event
+            if let Err(emit_e) = sink.emit_event(
+                "model-download-error",
+                &serde_json::json!({
+                    "modelName": model_name,
+                    "error": e.to_string()
+                }),
+            ) {
+                log::error!("Failed to emit download error event: {}", emit_e);
+            }
+            Err(format!("Failed to download model: {}", e))
+        }
     }
+}
+
+#[command]
+pub async fn whisper_download_model(
+    app_handle: tauri::AppHandle,
+    model_name: String,
+) -> Result<(), String> {
+    download_model_with_progress(crate::events::shared_sink(&app_handle), model_name).await
 }
 
 #[command]

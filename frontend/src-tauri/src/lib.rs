@@ -485,7 +485,10 @@ async fn ensure_required_models_downloaded<R: Runtime>(app: &AppHandle<R>) {
     // Now that both models are on disk, build the diarizer and pin it in
     // the global slot so the first recording / retranscription doesn't
     // pay the load cost.
-    match speaker_diarization::commands::build_diarizer(app).await {
+    let pool = app
+        .try_state::<state::AppState>()
+        .map(|s| s.db_manager.pool().clone());
+    match speaker_diarization::commands::build_diarizer(pool.as_ref()).await {
         Ok(Some(diarizer)) => {
             speaker_diarization::set_current_diarizer(Some(diarizer));
             log::info!("✅ [startup-download] speaker diarizer initialized");
@@ -653,8 +656,10 @@ pub fn run() {
             // cluster IDs per session.
             let app_handle_for_diarizer = _app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match speaker_diarization::commands::build_diarizer(&app_handle_for_diarizer).await
-                {
+                let pool = app_handle_for_diarizer
+                    .try_state::<state::AppState>()
+                    .map(|s| s.db_manager.pool().clone());
+                match speaker_diarization::commands::build_diarizer(pool.as_ref()).await {
                     Ok(Some(diarizer)) => {
                         speaker_diarization::set_current_diarizer(Some(diarizer));
                         log::info!("✅ Speaker diarizer pre-initialized at startup");

@@ -6,7 +6,6 @@
 
 use log::{info, warn};
 use std::sync::Arc;
-use tauri::{AppHandle, Runtime};
 
 // Transcription engine abstraction.
 pub enum TranscriptionEngine {
@@ -34,8 +33,8 @@ impl TranscriptionEngine {
 }
 
 /// Validate that the local Whisper model is ready before recording starts.
-pub async fn validate_transcription_model_ready<R: Runtime>(
-    app: &AppHandle<R>,
+pub async fn validate_transcription_model_ready(
+    pool: Option<&sqlx::SqlitePool>,
 ) -> Result<(), String> {
     info!("🔍 Validating Whisper model...");
 
@@ -47,7 +46,7 @@ pub async fn validate_transcription_model_ready<R: Runtime>(
         ));
     }
 
-    match crate::whisper_engine::commands::whisper_validate_model_ready_with_config(app).await {
+    match crate::whisper_engine::commands::whisper_validate_model_ready_with_config(pool).await {
         Ok(model_name) => {
             info!(
                 "✅ Whisper model validation successful: {} is ready",
