@@ -572,7 +572,7 @@ async fn run_import(
             let worth_it = num_speakers != 0 || duration_seconds > 60.0;
 
             if prefs.offline_diarization_on_import && worth_it {
-                match crate::speaker_diarization::commands::ensure_pyannote_segmentation_model()
+                match crate::speaker_diarization::service::ensure_pyannote_segmentation_model()
                     .await
                 {
                     Ok(seg_path) => match crate::speaker_diarization::model::default_model_path() {

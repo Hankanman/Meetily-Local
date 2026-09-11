@@ -2,7 +2,6 @@ use crate::llm_providers::{no_auth, ListerConfig, ModelLister};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tauri::command;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OpenRouterModel {
@@ -102,7 +101,6 @@ static LISTER: Lazy<ModelLister<OpenRouterModel>> = Lazy::new(|| {
 ///
 /// # Returns
 /// Vector of available models, or fallback models on error
-#[command]
 pub async fn get_openrouter_models() -> Result<Vec<OpenRouterModel>, String> {
     LISTER.list(None).await
 }

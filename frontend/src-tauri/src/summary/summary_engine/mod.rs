@@ -5,6 +5,7 @@ pub mod client;
 pub mod commands;
 pub mod model_manager;
 pub mod models;
+pub mod service;
 pub mod sidecar;
 
 // Re-export commonly used types
@@ -14,6 +15,6 @@ pub use client::{
 // Re-export non-command items only; Tauri commands stay at
 // summary::summary_engine::commands::* and are referenced that way in
 // generate_handler!.
-pub use commands::{init_model_manager, ModelManagerState};
+pub use service::{init_model_manager, ModelManagerState};
 pub use model_manager::{ModelInfo, ModelStatus};
 pub use models::{get_available_models, get_default_model, get_model_by_name, ModelDef};

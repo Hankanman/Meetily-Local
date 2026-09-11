@@ -3,7 +3,6 @@ use once_cell::sync::Lazy;
 use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tauri::command;
 
 /// Anthropic (Claude) model information returned to frontend
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -92,7 +91,6 @@ static LISTER: Lazy<ModelLister<AnthropicModel>> = Lazy::new(|| {
 ///
 /// # Returns
 /// Vector of available models, or fallback models on error
-#[command]
 pub async fn get_anthropic_models(api_key: Option<String>) -> Result<Vec<AnthropicModel>, String> {
     LISTER.list(api_key).await
 }

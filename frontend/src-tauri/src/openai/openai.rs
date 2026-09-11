@@ -3,7 +3,6 @@ use once_cell::sync::Lazy;
 use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tauri::command;
 
 /// OpenAI model information returned to frontend
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -118,7 +117,6 @@ static LISTER: Lazy<ModelLister<OpenAIModel>> = Lazy::new(|| {
 ///
 /// # Returns
 /// Vector of available models, or fallback models on error
-#[command]
 pub async fn get_openai_models(api_key: Option<String>) -> Result<Vec<OpenAIModel>, String> {
     LISTER.list(api_key).await
 }

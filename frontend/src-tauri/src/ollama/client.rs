@@ -1,3 +1,8 @@
+//! Tauri-free Ollama HTTP/CLI client: model listing, pulling (with
+//! progress reported via an [`EventSink`](crate::events::EventSink)),
+//! deletion, and context-size lookups. See `commands.rs` for the thin
+//! `#[tauri::command]` wrappers around these.
+
 use crate::events::{EventSinkExt, SharedEventSink};
 use crate::ollama::metadata::METADATA_CACHE;
 use futures_util::StreamExt;
@@ -7,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::process::Command;
 use std::sync::Arc;
-use tauri::{command, AppHandle, Runtime};
 use tokio::sync::RwLock;
 use tokio::time::{sleep, timeout, Duration};
 
@@ -84,7 +88,6 @@ fn validate_endpoint_url(url: &str) -> Result<(), OllamaError> {
     Ok(())
 }
 
-#[command]
 pub async fn get_ollama_models(endpoint: Option<String>) -> Result<Vec<OllamaModel>, String> {
     // Validate endpoint format if provided
     if let Some(ref ep) = endpoint {
@@ -254,16 +257,6 @@ pub struct DownloadProgress {
     pub status: String,
     pub completed: u64,
     pub total: u64,
-}
-
-#[command]
-pub async fn pull_ollama_model<R: Runtime>(
-    app_handle: AppHandle<R>,
-    model_name: String,
-    endpoint: Option<String>,
-) -> Result<(), String> {
-    pull_ollama_model_with_progress(crate::events::shared_sink(&app_handle), model_name, endpoint)
-        .await
 }
 
 /// Stream-download `model_name` from an Ollama server, reporting progress
@@ -461,7 +454,6 @@ pub async fn pull_ollama_model_with_progress(
     Ok(())
 }
 
-#[command]
 pub async fn delete_ollama_model(
     model_name: String,
     endpoint: Option<String>,
@@ -514,8 +506,8 @@ pub async fn delete_ollama_model(
 
 /// Get the context size for a specific Ollama model
 ///
-/// This command fetches model metadata and returns the context size.
-/// Results are cached for 5 minutes to avoid repeated API calls.
+/// Fetches model metadata and returns the context size. Results are cached
+/// for 5 minutes to avoid repeated API calls.
 ///
 /// # Arguments
 /// * `model_name` - Name of the model (e.g., "llama3.2:1b")
@@ -523,7 +515,6 @@ pub async fn delete_ollama_model(
 ///
 /// # Returns
 /// Context size in tokens, or error message
-#[command]
 pub async fn get_ollama_model_context(
     model_name: String,
     endpoint: Option<String>,

@@ -55,6 +55,7 @@ mod profile_matcher;
 mod refinement;
 
 pub mod commands;
+pub mod service;
 
 pub use clusterer::OnlineSpeakerClusterer;
 pub use embedder::SpeakerEmbedder;

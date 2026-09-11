@@ -3,7 +3,6 @@ use once_cell::sync::Lazy;
 use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tauri::command;
 
 /// Groq model information returned to frontend
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -89,7 +88,6 @@ static LISTER: Lazy<ModelLister<GroqModel>> = Lazy::new(|| {
 ///
 /// # Returns
 /// Vector of available models, or fallback models on error
-#[command]
 pub async fn get_groq_models(api_key: Option<String>) -> Result<Vec<GroqModel>, String> {
     LISTER.list(api_key).await
 }
