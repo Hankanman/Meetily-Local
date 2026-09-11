@@ -139,6 +139,14 @@ impl AppShell {
             let id = id.clone();
             self.meeting.update(cx, |view, cx| view.load(id, cx));
         }
+        // Leaving the Speakers page while self-voice enrollment is recording
+        // would otherwise leave the microphone open indefinitely — cancel it,
+        // same as clicking "Cancel" on the enrollment panel. Checked against
+        // the *current* route (before it's overwritten below) so navigating
+        // Speakers -> Speakers (a no-op route) doesn't cancel anything.
+        if matches!(self.route, Route::Speakers) && route != Route::Speakers {
+            self.speakers.update(cx, |view, cx| view.on_leave(cx));
+        }
         self.route = route;
         cx.notify();
     }
