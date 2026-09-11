@@ -75,6 +75,35 @@ pub struct StartHooks {
     pub init_speaker_diarizer: StartHook<Result<bool, String>>,
 }
 
+/// Build the two shell-side hooks `start()` needs mid-flow, from a plain
+/// `Option<SqlitePool>` instead of a shell `AppHandle`. Both underlying
+/// functions are already Tauri-free (`Option<&SqlitePool>`), so this just
+/// closes over the pool. Used by every shell that starts a recording with
+/// "default devices" behaviour (the tray, and — via
+/// `recording_commands::build_start_hooks`, which should call this rather
+/// than duplicate it — the Tauri app).
+pub fn default_start_hooks(pool: Option<sqlx::SqlitePool>) -> StartHooks {
+    let pool_for_validate = pool.clone();
+    let pool_for_diarizer = pool;
+    StartHooks {
+        validate_transcription_model: Box::new(move || {
+            Box::pin(async move {
+                transcription::validate_transcription_model_ready(pool_for_validate.as_ref())
+                    .await
+            })
+        }),
+        init_speaker_diarizer: Box::new(move || {
+            Box::pin(async move {
+                crate::speaker_diarization::service::try_init_for_recording(
+                    pool_for_diarizer.as_ref(),
+                )
+                .await
+                .map_err(|e| e.to_string())
+            })
+        }),
+    }
+}
+
 // ============================================================================
 // GLOBAL STATE
 // ============================================================================

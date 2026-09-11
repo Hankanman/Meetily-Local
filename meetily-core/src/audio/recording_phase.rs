@@ -14,7 +14,7 @@
 // so it stays independently unit-testable.
 
 use crate::events::EventSinkExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -22,7 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Recording lifecycle phase, owned entirely by the Rust side. The frontend
 /// maps this onto its own `RecordingStatus` enum rather than deriving status
 /// from polled booleans.
-#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum RecordingPhase {
     Idle,
@@ -37,7 +37,7 @@ pub enum RecordingPhase {
 /// Full state snapshot broadcast to the frontend on every phase change (as
 /// the `recording-state` event payload) and returned by the
 /// `get_recording_state` command.
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RecordingSnapshot {
     pub phase: RecordingPhase,
     /// Unix ms the current session entered `Recording` (None once idle).

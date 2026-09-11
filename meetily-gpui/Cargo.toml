@@ -29,6 +29,15 @@ meetily-core = { path = "../meetily-core" }
 # yields incompatible types (longbridge/gpui-kit#2532).
 gpui-kit = "0.6"
 
+# Tray: StatusNotifierItem menu. Uses the gpui-kit backend feature so it
+# shares gpui-kit's own gpui-pre instead of pulling a second, incompatible
+# one (see longbridge/gpui-kit#2532) — same pin as spikes/gpui-shell, which
+# researched this against 2026-09-07's main branch.
+gpui-tray = { git = "https://github.com/domenkozar/gpui-tray", rev = "dfcd45b4bd82963abcee9e6cc35f83f7a4fa6c03", default-features = false, features = ["gpui-kit", "menu-state"] }
+
+# Desktop notifications (recording started/stopped) via D-Bus.
+notify-rust = "4"
+
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
@@ -36,5 +45,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.32.0", features = ["full"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono"] }
+chrono = { version = "0.4.31", features = ["serde"] }
 # `_exit` on shutdown, same as the Tauri shell.
 libc = "0.2"
