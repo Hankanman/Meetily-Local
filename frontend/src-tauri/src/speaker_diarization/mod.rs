@@ -198,6 +198,50 @@ impl Diarizer {
         samples_16k: &[f32],
         precomputed: Option<Vec<f32>>,
     ) -> Result<DiarizationResult> {
+        self.process_inner(sequence_id, samples_16k, precomputed, None)
+    }
+
+    /// Like [`process`], but lets a caller who has already run *offline*
+    /// (whole-file) diarization — see `speaker_diarization::offline` — steer
+    /// the "Speaker N" fallback label via `forced_cluster` (a 0-based
+    /// speaker index from that pass).
+    ///
+    /// The embedding is still computed (or taken from `precomputed`) and
+    /// recorded to history exactly as [`process`] does, and — critically —
+    /// a stored voice profile match still takes precedence: an enrolled
+    /// voice comes out as "John" whether or not a hint was supplied. Only
+    /// the *unmatched* fallback label changes: with a hint it's
+    /// `format!("Speaker {}", forced_cluster + 1)` instead of the online
+    /// clusterer's own greedy assignment. The online clusterer still sees
+    /// every embedding regardless (its running centroids/ids stay usable
+    /// for any segment that arrives without a hint), it just doesn't get to
+    /// decide the label when one is present.
+    ///
+    /// This is how import's whole-file offline diarization (far more
+    /// accurate than per-segment online clustering) gets used *without*
+    /// bypassing this diarizer: the caller keeps one diarizer instance with
+    /// a complete history, so promote/rename and [`refine`] work exactly as
+    /// they do for a live recording.
+    ///
+    /// [`process`]: Diarizer::process
+    /// [`refine`]: Diarizer::refine
+    pub fn process_with_hint(
+        &self,
+        sequence_id: u64,
+        samples_16k: &[f32],
+        precomputed: Option<Vec<f32>>,
+        forced_cluster: Option<usize>,
+    ) -> Result<DiarizationResult> {
+        self.process_inner(sequence_id, samples_16k, precomputed, forced_cluster)
+    }
+
+    fn process_inner(
+        &self,
+        sequence_id: u64,
+        samples_16k: &[f32],
+        precomputed: Option<Vec<f32>>,
+        forced_cluster: Option<usize>,
+    ) -> Result<DiarizationResult> {
         let mut embedding = match precomputed {
             Some(e) => e,
             None => self.embedder.embed(samples_16k)?,
@@ -207,9 +251,10 @@ impl Diarizer {
         // no path is magnitude-weighted differently from another.
         embedding_math::l2_normalize(&mut embedding);
 
-        // Always run the cluster step — the "Speaker N" fallback label has to
-        // come from somewhere even when a profile match fires later segments.
-        let cluster_label = {
+        // Always run the cluster step, even with a hint present — its
+        // running centroids/ids need every embedding to stay useful for any
+        // segment that arrives without one (see `process_with_hint` doc).
+        let online_cluster_label = {
             let mut clusterer = self
                 .clusterer
                 .lock()
@@ -218,18 +263,17 @@ impl Diarizer {
             clusterer.label_for(cluster_id)
         };
 
-        // A stored-profile match takes precedence over the cluster label.
-        // This is also the self-attribution path: the enrolled self profile is
-        // just another entry in the matcher, named "Me".
+        // A stored-profile match takes precedence over both the cluster
+        // label and the hint. This is also the self-attribution path: the
+        // enrolled self profile is just another entry in the matcher, named
+        // "Me".
         let profile_match = self
             .profile_matcher
             .as_ref()
             .and_then(|m| m.search(&embedding));
 
-        let (label, voice_profile_id) = match profile_match {
-            Some(m) => (m.name, Some(m.profile_id)),
-            None => (cluster_label, None),
-        };
+        let (label, voice_profile_id) =
+            resolve_label(online_cluster_label, forced_cluster, profile_match);
 
         if let Ok(mut h) = self.history.lock() {
             h.push(EmbeddingRecord {
@@ -354,6 +398,27 @@ impl Diarizer {
                 }
             }
         }
+    }
+}
+
+/// Decide the final label + voice-profile id for one segment, given the
+/// online clusterer's own fallback label, an optional offline-diarization
+/// hint that overrides it, and an optional stored-profile match that
+/// overrides both. Pure and independent of any live embedder/model, so it's
+/// unit-testable on its own (see `hint_tests` below) — this is the whole
+/// decision `process_with_hint`/`process` make once they have their inputs.
+fn resolve_label(
+    online_cluster_label: String,
+    forced_cluster: Option<usize>,
+    profile_match: Option<ProfileMatch>,
+) -> (String, Option<String>) {
+    let cluster_label = match forced_cluster {
+        Some(idx) => format!("Speaker {}", idx + 1),
+        None => online_cluster_label,
+    };
+    match profile_match {
+        Some(m) => (m.name, Some(m.profile_id)),
+        None => (cluster_label, None),
     }
 }
 
@@ -487,6 +552,50 @@ mod turn_tests {
         let turns = turns_from_embeddings(&bounds, &embs, 0.5);
         assert_eq!(ranges(&turns), vec![(0, 32_000)]);
         assert!(turns[0].embedding.is_none());
+    }
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::*;
+
+    fn pm(profile_id: &str, name: &str) -> ProfileMatch {
+        ProfileMatch {
+            profile_id: profile_id.to_string(),
+            name: name.to_string(),
+            score: 0.9,
+        }
+    }
+
+    #[test]
+    fn hinted_cluster_used_when_no_profile_match() {
+        let (label, voice_profile_id) = resolve_label("Speaker 7".to_string(), Some(2), None);
+        // forced_cluster is 0-based; the label is 1-based.
+        assert_eq!(label, "Speaker 3");
+        assert!(voice_profile_id.is_none());
+    }
+
+    #[test]
+    fn profile_match_wins_over_hint() {
+        let (label, voice_profile_id) =
+            resolve_label("Speaker 7".to_string(), Some(2), Some(pm("p1", "John")));
+        assert_eq!(label, "John");
+        assert_eq!(voice_profile_id.as_deref(), Some("p1"));
+    }
+
+    #[test]
+    fn profile_match_wins_with_no_hint_too() {
+        let (label, voice_profile_id) =
+            resolve_label("Speaker 7".to_string(), None, Some(pm("p1", "John")));
+        assert_eq!(label, "John");
+        assert_eq!(voice_profile_id.as_deref(), Some("p1"));
+    }
+
+    #[test]
+    fn no_hint_no_match_falls_back_to_online_cluster_label() {
+        let (label, voice_profile_id) = resolve_label("Speaker 7".to_string(), None, None);
+        assert_eq!(label, "Speaker 7");
+        assert!(voice_profile_id.is_none());
     }
 }
 

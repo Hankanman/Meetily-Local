@@ -1,11 +1,13 @@
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::speaker_diarization::offline::SpeakerTurn;
 use crate::speaker_diarization::Diarizer;
 use crate::whisper_engine::WhisperEngine;
 
@@ -559,11 +561,21 @@ pub(crate) fn log_vad_diagnostics(speech_segments: &[crate::audio::vad::SpeechSe
 ///
 /// `on_segment_progress(index, total, duration_secs)` is invoked once per
 /// processable segment, right before it's transcribed.
+///
+/// `offline_turns`, when present, comes from a whole-file offline
+/// diarization pass (see `speaker_diarization::offline::diarize_offline`,
+/// run by the caller — import.rs — off the async runtime before this is
+/// called). Its turns don't replace the diarizer; they *hint* its
+/// clustering decision (see [`Diarizer::process_with_hint`]) so a stored
+/// voice profile still wins and the embedding history stays complete for
+/// promote/refine, while the offline pass's more-accurate global clustering
+/// decides the "Speaker N" fallback instead of the online greedy clusterer.
 pub(crate) async fn run_batch_transcription(
     speech_segments: &[crate::audio::vad::SpeechSegment],
     language: Option<String>,
     whisper_engine: Arc<WhisperEngine>,
     diarizer: Option<Arc<Diarizer>>,
+    offline_turns: Option<&[SpeakerTurn]>,
     cancel_flag: &'static AtomicBool,
     on_segment_progress: impl Fn(usize, usize, f64),
 ) -> Result<Vec<BatchTranscript>> {
@@ -594,6 +606,29 @@ pub(crate) async fn run_batch_transcription(
 
     let processable_count = processable_segments.len();
     info!("Processing {} segments (after splitting)", processable_count);
+
+    // Pre-resolve each processable segment's offline-diarization hint (by
+    // its position in `processable_segments`, the same `i` the main loop
+    // below indexes with) so the hot loop does a cheap map lookup instead of
+    // re-scanning `offline_turns` per segment. `speaker_index_for_range`
+    // picks the offline turn with the most overlap; segments outside every
+    // turn (silence the offline pass didn't cover) get no hint and fall
+    // back to the online clusterer for that one segment.
+    let offline_hints: HashMap<u64, usize> = match offline_turns {
+        Some(turns) => processable_segments
+            .iter()
+            .enumerate()
+            .filter_map(|(i, seg)| {
+                let start_s = seg.start_timestamp_ms as f32 / 1000.0;
+                let end_s = seg.end_timestamp_ms as f32 / 1000.0;
+                crate::speaker_diarization::offline::speaker_index_for_range(
+                    turns, start_s, end_s,
+                )
+                .map(|idx| (i as u64, idx))
+            })
+            .collect(),
+        None => HashMap::new(),
+    };
 
     let mut all_transcripts: Vec<BatchTranscript> = Vec::new();
     let mut total_confidence = 0.0f32;
@@ -678,8 +713,10 @@ pub(crate) async fn run_batch_transcription(
             // computed BEFORE the push so the diarizer history records the
             // same id the saved row will carry.
             let sequence_id = all_transcripts.len() as u64;
+            let forced_cluster = offline_hints.get(&(i as u64)).copied();
             let (speaker, voice_profile_id) = match diarizer.as_ref() {
-                Some(d) => match d.process(sequence_id, &segment.samples, None) {
+                Some(d) => match d.process_with_hint(sequence_id, &segment.samples, None, forced_cluster)
+                {
                     Ok(result) => (Some(result.label), result.voice_profile_id),
                     Err(e) => {
                         debug!("Diarization fallback for batch segment {}: {}", i, e);

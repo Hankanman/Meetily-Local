@@ -518,40 +518,95 @@ async fn run_import<R: Runtime>(
     // Accurate (offline) diarization over the WHOLE file: pyannote
     // segmentation + global clustering, optionally told the exact speaker
     // count. Far more accurate than the per-segment online clusterer for a
-    // single clean import source. Falls back to the online diarizer above
-    // if the segmentation model isn't present.
+    // single clean import source. Rather than bypassing the diarizer built
+    // above, its turns become *hints* fed into that same diarizer (see
+    // `common::run_batch_transcription` and `Diarizer::process_with_hint`):
+    // the embedding is still computed and recorded to history, a stored
+    // voice profile still takes precedence, only the "Speaker N" fallback
+    // id changes. That keeps promote/rename and the post-import
+    // `refine_and_persist` pass working against one diarizer instance
+    // instead of a second, disconnected labelling path.
+    //
+    // Gated behind the `offline_diarization_on_import` preference (default
+    // on), only attempted when it's likely to matter (an explicit speaker
+    // count, or a file long enough that the online greedy clusterer is more
+    // likely to drift), and run off the async runtime — pyannote
+    // segmentation over a long file is minutes of CPU.
     let offline_turns: Option<Vec<crate::speaker_diarization::offline::SpeakerTurn>> =
-        if total_segments > 0 {
-            match (
-                crate::speaker_diarization::model::pyannote_segmentation_path(),
-                crate::speaker_diarization::model::default_model_path(),
-            ) {
-                (Some(seg), Some(emb)) if seg.exists() && emb.exists() => {
-                    match crate::speaker_diarization::offline::diarize_offline(
-                        &audio_for_diar,
-                        &seg,
-                        &emb,
-                        num_speakers,
-                        2,
-                    ) {
-                        Ok(turns) => {
-                            info!(
-                                "Offline diarization ready: {} turns (num_speakers={})",
-                                turns.len(),
-                                num_speakers
-                            );
-                            Some(turns)
+        if total_segments > 0 && diarizer.is_some() {
+            let prefs = super::recording_preferences::load_recording_preferences(&app)
+                .await
+                .unwrap_or_default();
+            let worth_it = num_speakers != 0 || duration_seconds > 60.0;
+
+            if prefs.offline_diarization_on_import && worth_it {
+                match crate::speaker_diarization::commands::ensure_pyannote_segmentation_model(
+                    app.clone(),
+                )
+                .await
+                {
+                    Ok(seg_path) => match crate::speaker_diarization::model::default_model_path() {
+                        Some(emb_path) if emb_path.exists() => {
+                            emit_progress(&app, "diarizing", 28, "Analyzing speakers...");
+
+                            let seg_path = PathBuf::from(seg_path);
+                            let samples = audio_for_diar;
+                            let threads = crate::audio::hardware_detector::HardwareProfile::detect()
+                                .get_whisper_config()
+                                .max_threads
+                                .unwrap_or(1)
+                                .max(1) as i32;
+
+                            match tokio::task::spawn_blocking(move || {
+                                crate::speaker_diarization::offline::diarize_offline(
+                                    &samples,
+                                    &seg_path,
+                                    &emb_path,
+                                    num_speakers,
+                                    threads,
+                                )
+                            })
+                            .await
+                            {
+                                Ok(Ok(turns)) => {
+                                    info!(
+                                        "Offline diarization ready: {} turns (num_speakers={})",
+                                        turns.len(),
+                                        num_speakers
+                                    );
+                                    Some(turns)
+                                }
+                                Ok(Err(e)) => {
+                                    warn!(
+                                        "Offline diarization failed ({e}); falling back to \
+                                         the online clusterer"
+                                    );
+                                    None
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "Offline diarization task panicked ({e}); falling \
+                                         back to the online clusterer"
+                                    );
+                                    None
+                                }
+                            }
                         }
-                        Err(e) => {
-                            warn!("Offline diarization failed ({e}); using online diarizer");
+                        _ => {
+                            info!("Speaker embedding model absent; skipping offline diarization");
                             None
                         }
+                    },
+                    Err(e) => {
+                        warn!(
+                            "Pyannote segmentation model unavailable ({e}); falling back to \
+                             the online clusterer"
+                        );
+                        None
                     }
                 }
-                _ => {
-                    info!("Pyannote segmentation model absent; using online diarizer");
-                    None
-                }
+            } else {
+                None
             }
         } else {
             None
@@ -570,6 +625,7 @@ async fn run_import<R: Runtime>(
             language.clone(),
             engine,
             diarizer.clone(),
+            offline_turns.as_deref(),
             &IMPORT_CANCELLED,
             move |i, total, segment_duration_sec| {
                 let progress = 30 + ((i as f32 / total.max(1) as f32) * 50.0) as u32;
@@ -591,7 +647,7 @@ async fn run_import<R: Runtime>(
         Ok(Vec::new())
     };
 
-    let mut all_transcripts = match batch_result {
+    let all_transcripts = match batch_result {
         Ok(transcripts) => transcripts,
         Err(e) => {
             let _ = std::fs::remove_dir_all(&meeting_folder);
@@ -602,21 +658,6 @@ async fn run_import<R: Runtime>(
             });
         }
     };
-
-    // Prefer the accurate offline diarization's turns over whatever the
-    // per-segment online diarizer above assigned, when it ran successfully.
-    if let Some(turns) = offline_turns.as_ref() {
-        for t in all_transcripts.iter_mut() {
-            let start_s = t.start_ms as f32 / 1000.0;
-            let end_s = t.end_ms as f32 / 1000.0;
-            if let Some(label) =
-                crate::speaker_diarization::offline::speaker_for_range(turns, start_s, end_s)
-            {
-                t.speaker = Some(label);
-                t.voice_profile_id = None;
-            }
-        }
-    }
 
     emit_progress(&app, "saving", 85, "Creating meeting...");
 
@@ -684,6 +725,32 @@ async fn run_import<R: Runtime>(
             "Installed import diarizer as current_diarizer for meeting {}",
             meeting_id
         );
+
+        // Re-cluster offline and persist any improved labels — addresses #9
+        // for the online-clustering fallback too (when offline diarization
+        // above did run, hinted labels are already accurate and this is a
+        // no-op; `refine_and_persist` only rewrites rows that actually
+        // change). Backgrounded so import completion isn't held up by it,
+        // same as the equivalent post-recording pass in
+        // `recording_commands::trigger_post_meeting_refine`. Transcripts are
+        // already persisted at this point (see `create_meeting_with_transcripts`
+        // above), which `refine_and_persist` requires.
+        let app_for_refine = app.clone();
+        let meeting_id_for_refine = meeting_id.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = crate::speaker_diarization::commands::refine_and_persist(
+                &app_for_refine,
+                &meeting_id_for_refine,
+            )
+            .await
+            {
+                warn!(
+                    "Speaker refinement failed for imported meeting {}: {} \
+                     (labels left as recorded)",
+                    meeting_id_for_refine, e
+                );
+            }
+        });
     }
 
     Ok(ImportResult {

@@ -197,6 +197,10 @@ const COMMAND_DEFAULTS: Record<string, Default> = {
   }),
   // Read as `summary.status` / `summary.data` — "idle" means "no summary yet".
   api_get_summary: () => ({ status: "idle", data: null }),
+
+  // --- Audio import (accurate offline diarization on import) ---------------
+  start_import_audio_command: () => ({ message: "Import started" }),
+  ensure_pyannote_segmentation_model: "/tmp/parley-dev/speaker_models/pyannote_segmentation_3_0.onnx",
 };
 
 // --- Callback registry (transformCallback / Channel) ------------------------

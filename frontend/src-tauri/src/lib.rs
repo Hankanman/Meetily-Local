@@ -439,27 +439,12 @@ async fn ensure_required_models_downloaded<R: Runtime>(app: &AppHandle<R>) {
         }
     }
 
-    // ── Pyannote segmentation (offline / accurate diarization) ──
-    if let Some(seg_path) = speaker_diarization::model::pyannote_segmentation_path() {
-        if !speaker_diarization::model::model_is_ready(&seg_path) {
-            let url = speaker_diarization::model::pyannote_segmentation_download_url();
-            log::info!(
-                "[startup-download] pyannote segmentation missing — fetching {} (~5.7MB, one-time)",
-                url
-            );
-            match download_file_to(url, &seg_path).await {
-                Ok(()) => log::info!(
-                    "[startup-download] pyannote segmentation downloaded → {}",
-                    seg_path.display()
-                ),
-                Err(e) => log::warn!(
-                    "[startup-download] pyannote segmentation download failed: {} \
-                     (accurate offline diarization falls back to the online clusterer)",
-                    e
-                ),
-            }
-        }
-    }
+    // Deliberately NOT fetched here: the pyannote segmentation model (offline
+    // / accurate diarization on Import). It's only needed when a user opts
+    // into `offline_diarization_on_import` and imports a file worth running
+    // it on, so the ~5.7MB download is deferred to first use via
+    // `speaker_diarization::commands::ensure_pyannote_segmentation_model`,
+    // called from `audio::import` — not paid by every install/launch.
 
     // ── Speaker embedding ──
     let Some(speaker_path) = speaker_diarization::default_model_path() else {
@@ -511,9 +496,10 @@ async fn ensure_required_models_downloaded<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// Plain HTTP-streaming download to a destination path. Used for built-in
-/// models that don't have their own dedicated downloader command. Cleans up
-/// partial files on error.
-async fn download_file_to(url: &str, dest: &std::path::Path) -> anyhow::Result<()> {
+/// models that don't have their own dedicated downloader command (also
+/// reused by `speaker_diarization::commands::ensure_pyannote_segmentation_model`
+/// for its lazy, on-demand fetch). Cleans up partial files on error.
+pub(crate) async fn download_file_to(url: &str, dest: &std::path::Path) -> anyhow::Result<()> {
     use anyhow::anyhow;
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
@@ -798,6 +784,7 @@ pub fn run() {
             // Speaker diarization commands
             speaker_diarization::commands::speaker_model_status,
             speaker_diarization::commands::speaker_model_download,
+            speaker_diarization::commands::ensure_pyannote_segmentation_model,
             speaker_diarization::commands::list_voice_profiles,
             speaker_diarization::commands::delete_voice_profile,
             speaker_diarization::commands::update_voice_profile,

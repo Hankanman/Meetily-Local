@@ -45,6 +45,17 @@ pub struct RecordingPreferences {
     /// at the cost of a reload next time.
     #[serde(default)]
     pub unload_model_after_recording: bool,
+    /// Opt-in to the accurate offline diarization pass on Import (pyannote
+    /// segmentation + global clustering over the whole file, fed into the
+    /// diarizer as clustering hints — see `speaker_diarization::offline` and
+    /// `audio::import`). Attempted only when it's likely to matter (an
+    /// explicit speaker count, or a long file) and only if this is on;
+    /// still lazily downloads its ~5.7MB segmentation model on first use
+    /// rather than at app startup. Defaults on: it's strictly a labelling
+    /// improvement over the online clusterer, and falls back silently if
+    /// the model can't be fetched.
+    #[serde(default = "default_true")]
+    pub offline_diarization_on_import: bool,
 }
 
 fn default_true() -> bool {
@@ -63,6 +74,7 @@ impl Default for RecordingPreferences {
             auto_refine: true,
             streaming_partials: true,
             unload_model_after_recording: false,
+            offline_diarization_on_import: true,
         }
     }
 }
@@ -316,5 +328,19 @@ mod unload_after_stop_tests {
         });
         let prefs: RecordingPreferences = serde_json::from_value(json).unwrap();
         assert!(!prefs.unload_model_after_recording);
+    }
+
+    #[test]
+    fn offline_diarization_on_import_defaults_to_true() {
+        // Old preferences JSON predating this field should get the opt-in
+        // default rather than silently disabling the feature.
+        let json = serde_json::json!({
+            "save_folder": "/tmp/x",
+            "auto_save": true,
+            "file_format": "mp4",
+        });
+        let prefs: RecordingPreferences = serde_json::from_value(json).unwrap();
+        assert!(prefs.offline_diarization_on_import);
+        assert!(RecordingPreferences::default().offline_diarization_on_import);
     }
 }
