@@ -25,9 +25,8 @@ use meetily_core::database::repositories::meeting::{InterruptedMeetingRow, Meeti
 use crate::app_state::AppServices;
 use crate::shell;
 
-/// How many segments the preview shows — mirrors `TranscriptRecovery.tsx`'s
-/// "Showing first 10 transcript segments" slice.
-const PREVIEW_SEGMENT_LIMIT: usize = 10;
+/// Fixed max height of the scrollable, virtualized transcript preview list.
+const PREVIEW_LIST_HEIGHT: Pixels = px(320.);
 
 /// Entry point: call once the shell is showing (normal launch with an
 /// already-completed onboarding, or right after onboarding finishes). A
@@ -92,6 +91,9 @@ impl RecoveryState {
     /// `MeetingsRepository::get_meeting` — the same read a saved meeting's
     /// transcripts come from, since an interrupted meeting's segments were
     /// already upserted live to SQLite (see `audio::transcript_db_writer`).
+    /// Loads the full transcript (not just a slice) — the preview list
+    /// itself is virtualized (`uniform_list`) so a long transcript doesn't
+    /// cost anything to render.
     fn toggle_preview(&mut self, meeting_id: String, cx: &mut Context<Self>) {
         if self.preview_id.as_deref() == Some(meeting_id.as_str()) {
             self.preview_id = None;
@@ -130,7 +132,6 @@ impl RecoveryState {
                                 .partial_cmp(&b.audio_start_time)
                                 .unwrap_or(std::cmp::Ordering::Equal)
                         });
-                        details.transcripts.truncate(PREVIEW_SEGMENT_LIMIT);
                         this.preview_transcripts = details.transcripts;
                     }
                     Ok(Ok(None)) => this.preview_error = Some("Meeting not found".to_string()),
@@ -254,6 +255,68 @@ impl RecoveryState {
             });
         })
         .detach();
+    }
+}
+
+/// "12:34" total captured duration, spanning the earliest segment's start to
+/// the latest segment's end — `None` if no segment carries audio-relative
+/// timing (e.g. an import predating that column).
+fn preview_duration_label(transcripts: &[MeetingTranscript]) -> Option<String> {
+    let start = transcripts.iter().filter_map(|t| t.audio_start_time).fold(f64::INFINITY, f64::min);
+    let end = transcripts.iter().filter_map(|t| t.audio_end_time.or(t.audio_start_time)).fold(f64::NEG_INFINITY, f64::max);
+    if !start.is_finite() || !end.is_finite() || end < start {
+        return None;
+    }
+    let total = (end - start).max(0.0) as u64;
+    Some(format!("{:02}:{:02}", total / 60, total % 60))
+}
+
+#[cfg(test)]
+mod tests {
+    // Deliberately not `use super::*` — that would also pull in this
+    // module's `use gpui_kit::*` glob (re-exporting the entirety of GPUI),
+    // and combining that huge glob-imported namespace with a struct literal
+    // here blows up rustc's macro/trait-resolution recursion limit (verified
+    // by bisection: this exact test module reproduces it, an equivalent one
+    // with named imports does not). Import only what the tests need instead.
+    use super::preview_duration_label;
+    use meetily_core::database::models::MeetingTranscript;
+
+    fn transcript(start: Option<f64>, end: Option<f64>) -> MeetingTranscript {
+        MeetingTranscript {
+            id: "t".into(),
+            text: "hello".into(),
+            timestamp: String::new(),
+            audio_start_time: start,
+            audio_end_time: end,
+            duration: None,
+            speaker: None,
+            voice_profile_id: None,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn duration_spans_earliest_start_to_latest_end() {
+        let transcripts = vec![transcript(Some(5.0), Some(10.0)), transcript(Some(60.0), Some(94.0))];
+        assert_eq!(preview_duration_label(&transcripts), Some("01:29".to_string()));
+    }
+
+    #[test]
+    fn duration_falls_back_to_start_when_end_missing() {
+        let transcripts = vec![transcript(Some(0.0), None), transcript(Some(30.0), None)];
+        assert_eq!(preview_duration_label(&transcripts), Some("00:30".to_string()));
+    }
+
+    #[test]
+    fn duration_is_none_without_any_audio_timing() {
+        let transcripts = vec![transcript(None, None)];
+        assert_eq!(preview_duration_label(&transcripts), None);
+    }
+
+    #[test]
+    fn duration_is_none_for_empty_transcript_list() {
+        assert_eq!(preview_duration_label(&[]), None);
     }
 }
 
@@ -386,30 +449,50 @@ fn render_body<'a>(
             } else if preview_transcripts.is_empty() {
                 preview = preview.child(Label::new("No transcript segments captured yet.").text_sm());
             } else {
-                preview = preview.child(
-                    Label::new(format!(
-                        "Showing first {} transcript segment{} (of {})",
-                        preview_transcripts.len(),
-                        if preview_transcripts.len() == 1 { "" } else { "s" },
-                        row.segment_count,
-                    ))
-                    .text_sm(),
-                );
-                for t in &preview_transcripts {
-                    let time = t
-                        .audio_start_time
-                        .map(|s| format!("[{:02}:{:02}]", (s as u64) / 60, (s as u64) % 60))
-                        .unwrap_or_else(|| t.timestamp.clone());
-                    let speaker = t.speaker.clone().unwrap_or_default();
-                    let label = if speaker.is_empty() { time } else { format!("{time} {speaker}:") };
-                    preview = preview.child(
-                        h_flex()
-                            .gap_2()
-                            .text_xs()
-                            .child(div().text_color(cx.theme().muted_foreground).child(label))
-                            .child(div().flex_1().min_w_0().child(t.text.clone())),
-                    );
+                let count = preview_transcripts.len();
+                let duration_label = preview_duration_label(&preview_transcripts);
+                let last_updated = preview_transcripts.last().map(|t| t.timestamp.clone()).filter(|s| !s.is_empty());
+
+                let mut meta = h_flex().gap_3().text_xs().text_color(cx.theme().muted_foreground).child(format!(
+                    "{} segment{}",
+                    count,
+                    if count == 1 { "" } else { "s" }
+                ));
+                if let Some(d) = duration_label {
+                    meta = meta.child(format!("· {d}"));
                 }
+                if let Some(last) = last_updated {
+                    meta = meta.child(format!("· last updated {last}"));
+                }
+                preview = preview.child(meta);
+
+                let list_id = SharedString::from(format!("recovery-preview-list-{}", row.meeting_id));
+                let transcripts = preview_transcripts.clone();
+                preview = preview.child(
+                    uniform_list(list_id, count, move |range, _window, cx| {
+                        range
+                            .map(|ix| {
+                                let t = &transcripts[ix];
+                                let time = t
+                                    .audio_start_time
+                                    .map(|s| format!("[{:02}:{:02}]", (s as u64) / 60, (s as u64) % 60))
+                                    .unwrap_or_else(|| t.timestamp.clone());
+                                let speaker = t.speaker.clone().unwrap_or_default();
+                                let label = if speaker.is_empty() { time } else { format!("{time} {speaker}:") };
+                                h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .py_1()
+                                    .text_xs()
+                                    .child(div().text_color(cx.theme().muted_foreground).child(label))
+                                    .child(div().flex_1().min_w_0().text_sm().child(t.text.clone()))
+                                    .into_any_element()
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .w_full()
+                    .h(PREVIEW_LIST_HEIGHT),
+                );
             }
 
             card = card.child(preview);

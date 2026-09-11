@@ -73,6 +73,15 @@ struct SpeakerEditState {
     merge_target: Option<String>,
     saving: bool,
     error: Option<String>,
+    /// Where the chip was clicked, in window coordinates — the popover's
+    /// anchor position (see [`render_floating_speaker_edit`]).
+    click_position: Point<Pixels>,
+    /// This meeting's linked-calendar-event attendees, offered as one-click
+    /// name/email fills — mirrors `EditableSpeakerChip.tsx`'s `attendees`
+    /// state. Computed once when the panel opens from
+    /// [`MeetingView::calendar_event`], which is already loaded for the
+    /// calendar row.
+    attendees: Vec<speaker_chip::AttendeeSuggestion>,
 }
 
 /// The full Lucide catalog (as opposed to `gpui_kit::component::IconName`,
@@ -1109,6 +1118,7 @@ impl MeetingView {
         segment_id: String,
         speaker: String,
         voice_profile_id: Option<String>,
+        click_position: Point<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1122,6 +1132,9 @@ impl MeetingView {
         let name_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("e.g. Alice Smith").default_value(speaker.clone()));
         let email_input = cx.new(|cx| InputState::new(window, cx).placeholder("Email (optional)"));
+        window.focus(&name_input.read(cx).focus_handle(cx), cx);
+        let attendees =
+            self.calendar_event.as_ref().map(|e| speaker_chip::attendee_suggestions(&e.attendees)).unwrap_or_default();
         self.speaker_edit = Some(SpeakerEditState {
             key: key.clone(),
             speaker: speaker.clone(),
@@ -1133,6 +1146,8 @@ impl MeetingView {
             merge_target: None,
             saving: false,
             error: None,
+            click_position,
+            attendees,
         });
         cx.notify();
 
@@ -1174,6 +1189,19 @@ impl MeetingView {
 
     fn close_speaker_edit(&mut self, cx: &mut Context<Self>) {
         self.speaker_edit = None;
+        cx.notify();
+    }
+
+    /// Fill the rename form from a clicked calendar-attendee suggestion —
+    /// mirrors the attendee chip's `onClick` in `EditableSpeakerChip.tsx`.
+    fn apply_attendee_suggestion(&mut self, label: String, email: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(state) = self.speaker_edit.as_ref() else {
+            return;
+        };
+        let name_input = state.name_input.clone();
+        let email_input = state.email_input.clone();
+        name_input.update(cx, |s, cx| s.set_value(label, window, cx));
+        email_input.update(cx, |s, cx| s.set_value(email.unwrap_or_default(), window, cx));
         cx.notify();
     }
 
@@ -1390,13 +1418,16 @@ fn notify(cx: &mut App, notification: Notification) {
     }
 }
 
-/// The inline speaker-edit panel shown under a transcript row when its chip
-/// is open — mirrors `EditableSpeakerChip.tsx`'s popover body, rendered
-/// inline (below the row) instead of in a floating overlay so it works
-/// cleanly inside the virtualized `uniform_list`. Free function (not a
-/// method) because the `uniform_list` row closure only has `&mut App`, not
-/// `&mut Context<MeetingView>`.
-fn render_speaker_edit_panel(state: &SpeakerEditState, entity: Entity<MeetingView>, cx: &mut App) -> AnyElement {
+/// The floating speaker-edit popover, rendered from the page root (outside
+/// the virtualized `uniform_list`) as a `deferred(anchored()...)` positioned
+/// at the chip's click point — mirrors `EditableSpeakerChip.tsx`'s popover.
+/// gpui-kit's `Popover` doesn't anchor cleanly to a trigger living inside a
+/// recycled `uniform_list` row, so this tracks the click position in
+/// [`SpeakerEditState::click_position`] instead and positions the card
+/// directly. Free function (not a method) because [`MeetingView::render`]
+/// only has an `Entity<MeetingView>` for the closures it hands out, not a
+/// second `&mut Context<Self>` borrow.
+fn render_floating_speaker_edit(state: &SpeakerEditState, entity: Entity<MeetingView>, cx: &mut App) -> AnyElement {
     let is_named_profile = state.voice_profile_id.is_some();
     let merging = state.merge_target.is_some();
     let merge_target_profile = state.merge_target.as_ref().and_then(|id| state.profiles.iter().find(|p| &p.id == id));
@@ -1404,15 +1435,57 @@ fn render_speaker_edit_panel(state: &SpeakerEditState, entity: Entity<MeetingVie
     let can_save = speaker_chip::can_save_speaker_edit(state.merge_target.as_deref(), &name) && !state.saving;
 
     let mut panel = v_flex()
-        .w_full()
+        .id("speaker-edit-popover")
+        .occlude()
+        .w(px(288.))
         .gap_2()
-        .mt_1()
         .p_3()
         .rounded_md()
         .border_1()
         .border_color(ActiveTheme::theme(cx).border)
-        .bg(ActiveTheme::theme(cx).muted.opacity(0.3))
+        .bg(ActiveTheme::theme(cx).background)
+        .shadow_lg()
+        .on_mouse_down_out({
+            let entity = entity.clone();
+            move |_, _, cx| entity.update(cx, |this, cx| this.close_speaker_edit(cx))
+        })
+        .on_key_down({
+            let entity = entity.clone();
+            move |ev, _, cx| {
+                if ev.keystroke.key == "escape" {
+                    entity.update(cx, |this, cx| this.close_speaker_edit(cx));
+                }
+            }
+        })
         .child(div().text_sm().font_semibold().child(speaker_chip::edit_panel_title(is_named_profile)));
+
+    if !merging && !state.attendees.is_empty() {
+        let suggestions = speaker_chip::filter_attendee_suggestions(&state.attendees, &name);
+        if !suggestions.is_empty() {
+            let mut chips = h_flex().gap_1().flex_wrap();
+            for s in suggestions {
+                let label = s.label.clone();
+                let email = s.email.clone();
+                let entity_for_pick = entity.clone();
+                let selected = name == s.label;
+                chips = chips.child(
+                    Button::new(SharedString::from(format!("attendee-suggestion-{}", s.label)))
+                        .xsmall()
+                        .when(selected, |b| b.primary())
+                        .when(!selected, |b| b.outline())
+                        .label(s.label.clone())
+                        .on_click(move |_, window, cx| {
+                            entity_for_pick.update(cx, |this, cx| {
+                                this.apply_attendee_suggestion(label.clone(), email.clone(), window, cx)
+                            });
+                        }),
+                );
+            }
+            panel = panel
+                .child(div().text_xs().text_color(ActiveTheme::theme(cx).muted_foreground).child("From this meeting's calendar"))
+                .child(chips);
+        }
+    }
 
     if !is_named_profile && !state.profiles.is_empty() {
         let label = merge_target_profile.map(|p| p.name.clone()).unwrap_or_else(|| "Create new speaker…".to_string());
@@ -1543,6 +1616,14 @@ impl Render for MeetingView {
                     )
                     .child(div().flex_1().min_w_0().h_full().child(self.render_summary(cx))),
             )
+            .when_some(self.speaker_edit.clone(), |this, state| {
+                let entity = cx.entity();
+                let content = render_floating_speaker_edit(&state, entity, cx);
+                this.child(
+                    deferred(anchored().position(state.click_position).snap_to_window().child(content))
+                        .with_priority(50),
+                )
+            })
     }
 }
 
@@ -2098,12 +2179,14 @@ impl MeetingView {
                                         .ghost()
                                         .xsmall()
                                         .label(speaker.clone())
-                                        .on_click(move |_, window, cx| {
+                                        .on_click(move |ev, window, cx| {
+                                            let click_position = ev.position();
                                             entity.update(cx, |this, cx| {
                                                 this.toggle_speaker_edit(
                                                     segment_id.clone(),
                                                     speaker_for_click.clone(),
                                                     voice_profile_id.clone(),
+                                                    click_position,
                                                     window,
                                                     cx,
                                                 )
@@ -2115,19 +2198,14 @@ impl MeetingView {
                             }
                             header_row = header_row.child(time);
 
-                            let mut row = v_flex()
+                            let row = v_flex()
                                 .w_full()
                                 .gap_1()
                                 .px_4()
                                 .py_2()
+                                .when(is_editing_this_row, |this| this.bg(cx.theme().muted.opacity(0.3)))
                                 .child(header_row)
                                 .child(div().text_sm().child(t.text.clone()));
-
-                            if is_editing_this_row {
-                                if let Some(state) = speaker_edit.as_ref() {
-                                    row = row.child(render_speaker_edit_panel(state, entity.clone(), cx));
-                                }
-                            }
 
                             row.into_any_element()
                         })

@@ -52,6 +52,57 @@ pub fn edit_panel_title(is_named_profile: bool) -> &'static str {
     }
 }
 
+/// One calendar attendee reduced to what the rename/promote form needs —
+/// mirrors `EditableSpeakerChip.tsx`'s `AttendeeSuggestion`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AttendeeSuggestion {
+    pub label: String,
+    pub email: Option<String>,
+}
+
+/// Build the de-duplicated suggestion list from a linked calendar event's
+/// raw attendees — mirrors `EditableSpeakerChip.tsx`'s
+/// `for (const a of event?.attendees ?? [])` loop: prefer the attendee's
+/// name, fall back to their email, skip anyone with neither, and drop
+/// case-insensitive duplicate labels.
+pub fn attendee_suggestions(attendees: &[meetily_core::calendar::models::Attendee]) -> Vec<AttendeeSuggestion> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for a in attendees {
+        let label = a
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or(a.email.as_deref())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if label.is_empty() {
+            continue;
+        }
+        if !seen.insert(label.to_lowercase()) {
+            continue;
+        }
+        out.push(AttendeeSuggestion { label, email: a.email.clone() });
+    }
+    out
+}
+
+/// Filter suggestions by the rename form's current name-input text —
+/// case-insensitive substring match; an empty (or whitespace-only) query
+/// shows every suggestion.
+pub fn filter_attendee_suggestions<'a>(
+    suggestions: &'a [AttendeeSuggestion],
+    query: &str,
+) -> Vec<&'a AttendeeSuggestion> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return suggestions.iter().collect();
+    }
+    suggestions.iter().filter(|s| s.label.to_lowercase().contains(&q)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,5 +158,70 @@ mod tests {
     fn panel_title_depends_on_named_profile() {
         assert_eq!(edit_panel_title(true), "Edit speaker");
         assert_eq!(edit_panel_title(false), "Name this speaker");
+    }
+
+    fn attendee(name: Option<&str>, email: Option<&str>) -> meetily_core::calendar::models::Attendee {
+        meetily_core::calendar::models::Attendee {
+            name: name.map(str::to_string),
+            email: email.map(str::to_string),
+            role: None,
+            status: None,
+            is_organizer: false,
+        }
+    }
+
+    #[test]
+    fn attendee_suggestions_prefer_name_over_email() {
+        let out = attendee_suggestions(&[attendee(Some("Alice Smith"), Some("alice@example.com"))]);
+        assert_eq!(out, vec![AttendeeSuggestion { label: "Alice Smith".into(), email: Some("alice@example.com".into()) }]);
+    }
+
+    #[test]
+    fn attendee_suggestions_fall_back_to_email_when_unnamed() {
+        let out = attendee_suggestions(&[attendee(None, Some("bob@example.com"))]);
+        assert_eq!(out, vec![AttendeeSuggestion { label: "bob@example.com".into(), email: Some("bob@example.com".into()) }]);
+    }
+
+    #[test]
+    fn attendee_suggestions_skip_entries_with_neither_name_nor_email() {
+        let out = attendee_suggestions(&[attendee(None, None), attendee(Some("  "), None)]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn attendee_suggestions_dedupe_case_insensitively() {
+        let out = attendee_suggestions(&[
+            attendee(Some("Alice Smith"), Some("alice@example.com")),
+            attendee(Some("alice smith"), Some("alice2@example.com")),
+        ]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].email.as_deref(), Some("alice@example.com"));
+    }
+
+    #[test]
+    fn filter_attendee_suggestions_empty_query_shows_all() {
+        let all = vec![
+            AttendeeSuggestion { label: "Alice".into(), email: None },
+            AttendeeSuggestion { label: "Bob".into(), email: None },
+        ];
+        assert_eq!(filter_attendee_suggestions(&all, "").len(), 2);
+        assert_eq!(filter_attendee_suggestions(&all, "   ").len(), 2);
+    }
+
+    #[test]
+    fn filter_attendee_suggestions_matches_case_insensitive_substring() {
+        let all = vec![
+            AttendeeSuggestion { label: "Alice Smith".into(), email: None },
+            AttendeeSuggestion { label: "Bob Jones".into(), email: None },
+        ];
+        let out = filter_attendee_suggestions(&all, "ali");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].label, "Alice Smith");
+    }
+
+    #[test]
+    fn filter_attendee_suggestions_no_match_is_empty() {
+        let all = vec![AttendeeSuggestion { label: "Alice".into(), email: None }];
+        assert!(filter_attendee_suggestions(&all, "zzz").is_empty());
     }
 }
