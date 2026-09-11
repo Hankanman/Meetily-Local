@@ -188,7 +188,10 @@ impl MeetingView {
         cx.spawn(async move |this, cx| {
             let configured = io
                 .spawn(async move {
-                    SettingsRepository::get_setting::<String>(&pool, "summary_default_template").await
+                    SettingsRepository::get_setting::<String>(
+                        &pool,
+                        meetily_core::database::repositories::setting::KEY_DEFAULT_SUMMARY_TEMPLATE,
+                    ).await
                 })
                 .await;
             let default = match configured {

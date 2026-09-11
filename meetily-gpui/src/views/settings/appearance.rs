@@ -4,10 +4,8 @@
 //! now also persisted under `KEY_THEME_PREFERENCE` (new — the React app's
 //! theme lives in browser `localStorage`, outside SQLite, so this key has
 //! no legacy predecessor) via `state::save_theme_pref`, so it survives a
-//! restart. `apply_saved_theme` applies the saved value at startup — call
-//! it once after the DB pool is available (`main.rs` owns that wiring, out
-//! of this package's scope; noted in the phase report instead of wired
-//! here).
+//! restart. `init_theme` applies the saved value when the main window
+//! opens and follows OS light/dark changes while set to "system".
 
 use gpui_kit::component::{
     setting::{SettingField, SettingGroup, SettingItem, SettingPage},
@@ -15,7 +13,11 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
+use meetily_core::database::repositories::setting::{SettingsRepository, KEY_THEME_PREFERENCE};
+
 use super::state::SettingsCache;
+use crate::app_state::AppServices;
+use crate::runtime::Io;
 
 pub fn page(_view: &Entity<super::SettingsView>, _cx: &mut Context<super::SettingsView>) -> SettingPage {
     SettingPage::new("Appearance")
@@ -44,35 +46,55 @@ pub fn page(_view: &Entity<super::SettingsView>, _cx: &mut Context<super::Settin
         ]))
 }
 
-/// Switch `Theme`'s in-memory mode to match `mode` ("light"/"dark"/"system").
-/// "system" falls back to dark — `gpui-kit`'s `Theme::change` takes an
-/// explicit mode; wiring actual OS theme detection is out of this page's
-/// scope (there's no such signal plumbed into `meetily-gpui` yet).
+/// The preference currently in effect ("light" / "dark" / "system"), so an
+/// OS appearance change only re-themes the app while following the system.
+struct ActiveThemePref(String);
+
+impl Global for ActiveThemePref {}
+
+/// Switch the theme to `mode` ("light" / "dark" / "system").
 fn apply_theme_mode(mode: &str, cx: &mut App) {
-    let theme_mode = match mode {
-        "light" => ThemeMode::Light,
-        _ => ThemeMode::Dark,
-    };
-    Theme::change(theme_mode, None, cx);
+    cx.set_global(ActiveThemePref(mode.to_string()));
+    match mode {
+        "light" => Theme::change(ThemeMode::Light, None, cx),
+        "dark" => Theme::change(ThemeMode::Dark, None, cx),
+        _ => Theme::sync_system_appearance(None, cx),
+    }
 }
 
-/// Apply the theme preference saved under `KEY_THEME_PREFERENCE`, if any.
-/// Meant to be called once at startup after `SettingsCache` has loaded
-/// (i.e. after `state::load` has run) — `main.rs` (owned by another
-/// package in this phase) should call this once the DB pool is ready, e.g.
-/// right after constructing the first window.
-// Not called anywhere in this package yet — `main.rs` (owned by another
-// package) needs to call it once after the DB pool + `SettingsCache` are
-// ready. `#[allow(dead_code)]` keeps `cargo build -p meetily-gpui` warning-free
-// until that wiring lands; remove once `main.rs` calls it.
-#[allow(dead_code)]
-pub fn apply_saved_theme(cx: &mut App) {
-    if !cx.has_global::<SettingsCache>() {
+/// Startup theme setup for the main window: apply the preference saved under
+/// `KEY_THEME_PREFERENCE` (read straight from the DB — `SettingsCache` loads
+/// asynchronously and may not be ready yet; no DB or no saved value means
+/// "system"), and keep following OS light/dark changes while the preference
+/// is "system".
+pub fn init_theme(window: &mut Window, cx: &mut App) {
+    window
+        .observe_window_appearance(|window, cx| {
+            let following_system = cx
+                .try_global::<ActiveThemePref>()
+                .is_none_or(|pref| pref.0 == "system");
+            if following_system {
+                Theme::sync_system_appearance(Some(window), cx);
+            }
+        })
+        .detach();
+
+    Theme::sync_system_appearance(Some(window), cx);
+    let Some(pool) = AppServices::global(cx).pool() else {
         return;
-    }
-    let pref = SettingsCache::global(cx).theme_pref.clone();
-    if pref.is_empty() {
-        return;
-    }
-    apply_theme_mode(&pref, cx);
+    };
+    let io = Io::global(cx);
+    cx.spawn(async move |cx| {
+        let saved = io
+            .spawn(async move {
+                SettingsRepository::get_setting::<String>(&pool, KEY_THEME_PREFERENCE).await
+            })
+            .await;
+        let pref = match saved {
+            Ok(Ok(Some(pref))) if !pref.is_empty() => pref,
+            _ => "system".to_string(),
+        };
+        cx.update(|cx| apply_theme_mode(&pref, cx));
+    })
+    .detach();
 }

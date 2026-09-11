@@ -19,7 +19,7 @@ mod transcription;
 // Re-exported for `main.rs` to call once at startup after `state::load` —
 // see `apply_saved_theme`'s doc comment in `appearance.rs`.
 #[allow(unused_imports)]
-pub use appearance::apply_saved_theme;
+pub use appearance::init_theme;
 
 use gpui_kit::component::setting::Settings;
 use gpui_kit::*;

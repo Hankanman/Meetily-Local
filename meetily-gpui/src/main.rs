@@ -102,6 +102,7 @@ fn main() {
                 .expect("failed to open window");
 
             let _ = window.update(cx, |_, window, cx| {
+                views::settings::init_theme(window, cx);
                 window.on_window_should_close(cx, |_, cx| {
                     request_quit(cx);
                     false
