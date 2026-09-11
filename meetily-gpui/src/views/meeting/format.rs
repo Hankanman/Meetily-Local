@@ -35,6 +35,51 @@ pub fn format_header_date(created_at: DateTime<Utc>) -> String {
     created_at.with_timezone(&chrono::Local).format("%-d %b %Y, %H:%M").to_string()
 }
 
+/// Clipboard text for "Copy transcript". Mirrors
+/// `frontend/src/hooks/meeting-details/useCopyOperations.ts`'s
+/// `handleCopyTranscript`: a `#`/`##` header, then one `[MM:SS] Speaker: text`
+/// line per segment with a trailing two-space markdown line break.
+pub fn copy_transcript_text(
+    meeting_id: &str,
+    title: &str,
+    created_at: Option<DateTime<Utc>>,
+    transcripts: &[MeetingTranscript],
+) -> String {
+    let header = format!("# Transcript of the Meeting: {meeting_id} - {title}\n\n");
+    let date = format!(
+        "## Date: {}\n\n",
+        created_at.map(|d| d.with_timezone(&chrono::Local).format("%-m/%-d/%Y").to_string()).unwrap_or_default()
+    );
+    let lines = transcripts
+        .iter()
+        .map(|t| {
+            let time = segment_timestamp(t.audio_start_time, &t.timestamp);
+            let who = t.speaker.as_ref().map(|s| format!("{s}: ")).unwrap_or_default();
+            format!("{time} {who}{}  ", t.text)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{header}{date}{lines}")
+}
+
+/// Clipboard text for "Copy summary". Mirrors `useCopyOperations.ts`'s
+/// `handleCopySummary`: a title, a metadata block (meeting id, meeting date,
+/// copy time), a rule, then the summary markdown as-is.
+pub fn copy_summary_text(
+    meeting_id: &str,
+    title: &str,
+    created_at: Option<DateTime<Utc>>,
+    summary_markdown: &str,
+) -> String {
+    let header = format!("# Meeting Summary: {title}\n\n");
+    let fmt = |d: DateTime<Utc>| d.with_timezone(&chrono::Local).format("%B %-d, %Y, %I:%M %p").to_string();
+    let created = created_at.map(fmt).unwrap_or_default();
+    let copied = fmt(Utc::now());
+    let metadata =
+        format!("**Meeting ID:** {meeting_id}\n**Date:** {created}\n**Copied on:** {copied}\n\n---\n\n");
+    format!("{header}{metadata}{summary_markdown}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,5 +120,33 @@ mod tests {
     #[test]
     fn empty_transcript_list_is_empty_string() {
         assert_eq!(build_transcript_text(&[]), "");
+    }
+
+    #[test]
+    fn copy_transcript_includes_header_date_and_speaker_lines() {
+        let mut a = seg("Hello", Some(0.0));
+        a.speaker = Some("Alice".to_string());
+        let transcripts = vec![a, seg("World", Some(65.0))];
+        let created = DateTime::parse_from_rfc3339("2026-07-15T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let text = copy_transcript_text("meeting-1", "Weekly Sync", Some(created), &transcripts);
+        assert!(text.starts_with("# Transcript of the Meeting: meeting-1 - Weekly Sync\n\n"));
+        assert!(text.contains("## Date:"));
+        assert!(text.contains("[00:00] Alice: Hello  "));
+        assert!(text.contains("[01:05] World  "));
+    }
+
+    #[test]
+    fn copy_summary_includes_metadata_and_body_verbatim() {
+        let created = DateTime::parse_from_rfc3339("2026-07-15T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let text = copy_summary_text("meeting-1", "Weekly Sync", Some(created), "## Key Points\n\n- Shipped");
+        assert!(text.starts_with("# Meeting Summary: Weekly Sync\n\n"));
+        assert!(text.contains("**Meeting ID:** meeting-1\n"));
+        assert!(text.contains("**Date:**"));
+        assert!(text.contains("**Copied on:**"));
+        assert!(text.ends_with("---\n\n## Key Points\n\n- Shipped"));
     }
 }

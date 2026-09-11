@@ -70,6 +70,7 @@ fn main() {
     let io_for_shutdown = io.clone();
     app.run(move |cx| {
         gpui_kit::init(cx);
+        zorite_editor::bind_keys(cx);
 
         let core_events = cx.new(|cx| CoreEvents::new(events_rx, cx));
         cx.set_global(io.clone());
