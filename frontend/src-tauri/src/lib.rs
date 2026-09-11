@@ -30,6 +30,7 @@ pub mod mcp_config;
 pub mod notifications;
 pub mod ollama;
 pub mod onboarding;
+pub mod paths;
 pub mod openai;
 pub mod openrouter;
 pub mod speaker_diarization;
