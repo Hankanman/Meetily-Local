@@ -1,0 +1,45 @@
+[workspace]
+# Deliberately empty: this makes cargo treat spikes/gpui-shell as its own
+# workspace root (its own Cargo.lock, its own target/), independent of the
+# root Meetily-Local workspace. Do NOT add `members` here.
+
+[package]
+name = "gpui-shell"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "parley-gpui-spike"
+path = "src/main.rs"
+
+[dependencies]
+# Component kit: re-exports gpui (as `gpui-pre`) + gpui-component + assets.
+# Depend on gpui/gpui_platform ONLY through this to avoid resolving two
+# incompatible gpui-pre versions (see longbridge/gpui-kit#2532).
+gpui-kit = "0.6"
+
+# Tray: StatusNotifierItem menu (Start/Stop recording, Show window, Quit).
+# Use the gpui-kit backend feature so it shares gpui-kit's gpui-pre instead of
+# pulling its own `gpui` (aliasing zed-industries/zed's fork).
+#
+# The `gpui-kit` cargo feature (an optional dep on `gpui-pre` aliased as
+# `gpui-kit-backend`, so it shares gpui-kit's own gpui-pre instead of the
+# separate real `gpui` crate) is not on the crates.io 0.1.0 release yet — it
+# only exists on the repo's main branch. Pinned to the commit this spike was
+# researched against (2026-09-07); see spikes/gpui-shell/README.md.
+gpui-tray = { git = "https://github.com/domenkozar/gpui-tray", rev = "dfcd45b4bd82963abcee9e6cc35f83f7a4fa6c03", default-features = false, features = ["gpui-kit", "menu-state"] }
+
+# Rich-text summary editor (WYSIWYG markdown), on the same gpui-pre line.
+zorite-editor = "0.10"
+
+# Real-summary read path: open the Tauri app's SQLite DB read-only.
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+smol = "2"
