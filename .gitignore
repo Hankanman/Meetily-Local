@@ -79,3 +79,7 @@ target/
 
 frontend/src-tauri/binaries/
 Cargo.lock
+
+# gpui-shell spike: standalone crate, own workspace, own Cargo.lock (committed)
+spikes/gpui-shell/target/
+!spikes/gpui-shell/Cargo.lock
