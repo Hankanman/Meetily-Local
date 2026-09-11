@@ -362,6 +362,51 @@ fn replay_buffered_segments(
 // PUBLIC TYPES
 // ============================================================================
 
+/// Post-meeting improvement passes, run after a recording's row and
+/// folder exist (shells call this in the background once `recording-stopped`
+/// arrives with a `meeting_id` and `folder_path`):
+/// 1. speaker refinement over the meeting's stored embeddings, then
+/// 2. the auto-refine re-transcription pass (skips itself when no
+///    higher-accuracy model is downloaded).
+///
+/// Never fails the caller: a refinement error is logged and leaves the
+/// labels as recorded, and never blocks the transcription pass — they're
+/// independent improvements to the same meeting.
+pub async fn post_meeting_refine(
+    ctx: RecordingContext,
+    meeting_id: String,
+    meeting_folder_path: String,
+) {
+    match ctx.pool.as_ref() {
+        Some(pool) => {
+            if let Err(e) = crate::speaker_diarization::service::refine_and_persist(
+                &ctx.sink,
+                pool,
+                &meeting_id,
+            )
+            .await
+            {
+                log::warn!(
+                    "Speaker refinement failed for meeting {}: {} (transcript labels left as recorded)",
+                    meeting_id,
+                    e
+                );
+            }
+        }
+        None => log::warn!(
+            "No DB pool available; skipping speaker refinement for meeting {}",
+            meeting_id
+        ),
+    }
+
+    crate::audio::retranscription::spawn_auto_refine(
+        ctx.sink.clone(),
+        ctx.pool.clone(),
+        meeting_id,
+        meeting_folder_path,
+    );
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RecordingArgs {
     pub save_path: String,

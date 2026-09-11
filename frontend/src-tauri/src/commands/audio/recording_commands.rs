@@ -253,38 +253,12 @@ pub async fn trigger_post_meeting_refine<R: Runtime>(
     meeting_id: String,
     meeting_folder_path: String,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn(async move {
-        // Never let a speaker-refinement failure block the transcription
-        // pass — they're independent improvements to the same meeting.
-        match db_pool(&app) {
-            Some(pool) => {
-                if let Err(e) = crate::speaker_diarization::service::refine_and_persist(
-                    &crate::tauri_events::shared_sink(&app),
-                    &pool,
-                    &meeting_id,
-                )
-                .await
-                {
-                    log::warn!(
-                        "Speaker refinement failed for meeting {}: {} (transcript labels left as recorded)",
-                        meeting_id,
-                        e
-                    );
-                }
-            }
-            None => log::warn!(
-                "No DB pool available; skipping speaker refinement for meeting {}",
-                meeting_id
-            ),
-        }
-
-        crate::audio::retranscription::spawn_auto_refine(
-            crate::tauri_events::shared_sink(&app),
-            db_pool(&app),
-            meeting_id,
-            meeting_folder_path,
-        );
-    });
+    let ctx = build_context(&app);
+    tauri::async_runtime::spawn(recording_service::post_meeting_refine(
+        ctx,
+        meeting_id,
+        meeting_folder_path,
+    ));
     Ok(())
 }
 

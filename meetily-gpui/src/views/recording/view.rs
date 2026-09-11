@@ -76,6 +76,7 @@ struct PartialUpdatePayload {
 #[derive(Debug, Deserialize)]
 struct RecordingStoppedPayload {
     meeting_id: Option<String>,
+    folder_path: Option<String>,
 }
 
 /// Tracks the server-reported active recording duration so the header can
@@ -413,6 +414,17 @@ impl RecordingView {
             "recording-stopped" => {
                 if let Some(payload) = event.decode::<RecordingStoppedPayload>() {
                     if let Some(meeting_id) = payload.meeting_id {
+                        // Same background refine the Tauri frontend kicks off
+                        // after its post-stop save (speaker refinement, then
+                        // auto re-transcription if a better model exists).
+                        if let Some(folder_path) = payload.folder_path {
+                            let services = AppServices::global(cx);
+                            services.io.spawn(recording_service::post_meeting_refine(
+                                services.recording_context(),
+                                meeting_id.clone(),
+                                folder_path,
+                            ));
+                        }
                         navigate(Route::Meeting(meeting_id), cx);
                     }
                 }
