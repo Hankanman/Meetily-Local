@@ -34,15 +34,6 @@ pub struct SearchRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TranscriptSearchResult {
-    pub id: String,
-    pub title: String,
-    #[serde(rename = "matchContext")]
-    pub match_context: String,
-    pub timestamp: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct ModelConfig {
     pub provider: String,
     pub model: String,
@@ -92,37 +83,6 @@ pub struct DeleteMeetingRequest {
     pub meeting_id: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MeetingDetails {
-    pub id: String,
-    pub title: String,
-    pub created_at: String,
-    pub updated_at: String,
-    pub transcripts: Vec<MeetingTranscript>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MeetingTranscript {
-    pub id: String,
-    pub text: String,
-    pub timestamp: String,
-    // Recording-relative timestamps for audio-transcript synchronization
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audio_start_time: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audio_end_time: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub speaker: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub voice_profile_id: Option<String>,
-    /// Audio stream ("mic" | "system") this segment came from, for source-aware
-    /// per-segment playback. Null for older rows / imports.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-}
-
 /// Meeting metadata without transcripts (for pagination)
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MeetingMetadata {
@@ -164,6 +124,9 @@ pub struct SaveTranscriptRequest {
 /// here for compatibility with the many call sites that already
 /// `use crate::api::TranscriptSegment`.
 pub use crate::audio::common::TranscriptSegment;
+// Meeting/transcript DTOs returned by commands; defined in core because the
+// repositories build them.
+pub use crate::database::models::{MeetingDetails, MeetingTranscript, TranscriptSearchResult};
 
 // API Commands for Tauri
 
@@ -774,13 +737,9 @@ pub async fn open_meeting_folder<R: Runtime>(
     let pool = state.db_manager.pool();
 
     // Get meeting with folder_path
-    let meeting: Option<MeetingModel> = sqlx::query_as(
-        "SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?",
-    )
-    .bind(&meeting_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Database error: {}", e))?;
+    let meeting = MeetingsRepository::get_meeting_metadata(pool, &meeting_id)
+        .await
+        .map_err(|e| format!("Database error: {}", e))?;
 
     match meeting {
         Some(m) => {

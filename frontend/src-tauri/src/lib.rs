@@ -1,53 +1,31 @@
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex as StdMutex;
 
-// Performance optimization: Conditional logging macros for hot paths
-#[cfg(debug_assertions)]
-macro_rules! perf_debug {
-    ($($arg:tt)*) => {
-        log::debug!($($arg)*)
-    };
-}
-
-#[cfg(not(debug_assertions))]
-macro_rules! perf_debug {
-    ($($arg:tt)*) => {};
-}
-
-// perf_debug! is auto-visible through `crate::` paths.
-
-// Declare audio module
-pub mod anthropic;
+// Shell-only modules: Tauri command/event glue. Core logic (audio, summary,
+// database, ...) lives in the `meetily-core` crate and is re-exported below
+// under the same top-level names so existing `crate::audio::…` etc. paths
+// throughout this crate keep resolving unchanged.
 pub mod api;
-pub mod audio;
-pub mod calendar;
-pub mod config;
-pub mod database;
-pub mod groq;
-pub mod llm_providers;
-pub mod mcp_config;
+pub mod commands;
+pub mod mcp_config_commands;
 pub mod notifications;
-pub mod ollama;
-pub mod onboarding;
-pub mod openai;
-pub mod openrouter;
-pub mod speaker_diarization;
-pub mod state;
-pub mod summary;
+pub mod onboarding_commands;
+pub mod tauri_events;
 pub mod tray;
-pub mod utils;
-pub mod whisper_engine;
+
+// Re-export meetily-core's top-level modules under their historical names.
+pub use meetily_core::{
+    anthropic, audio, calendar, config, database, events, groq, llm_providers, mcp_config,
+    ollama, onboarding, openai, openrouter, paths, speaker_diarization, state, summary, utils,
+    whisper_engine,
+};
 
 use audio::{list_audio_devices, trigger_audio_permission};
+use events::EventSinkExt;
 use log::{error as log_error, info as log_info};
 use notifications::commands::NotificationManagerState;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::sync::RwLock;
-
-// Global language preference storage (default to "auto-translate" for automatic translation to English)
-static LANGUAGE_PREFERENCE: std::sync::LazyLock<StdMutex<String>> =
-    std::sync::LazyLock::new(|| StdMutex::new("auto-translate".to_string()));
 
 #[derive(Debug, Deserialize)]
 struct RecordingArgs {
@@ -66,15 +44,15 @@ async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> R
     log_info!("Attempting to stop recording...");
 
     // Check the actual audio recording system state instead of the flag
-    if !audio::recording_commands::is_recording().await {
+    if !commands::audio::recording_commands::is_recording().await {
         log_info!("Recording is already stopped");
         return Ok(());
     }
 
     // Call the actual audio recording system to stop
-    match audio::recording_commands::stop_recording(
+    match commands::audio::recording_commands::stop_recording(
         app.clone(),
-        audio::recording_commands::RecordingArgs {
+        commands::audio::recording_commands::RecordingArgs {
             save_path: args.save_path.clone(),
         },
     )
@@ -121,14 +99,14 @@ async fn stop_recording<R: Runtime>(app: AppHandle<R>, args: RecordingArgs) -> R
 
 #[tauri::command]
 async fn is_recording() -> bool {
-    audio::recording_commands::is_recording().await
+    commands::audio::recording_commands::is_recording().await
 }
 
 #[tauri::command]
 async fn get_transcription_status() -> TranscriptionStatus {
     TranscriptionStatus {
         chunks_in_queue: audio::transcription::queue_depth(),
-        is_processing: audio::recording_commands::is_recording().await,
+        is_processing: commands::audio::recording_commands::is_recording().await,
         last_activity_ms: 0,
     }
 }
@@ -174,7 +152,7 @@ async fn start_audio_level_monitoring<R: Runtime>(
         system_device
     );
 
-    audio::simple_level_monitor::start_monitoring(app, mic_device, system_device)
+    audio::simple_level_monitor::start_monitoring(tauri_events::shared_sink(&app), mic_device, system_device)
         .await
         .map_err(|e| format!("Failed to start audio level monitoring: {}", e))
 }
@@ -249,7 +227,7 @@ async fn start_recording_with_devices_and_meeting<R: Runtime>(
                 "No devices specified, starting with defaults and meeting: {:?}",
                 meeting_name
             );
-            audio::recording_commands::start_recording_with_meeting_name(app.clone(), meeting_name)
+            commands::audio::recording_commands::start_recording_with_meeting_name(app.clone(), meeting_name)
                 .await
         }
         _ => {
@@ -259,7 +237,7 @@ async fn start_recording_with_devices_and_meeting<R: Runtime>(
                 system_device_name,
                 meeting_name
             );
-            audio::recording_commands::start_recording_with_devices_and_meeting(
+            commands::audio::recording_commands::start_recording_with_devices_and_meeting(
                 app.clone(),
                 mic_device_name,
                 system_device_name,
@@ -297,17 +275,9 @@ async fn start_recording_with_devices_and_meeting<R: Runtime>(
 
 #[tauri::command]
 async fn set_language_preference(language: String) -> Result<(), String> {
-    let mut lang_pref = LANGUAGE_PREFERENCE
-        .lock()
-        .map_err(|e| format!("Failed to set language preference: {}", e))?;
     log_info!("Setting language preference to: {}", language);
-    *lang_pref = language;
+    utils::set_language_preference_internal(language);
     Ok(())
-}
-
-// Internal helper function to get language preference (for use within Rust code)
-pub fn get_language_preference_internal() -> Option<String> {
-    LANGUAGE_PREFERENCE.lock().ok().map(|lang| lang.clone())
 }
 
 /// Diagnostic startup audit — logs the on-disk state of every model the app
@@ -318,7 +288,7 @@ async fn audit_models_at_startup<R: Runtime>(app: &AppHandle<R>) {
     log::info!("───────────────── [startup-audit] models report ─────────────────");
 
     // ── Whisper (ASR) ─────────────────────────────────────────────────────
-    match whisper_engine::commands::whisper_get_available_models().await {
+    match commands::whisper_engine::commands::whisper_get_available_models().await {
         Ok(models) if models.is_empty() => {
             log::warn!("[startup-audit] whisper:  NO models in models directory");
         }
@@ -386,7 +356,7 @@ async fn audit_models_at_startup<R: Runtime>(app: &AppHandle<R>) {
     }
 
     // ── Summary (built-in AI) ─────────────────────────────────────────────
-    match summary::summary_engine::commands::builtin_ai_get_available_summary_model(
+    match commands::summary::summary_engine::commands::builtin_ai_get_available_summary_model(
         app.clone(),
         app.state(),
     )
@@ -425,7 +395,7 @@ async fn ensure_required_models_downloaded<R: Runtime>(app: &AppHandle<R>) {
                 "[startup-download] silero-vad missing — fetching {} (~2.3MB, one-time)",
                 url
             );
-            match download_file_to(url, &silero_path).await {
+            match utils::download_file_to(url, &silero_path).await {
                 Ok(()) => log::info!(
                     "[startup-download] silero-vad downloaded → {}",
                     silero_path.display()
@@ -443,7 +413,7 @@ async fn ensure_required_models_downloaded<R: Runtime>(app: &AppHandle<R>) {
     // / accurate diarization on Import). It's only needed when a user opts
     // into `offline_diarization_on_import` and imports a file worth running
     // it on, so the ~5.7MB download is deferred to first use via
-    // `speaker_diarization::commands::ensure_pyannote_segmentation_model`,
+    // `commands::speaker_diarization::commands::ensure_pyannote_segmentation_model`,
     // called from `audio::import` — not paid by every install/launch.
 
     // ── Speaker embedding ──
@@ -464,7 +434,7 @@ async fn ensure_required_models_downloaded<R: Runtime>(app: &AppHandle<R>) {
             "[startup-download] speaker model missing — fetching {} (~28MB, one-time)",
             speaker_diarization::model_filename()
         );
-        match speaker_diarization::commands::speaker_model_download(app.clone()).await {
+        match commands::speaker_diarization::commands::speaker_model_download(app.clone()).await {
             Ok(()) => log::info!(
                 "[startup-download] speaker model downloaded → {}",
                 speaker_path.display()
@@ -483,7 +453,10 @@ async fn ensure_required_models_downloaded<R: Runtime>(app: &AppHandle<R>) {
     // Now that both models are on disk, build the diarizer and pin it in
     // the global slot so the first recording / retranscription doesn't
     // pay the load cost.
-    match speaker_diarization::commands::build_diarizer(app).await {
+    let pool = app
+        .try_state::<state::AppState>()
+        .map(|s| s.db_manager.pool().clone());
+    match commands::speaker_diarization::commands::build_diarizer(pool.as_ref()).await {
         Ok(Some(diarizer)) => {
             speaker_diarization::set_current_diarizer(Some(diarizer));
             log::info!("✅ [startup-download] speaker diarizer initialized");
@@ -495,41 +468,28 @@ async fn ensure_required_models_downloaded<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Plain HTTP-streaming download to a destination path. Used for built-in
-/// models that don't have their own dedicated downloader command (also
-/// reused by `speaker_diarization::commands::ensure_pyannote_segmentation_model`
-/// for its lazy, on-demand fetch). Cleans up partial files on error.
-pub(crate) async fn download_file_to(url: &str, dest: &std::path::Path) -> anyhow::Result<()> {
-    use anyhow::anyhow;
-    use futures_util::StreamExt;
-    use tokio::io::AsyncWriteExt;
-
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let response = reqwest::get(url)
-        .await
-        .map_err(|e| anyhow!("HTTP error fetching {}: {}", url, e))?;
-    if !response.status().is_success() {
-        return Err(anyhow!("HTTP {} fetching {}", response.status(), url));
-    }
-
-    let mut file = tokio::fs::File::create(dest)
-        .await
-        .map_err(|e| anyhow!("Cannot create {}: {}", dest.display(), e))?;
-
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| anyhow!("Download stream error: {}", e))?;
-        if let Err(e) = file.write_all(&chunk).await {
-            let _ = std::fs::remove_file(dest);
-            return Err(anyhow!("Write error: {}", e));
+/// Initialize the database on app startup: handles first-launch detection
+/// and conditional setup. Thin Tauri shell around
+/// `database::setup::prepare_database_on_startup` (Tauri-free) — this is
+/// just the part that manages the resulting `DatabaseManager` as app state
+/// or, on a first launch, schedules the delayed `first-launch-detected`
+/// event once the window and its React listeners are ready.
+async fn initialize_database_on_startup<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    match database::setup::prepare_database_on_startup().await? {
+        database::setup::StartupOutcome::FirstLaunch => {
+            // Delay event emission to ensure window is ready and React listeners are registered
+            let app_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                tauri_events::TauriSink(app_handle)
+                    .emit_event("first-launch-detected", &())
+                    .expect("Failed to emit first-launch-detected event");
+                log_info!("Emitted first-launch-detected after delay");
+            });
         }
-    }
-    if let Err(e) = file.flush().await {
-        let _ = std::fs::remove_file(dest);
-        return Err(anyhow!("Flush error: {}", e));
+        database::setup::StartupOutcome::Initialized(db_manager) => {
+            app.manage(state::AppState { db_manager });
+        }
     }
     Ok(())
 }
@@ -559,7 +519,7 @@ fn begin_shutdown_stop<R: Runtime>(app_handle: &AppHandle<R>) {
     let app = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         let recording_active =
-            audio::recording_commands::is_recording().await || audio::recording_commands::is_stop_in_progress();
+            commands::audio::recording_commands::is_recording().await || commands::audio::recording_commands::is_stop_in_progress();
 
         if recording_active {
             log::info!("App close requested mid-recording — finishing recording before exit...");
@@ -583,9 +543,9 @@ fn begin_shutdown_stop<R: Runtime>(app_handle: &AppHandle<R>) {
                 })
                 .unwrap_or_else(|_| "recording.wav".to_string());
 
-            if let Err(e) = audio::recording_commands::stop_recording(
+            if let Err(e) = commands::audio::recording_commands::stop_recording(
                 app.clone(),
-                audio::recording_commands::RecordingArgs { save_path },
+                commands::audio::recording_commands::RecordingArgs { save_path },
             )
             .await
             {
@@ -631,18 +591,18 @@ pub fn run() {
             // DB is ready raced and logged a spurious init error every launch.
 
             // Set models directory to use app_data_dir (unified storage location)
-            whisper_engine::commands::set_models_directory(&_app.handle());
+            commands::whisper_engine::commands::set_models_directory();
 
             // Initialize Whisper engine on startup
             tauri::async_runtime::spawn(async {
-                if let Err(e) = whisper_engine::commands::whisper_init().await {
+                if let Err(e) = commands::whisper_engine::commands::whisper_init().await {
                     log::error!("Failed to initialize Whisper engine on startup: {}", e);
                 }
             });
 
             // Set speaker-diarization models directory (separate from ASR models
             // so the speaker model can be downloaded independently).
-            speaker_diarization::model::set_models_dir(&_app.handle());
+            speaker_diarization::model::set_models_dir();
 
             // Pre-warm the speaker diarizer at startup (if model is on disk)
             // so the first recording / retranscription doesn't pay the model
@@ -651,8 +611,10 @@ pub fn run() {
             // cluster IDs per session.
             let app_handle_for_diarizer = _app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match speaker_diarization::commands::build_diarizer(&app_handle_for_diarizer).await
-                {
+                let pool = app_handle_for_diarizer
+                    .try_state::<state::AppState>()
+                    .map(|s| s.db_manager.pool().clone());
+                match commands::speaker_diarization::commands::build_diarizer(pool.as_ref()).await {
                     Ok(Some(diarizer)) => {
                         speaker_diarization::set_current_diarizer(Some(diarizer));
                         log::info!("✅ Speaker diarizer pre-initialized at startup");
@@ -665,10 +627,13 @@ pub fn run() {
             });
 
             // Initialize ModelManager for summary engine (async, non-blocking)
-            let app_handle_for_model_manager = _app.handle().clone();
+            let model_manager_state = _app
+                .state::<summary::summary_engine::ModelManagerState>()
+                .0
+                .clone();
             tauri::async_runtime::spawn(async move {
-                match summary::summary_engine::commands::init_model_manager_at_startup(
-                    &app_handle_for_model_manager,
+                match commands::summary::summary_engine::commands::init_model_manager_at_startup(
+                    &model_manager_state,
                 )
                 .await
                 {
@@ -709,7 +674,7 @@ pub fn run() {
 
             // Initialize database (handles first launch detection and conditional setup)
             tauri::async_runtime::block_on(async {
-                database::setup::initialize_database_on_startup(&_app.handle()).await
+                initialize_database_on_startup(&_app.handle()).await
             })
             .expect("Failed to initialize database");
 
@@ -745,22 +710,11 @@ pub fn run() {
                 }
             });
 
-            // Initialize bundled templates directory for dynamic template discovery
-            log::info!("Initializing bundled templates directory...");
-            if let Ok(resource_path) = _app.handle().path().resource_dir() {
-                let templates_dir = resource_path.join("templates");
-                log::info!(
-                    "Setting bundled templates directory to: {:?}",
-                    templates_dir
-                );
-                summary::templates::set_bundled_templates_dir(templates_dir);
-            } else {
-                log::warn!("Failed to resolve resource directory for templates");
-            }
-
             // User-editable custom templates live under the same app-data
-            // root as every other user-data path.
-            if let Ok(app_data_dir) = _app.handle().path().app_data_dir() {
+            // root as every other user-data path. Built-in templates are
+            // embedded in the binary (see `summary::templates::defaults`) so
+            // no resource-dir lookup is needed here.
+            if let Ok(app_data_dir) = crate::paths::app_data_dir() {
                 summary::templates::set_custom_templates_dir(app_data_dir.join("templates"));
             } else {
                 log::warn!("Failed to resolve app data directory for custom templates");
@@ -774,30 +728,30 @@ pub fn run() {
             get_transcription_status,
             read_audio_file,
             save_transcript,
-            whisper_engine::commands::whisper_init,
-            whisper_engine::commands::whisper_get_available_models,
-            whisper_engine::commands::whisper_has_available_models,
-            whisper_engine::commands::whisper_get_models_directory,
-            whisper_engine::commands::whisper_download_model,
-            whisper_engine::commands::whisper_cancel_download,
-            whisper_engine::commands::whisper_delete_corrupted_model,
+            commands::whisper_engine::commands::whisper_init,
+            commands::whisper_engine::commands::whisper_get_available_models,
+            commands::whisper_engine::commands::whisper_has_available_models,
+            commands::whisper_engine::commands::whisper_get_models_directory,
+            commands::whisper_engine::commands::whisper_download_model,
+            commands::whisper_engine::commands::whisper_cancel_download,
+            commands::whisper_engine::commands::whisper_delete_corrupted_model,
             // Speaker diarization commands
-            speaker_diarization::commands::speaker_model_status,
-            speaker_diarization::commands::speaker_model_download,
-            speaker_diarization::commands::ensure_pyannote_segmentation_model,
-            speaker_diarization::commands::list_voice_profiles,
-            speaker_diarization::commands::delete_voice_profile,
-            speaker_diarization::commands::update_voice_profile,
-            speaker_diarization::commands::promote_speaker_to_profile,
-            speaker_diarization::commands::merge_voice_profiles,
-            speaker_diarization::commands::merge_cluster_into_profile,
+            commands::speaker_diarization::commands::speaker_model_status,
+            commands::speaker_diarization::commands::speaker_model_download,
+            commands::speaker_diarization::commands::ensure_pyannote_segmentation_model,
+            commands::speaker_diarization::commands::list_voice_profiles,
+            commands::speaker_diarization::commands::delete_voice_profile,
+            commands::speaker_diarization::commands::update_voice_profile,
+            commands::speaker_diarization::commands::promote_speaker_to_profile,
+            commands::speaker_diarization::commands::merge_voice_profiles,
+            commands::speaker_diarization::commands::merge_cluster_into_profile,
             // "Record my voice" self-enrollment
-            speaker_diarization::enrollment::start_self_voice_enrollment,
-            speaker_diarization::enrollment::cancel_self_voice_enrollment,
-            speaker_diarization::enrollment::finish_self_voice_enrollment,
-            speaker_diarization::enrollment::rename_self_voice_profile,
-            speaker_diarization::enrollment::self_voice_status,
-            speaker_diarization::enrollment::delete_self_voice_profile,
+            commands::speaker_diarization::enrollment_commands::start_self_voice_enrollment,
+            commands::speaker_diarization::enrollment_commands::cancel_self_voice_enrollment,
+            commands::speaker_diarization::enrollment_commands::finish_self_voice_enrollment,
+            commands::speaker_diarization::enrollment_commands::rename_self_voice_profile,
+            commands::speaker_diarization::enrollment_commands::self_voice_status,
+            commands::speaker_diarization::enrollment_commands::delete_self_voice_profile,
             get_audio_devices,
             trigger_microphone_permission,
             start_recording_with_devices,
@@ -806,33 +760,33 @@ pub fn run() {
             stop_audio_level_monitoring,
             is_audio_level_monitoring,
             ffmpeg_ensure_installed,
-            audio::ffmpeg::ffmpeg_status,
+            commands::audio::ffmpeg_commands::ffmpeg_status,
             // Recording pause/resume commands
-            audio::recording_commands::pause_recording,
-            audio::recording_commands::resume_recording,
-            audio::recording_commands::is_recording_paused,
-            audio::recording_commands::get_recording_state,
-            audio::recording_commands::get_meeting_folder_path,
+            commands::audio::recording_commands::pause_recording,
+            commands::audio::recording_commands::resume_recording,
+            commands::audio::recording_commands::is_recording_paused,
+            commands::audio::recording_commands::get_recording_state,
+            commands::audio::recording_commands::get_meeting_folder_path,
             // Reload sync commands (retrieve transcript history and meeting name)
-            audio::recording_commands::get_transcript_history,
-            audio::recording_commands::get_recording_meeting_name,
+            commands::audio::recording_commands::get_transcript_history,
+            commands::audio::recording_commands::get_recording_meeting_name,
             // Post-meeting auto-refine (background high-accuracy re-pass)
-            audio::recording_commands::trigger_post_meeting_refine,
+            commands::audio::recording_commands::trigger_post_meeting_refine,
             // Audio recovery commands (for transcript recovery feature)
-            audio::incremental_saver::recover_audio_from_checkpoints,
-            audio::incremental_saver::cleanup_checkpoints,
-            audio::incremental_saver::has_audio_checkpoints,
+            commands::audio::incremental_saver_commands::recover_audio_from_checkpoints,
+            commands::audio::incremental_saver_commands::cleanup_checkpoints,
+            commands::audio::incremental_saver_commands::has_audio_checkpoints,
             // Interrupted-meeting recovery (issue #57 slice 2: DB-driven,
             // replaces the old IndexedDB scan)
-            audio::recovery_commands::list_interrupted_meetings,
-            audio::recovery_commands::recover_meeting,
-            ollama::get_ollama_models,
-            ollama::pull_ollama_model,
-            ollama::delete_ollama_model,
-            ollama::get_ollama_model_context,
-            openai::openai::get_openai_models,
-            anthropic::anthropic::get_anthropic_models,
-            groq::groq::get_groq_models,
+            commands::audio::recovery_commands::list_interrupted_meetings,
+            commands::audio::recovery_commands::recover_meeting,
+            commands::ollama::commands::get_ollama_models,
+            commands::ollama::commands::pull_ollama_model,
+            commands::ollama::commands::delete_ollama_model,
+            commands::ollama::commands::get_ollama_model_context,
+            commands::openai::commands::get_openai_models,
+            commands::anthropic::commands::get_anthropic_models,
+            commands::groq::commands::get_groq_models,
             api::api_get_meetings,
             api::api_search_transcripts,
             api::api_get_model_config,
@@ -856,9 +810,9 @@ pub fn run() {
             api::api_get_custom_openai_config,
             api::api_test_custom_openai_connection,
             // Action items + meeting notes
-            audio::clip::get_meeting_audio_clip,
-            audio::clip::play_meeting_audio_clip,
-            audio::clip::stop_meeting_audio_clip,
+            commands::audio::clip_commands::get_meeting_audio_clip,
+            commands::audio::clip_commands::play_meeting_audio_clip,
+            commands::audio::clip_commands::stop_meeting_audio_clip,
             api::action_items::start_live_action_extraction,
             api::action_items::stop_live_action_extraction,
             api::action_items::list_action_items,
@@ -875,29 +829,29 @@ pub fn run() {
             api::export::export_meeting,
             api::export::export_meeting_to_file,
             // Summary commands
-            summary::commands::api_process_transcript,
-            summary::commands::api_get_summary,
-            summary::commands::api_save_meeting_summary,
-            summary::commands::api_cancel_summary,
+            commands::summary::commands::api_process_transcript,
+            commands::summary::commands::api_get_summary,
+            commands::summary::commands::api_save_meeting_summary,
+            commands::summary::commands::api_cancel_summary,
             // Template commands
-            summary::template_commands::api_list_templates,
-            summary::template_commands::api_get_template_details,
-            summary::template_commands::api_validate_template,
+            commands::summary::template_commands::api_list_templates,
+            commands::summary::template_commands::api_get_template_details,
+            commands::summary::template_commands::api_validate_template,
             // Built-in AI commands
-            summary::summary_engine::commands::builtin_ai_list_models,
-            summary::summary_engine::commands::builtin_ai_get_model_info,
-            summary::summary_engine::commands::builtin_ai_download_model,
-            summary::summary_engine::commands::builtin_ai_cancel_download,
-            summary::summary_engine::commands::builtin_ai_delete_model,
-            summary::summary_engine::commands::builtin_ai_is_model_ready,
-            summary::summary_engine::commands::builtin_ai_get_available_summary_model,
-            summary::summary_engine::commands::builtin_ai_get_recommended_model,
-            openrouter::get_openrouter_models,
-            audio::recording_preferences::get_recording_preferences,
-            audio::recording_preferences::set_recording_preferences,
-            audio::recording_preferences::get_default_recordings_folder_path,
-            audio::recording_preferences::open_recordings_folder,
-            audio::recording_preferences::select_recording_folder,
+            commands::summary::summary_engine::commands::builtin_ai_list_models,
+            commands::summary::summary_engine::commands::builtin_ai_get_model_info,
+            commands::summary::summary_engine::commands::builtin_ai_download_model,
+            commands::summary::summary_engine::commands::builtin_ai_cancel_download,
+            commands::summary::summary_engine::commands::builtin_ai_delete_model,
+            commands::summary::summary_engine::commands::builtin_ai_is_model_ready,
+            commands::summary::summary_engine::commands::builtin_ai_get_available_summary_model,
+            commands::summary::summary_engine::commands::builtin_ai_get_recommended_model,
+            commands::openrouter::commands::get_openrouter_models,
+            commands::audio::recording_preferences_commands::get_recording_preferences,
+            commands::audio::recording_preferences_commands::set_recording_preferences,
+            commands::audio::recording_preferences_commands::get_default_recordings_folder_path,
+            commands::audio::recording_preferences_commands::open_recordings_folder,
+            commands::audio::recording_preferences_commands::select_recording_folder,
             // Language preference commands
             set_language_preference,
             // Notification system commands
@@ -916,43 +870,43 @@ pub fn run() {
             notifications::commands::test_notification_with_auto_consent,
             notifications::commands::get_notification_stats,
             // Database import commands
-            database::commands::check_first_launch,
-            database::commands::initialize_fresh_database,
+            commands::database::commands::check_first_launch,
+            commands::database::commands::initialize_fresh_database,
             // Database and Models path commands
-            database::commands::get_database_directory,
-            database::commands::open_database_folder,
+            commands::database::commands::get_database_directory,
+            commands::database::commands::open_database_folder,
             // MCP server config surface (Settings → Integrations)
-            mcp_config::get_mcp_server_info,
-            mcp_config::reveal_mcp_binary,
-            whisper_engine::commands::open_models_folder,
+            mcp_config_commands::get_mcp_server_info,
+            mcp_config_commands::reveal_mcp_binary,
+            commands::whisper_engine::commands::open_models_folder,
             // Onboarding commands
-            onboarding::get_onboarding_status,
-            onboarding::save_onboarding_status_cmd,
-            onboarding::reset_onboarding_status_cmd,
-            onboarding::complete_onboarding,
+            onboarding_commands::get_onboarding_status,
+            onboarding_commands::save_onboarding_status_cmd,
+            onboarding_commands::reset_onboarding_status_cmd,
+            onboarding_commands::complete_onboarding,
             // Frontend UI config commands (language, confidence indicator,
             // auto-summary, provider model cache, ...)
-            database::repositories::setting::api_get_ui_config,
-            database::repositories::setting::api_save_ui_config,
+            commands::database::commands::api_get_ui_config,
+            commands::database::commands::api_save_ui_config,
             // Retranscription commands
-            audio::retranscription::start_retranscription_command,
-            audio::retranscription::cancel_retranscription_command,
-            audio::retranscription::is_retranscription_in_progress_command,
+            commands::audio::retranscription_commands::start_retranscription_command,
+            commands::audio::retranscription_commands::cancel_retranscription_command,
+            commands::audio::retranscription_commands::is_retranscription_in_progress_command,
             // Import audio commands
-            audio::import::select_and_validate_audio_command,
-            audio::import::validate_audio_file_command,
-            audio::import::start_import_audio_command,
-            audio::import::cancel_import_command,
-            audio::import::is_import_in_progress_command,
+            commands::audio::import_commands::select_and_validate_audio_command,
+            commands::audio::import_commands::validate_audio_file_command,
+            commands::audio::import_commands::start_import_audio_command,
+            commands::audio::import_commands::cancel_import_command,
+            commands::audio::import_commands::is_import_in_progress_command,
             // Calendar / ICS commands
-            calendar::commands::calendar_list_sources,
-            calendar::commands::calendar_add_source,
-            calendar::commands::calendar_remove_source,
-            calendar::commands::calendar_refresh_source,
-            calendar::commands::calendar_list_events,
-            calendar::commands::calendar_find_event_for_now,
-            calendar::commands::calendar_link_meeting,
-            calendar::commands::calendar_get_event_for_meeting,
+            commands::calendar::commands::calendar_list_sources,
+            commands::calendar::commands::calendar_add_source,
+            commands::calendar::commands::calendar_remove_source,
+            commands::calendar::commands::calendar_refresh_source,
+            commands::calendar::commands::calendar_list_events,
+            commands::calendar::commands::calendar_find_event_for_now,
+            commands::calendar::commands::calendar_link_meeting,
+            commands::calendar::commands::calendar_get_event_for_meeting,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -1004,7 +958,7 @@ pub fn run() {
                     // it must never hang app shutdown if the engine is
                     // wedged.
                     let engine_clone = {
-                        let engine_guard = whisper_engine::commands::WHISPER_ENGINE
+                        let engine_guard = commands::whisper_engine::commands::WHISPER_ENGINE
                             .lock()
                             .unwrap();
                         engine_guard.as_ref().cloned()

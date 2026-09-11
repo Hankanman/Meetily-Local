@@ -73,7 +73,7 @@ Plus, behind a Cargo feature that is **off by default** and touches nothing
 in the live recording path:
 
 ```
-frontend/src-tauri/src/audio/transcription/backend_probe.rs   (feature = "backend_probe")
+meetily-core/src/audio/transcription/backend_probe.rs   (feature = "backend_probe")
 ```
 
 ### whisper-protocol

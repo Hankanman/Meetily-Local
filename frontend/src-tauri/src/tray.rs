@@ -85,9 +85,9 @@ fn toggle_recording_handler<R: Runtime>(app: &AppHandle<R>) {
                 let save_path = data_dir.join(format!("recording-{}.wav", timestamp));
 
                 // Call Rust stop_recording command (like pause/resume pattern)
-                let stop_result = crate::audio::recording_commands::stop_recording(
+                let stop_result = crate::commands::audio::recording_commands::stop_recording(
                     app_clone.clone(),
-                    crate::audio::recording_commands::RecordingArgs {
+                    crate::commands::audio::recording_commands::RecordingArgs {
                         save_path: save_path.to_string_lossy().to_string(),
                     },
                 )
@@ -148,7 +148,7 @@ fn pause_recording_handler<R: Runtime>(app: &AppHandle<R>) {
 
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = crate::audio::recording_commands::pause_recording(app_clone.clone()).await {
+        if let Err(e) = crate::commands::audio::recording_commands::pause_recording(app_clone.clone()).await {
             log::error!("Failed to pause recording from tray: {}", e);
             // Revert to current state on error
             update_tray_menu_async(&app_clone).await;
@@ -165,7 +165,7 @@ fn resume_recording_handler<R: Runtime>(app: &AppHandle<R>) {
 
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = crate::audio::recording_commands::resume_recording(app_clone.clone()).await
+        if let Err(e) = crate::commands::audio::recording_commands::resume_recording(app_clone.clone()).await
         {
             log::error!("Failed to resume recording from tray: {}", e);
             // Revert to current state on error
@@ -200,9 +200,9 @@ fn stop_recording_handler<R: Runtime>(app: &AppHandle<R>) {
         let save_path = data_dir.join(format!("recording-{}.wav", timestamp));
 
         // Call Rust stop_recording command (like pause/resume pattern)
-        let stop_result = crate::audio::recording_commands::stop_recording(
+        let stop_result = crate::commands::audio::recording_commands::stop_recording(
             app_clone.clone(),
-            crate::audio::recording_commands::RecordingArgs {
+            crate::commands::audio::recording_commands::RecordingArgs {
                 save_path: save_path.to_string_lossy().to_string(),
             },
         )
@@ -262,7 +262,7 @@ pub fn set_tray_state<R: Runtime>(app: &AppHandle<R>, state: RecordingState) {
 
 async fn get_current_recording_state() -> RecordingState {
     // Check if currently recording
-    let is_recording = crate::audio::recording_commands::is_recording().await;
+    let is_recording = crate::commands::audio::recording_commands::is_recording().await;
     log::info!(
         "Tray: get_current_recording_state - is_recording: {}",
         is_recording
@@ -274,7 +274,7 @@ async fn get_current_recording_state() -> RecordingState {
     }
 
     // Check if paused
-    let is_paused = crate::audio::recording_commands::is_recording_paused().await;
+    let is_paused = crate::commands::audio::recording_commands::is_recording_paused().await;
     log::info!("Tray: is_paused: {}", is_paused);
 
     if is_paused {
@@ -292,7 +292,7 @@ async fn get_current_recording_state() -> RecordingState {
 /// - At least one Whisper model is downloaded and available.
 async fn check_can_record<R: Runtime>(app: &AppHandle<R>) -> bool {
     // First check if onboarding is complete
-    let onboarding_complete = match crate::onboarding::load_onboarding_status(app).await {
+    let onboarding_complete = match crate::onboarding_commands::load_onboarding_status_for_app(app).await {
         Ok(status) => status.completed,
         Err(e) => {
             log::warn!(
@@ -310,7 +310,7 @@ async fn check_can_record<R: Runtime>(app: &AppHandle<R>) -> bool {
     }
 
     // During onboarding, check if any Whisper model is downloaded and ready.
-    match crate::whisper_engine::commands::whisper_has_available_models().await {
+    match crate::commands::whisper_engine::commands::whisper_has_available_models().await {
         Ok(has_models) => has_models,
         Err(e) => {
             log::warn!(

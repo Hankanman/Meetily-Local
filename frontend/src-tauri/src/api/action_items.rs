@@ -154,7 +154,7 @@ pub async fn extract_action_items<R: Runtime>(
     // Prefer the transcript (timestamped ground truth). Fall back to the
     // summary only for meetings whose transcript segments aren't stored.
     match transcript_action_items::extract_from_transcript(
-        &app,
+        &crate::tauri_events::TauriSink(app.clone()),
         pool,
         &meeting_id,
         &config.provider,
@@ -189,7 +189,7 @@ pub async fn extract_action_items<R: Runtime>(
                 })?;
 
             action_extraction::extract_for_meeting(
-                &app,
+                &crate::tauri_events::TauriSink(app.clone()),
                 pool,
                 &meeting_id,
                 &markdown,
@@ -215,7 +215,12 @@ pub async fn start_live_action_extraction<R: Runtime>(
         .map_err(|e| format!("Failed to read model config: {e}"))?
         .ok_or_else(|| "No summary model configured. Set one in settings first.".to_string())?;
 
-    crate::summary::live_action_items::start(app, pool.clone(), config.provider, config.model);
+    crate::summary::live_action_items::start(
+        crate::tauri_events::shared_sink(&app),
+        pool.clone(),
+        config.provider,
+        config.model,
+    );
     Ok(())
 }
 
