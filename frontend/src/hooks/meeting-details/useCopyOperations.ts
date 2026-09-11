@@ -75,10 +75,16 @@ export function useCopyOperations({
     const date = `## Date: ${new Date(meeting.created_at).toLocaleDateString()}\n\n`;
     // Old transcripts predate audio_start_time and fall back to wall-clock time
     const fullTranscript = allTranscripts
-      .map(
-        (t) =>
-          `${t.audio_start_time !== undefined ? formatRecordingTime(t.audio_start_time) : t.timestamp} ${t.text}  `,
-      )
+      .map((t) => {
+        const time =
+          t.audio_start_time !== undefined
+            ? formatRecordingTime(t.audio_start_time)
+            : t.timestamp;
+        // Include the diarized speaker when present so exported/copied
+        // transcripts carry "who said what", not just timestamped text.
+        const who = t.speaker ? `${t.speaker}: ` : "";
+        return `${time} ${who}${t.text}  `;
+      })
       .join("\n");
 
     await navigator.clipboard.writeText(header + date + fullTranscript);

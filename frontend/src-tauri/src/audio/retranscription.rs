@@ -357,6 +357,10 @@ async fn run_retranscription<R: Runtime>(
         language.clone(),
         engine,
         diarizer.clone(),
+        // Retranscription re-processes an already-VAD'd session; it doesn't
+        // run its own offline diarization pass (that's import-specific —
+        // see `import.rs`), so there's no hint to feed the diarizer here.
+        None,
         &RETRANSCRIPTION_CANCELLED,
         move |i, total, segment_duration_sec| {
             // Calculate progress (25% to 80% range for transcription)

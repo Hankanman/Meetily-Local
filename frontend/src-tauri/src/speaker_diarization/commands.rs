@@ -8,6 +8,9 @@ use crate::speaker_diarization::{
     model_filename, set_current_diarizer, Diarizer, SpeakerEmbedder, SpeakerProfileMatcher,
     DEFAULT_CLUSTER_THRESHOLD, PROFILE_MATCH_THRESHOLD,
 };
+use crate::speaker_diarization::model::{
+    pyannote_segmentation_download_url, pyannote_segmentation_path,
+};
 use crate::state::AppState;
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
@@ -80,6 +83,48 @@ pub async fn speaker_model_download<R: Runtime>(app: AppHandle<R>) -> Result<(),
         serde_json::json!({ "alreadyPresent": false }),
     );
     Ok(())
+}
+
+/// Ensure the pyannote segmentation model (used only for the accurate
+/// *offline* diarization pass on Import — see `speaker_diarization::offline`
+/// and `audio::import::run_import`) is present on disk, downloading it on
+/// demand if missing, and return its resolved path.
+///
+/// Unlike the VAD and speaker-embedding models, this one is deliberately
+/// **not** fetched at app startup (see `lib.rs::ensure_required_models_downloaded`)
+/// — it's only needed when a user has `offline_diarization_on_import` on and
+/// imports a file worth running it on, so the ~5.7MB download is deferred to
+/// that first use instead of being paid by every install/launch. Reuses the
+/// same plain streaming downloader the startup path uses for the other
+/// built-in models (`crate::download_file_to`) rather than the
+/// progress-emitting `stream_download` above, since this runs silently in
+/// the background during import instead of behind a visible progress bar.
+#[command]
+pub async fn ensure_pyannote_segmentation_model<R: Runtime>(
+    // Not used today (no progress event is emitted for this quiet,
+    // background fetch — see doc comment), but kept as a parameter since
+    // every other model-download command in this file takes one, for a
+    // consistent signature and in case a progress event is added later.
+    _app: AppHandle<R>,
+) -> Result<String, String> {
+    let path = pyannote_segmentation_path()
+        .ok_or_else(|| "Speaker models directory not initialized".to_string())?;
+
+    if model_is_ready(&path) {
+        return Ok(path.to_string_lossy().into_owned());
+    }
+
+    let url = pyannote_segmentation_download_url();
+    log::info!(
+        "Pyannote segmentation model missing — fetching {} -> {}",
+        url,
+        path.display()
+    );
+    crate::download_file_to(url, &path)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// Build a [`Diarizer`] from the on-disk model + stored voice profiles.

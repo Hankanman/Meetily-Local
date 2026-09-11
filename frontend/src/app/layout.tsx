@@ -43,6 +43,22 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
+      <head>
+        {/* Apply the saved theme before first paint to avoid a light/dark
+            flash. Mirrors ThemeContext's resolution; runs synchronously.
+            Linux/WebKitGTK note: prefers-color-scheme does not reliably
+            track the GTK/KDE theme there, so this never consults the media
+            query. When the preference is an explicit "light"/"dark" we use
+            it directly; for "system" (or no preference yet) we use the last
+            *resolved* theme ThemeContext cached from Tauri's native theme
+            detection, falling back to "dark" only if nothing is cached
+            yet. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem('meetily-theme');var d;if(t==='light'){d=false;}else if(t==='dark'){d=true;}else{var r=localStorage.getItem('meetily-theme-resolved');d=r==='light'?false:true;}var root=document.documentElement;root.classList.toggle('dark',d);root.style.colorScheme=d?'dark':'light';}catch(e){}})();`,
+          }}
+        />
+      </head>
       <body
         className={`${sourceSans3.variable} ${spaceGrotesk.variable} ${jetBrainsMono.variable} font-sans antialiased`}
       >

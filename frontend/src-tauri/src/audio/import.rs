@@ -252,6 +252,7 @@ pub async fn start_import<R: Runtime>(
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    num_speakers: i32,
 ) -> Result<ImportResult> {
     // Acquire guard - ensures flag is cleared even on panic/early return
     let _guard = ImportGuard::acquire().map_err(|e| anyhow!(e))?;
@@ -259,7 +260,16 @@ pub async fn start_import<R: Runtime>(
     // Reset cancellation flag
     IMPORT_CANCELLED.store(false, Ordering::SeqCst);
 
-    let result = run_import(app.clone(), source_path, title, language, model, provider).await;
+    let result = run_import(
+        app.clone(),
+        source_path,
+        title,
+        language,
+        model,
+        provider,
+        num_speakers,
+    )
+    .await;
 
     // Unload the engine after the batch job (success, failure, or cancellation)
     super::common::unload_engine_after_batch().await;
@@ -300,6 +310,7 @@ async fn run_import<R: Runtime>(
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    num_speakers: i32,
 ) -> Result<ImportResult> {
     let source = PathBuf::from(&source_path);
 
@@ -413,6 +424,10 @@ async fn run_import<R: Runtime>(
         return Err(anyhow!("Import cancelled"));
     }
 
+    // Keep a copy of the full 16 kHz buffer for offline diarization — the VAD
+    // spawn_blocking below moves `audio_samples` into its closure.
+    let audio_for_diar = audio_samples.clone();
+
     // Use VAD to find speech segments
     let app_for_vad = app.clone();
 
@@ -500,6 +515,103 @@ async fn run_import<R: Runtime>(
         info!("Speaker diarization enabled for import");
     }
 
+    // Accurate (offline) diarization over the WHOLE file: pyannote
+    // segmentation + global clustering, optionally told the exact speaker
+    // count. Far more accurate than the per-segment online clusterer for a
+    // single clean import source. Rather than bypassing the diarizer built
+    // above, its turns become *hints* fed into that same diarizer (see
+    // `common::run_batch_transcription` and `Diarizer::process_with_hint`):
+    // the embedding is still computed and recorded to history, a stored
+    // voice profile still takes precedence, only the "Speaker N" fallback
+    // id changes. That keeps promote/rename and the post-import
+    // `refine_and_persist` pass working against one diarizer instance
+    // instead of a second, disconnected labelling path.
+    //
+    // Gated behind the `offline_diarization_on_import` preference (default
+    // on), only attempted when it's likely to matter (an explicit speaker
+    // count, or a file long enough that the online greedy clusterer is more
+    // likely to drift), and run off the async runtime — pyannote
+    // segmentation over a long file is minutes of CPU.
+    let offline_turns: Option<Vec<crate::speaker_diarization::offline::SpeakerTurn>> =
+        if total_segments > 0 && diarizer.is_some() {
+            let prefs = super::recording_preferences::load_recording_preferences(&app)
+                .await
+                .unwrap_or_default();
+            let worth_it = num_speakers != 0 || duration_seconds > 60.0;
+
+            if prefs.offline_diarization_on_import && worth_it {
+                match crate::speaker_diarization::commands::ensure_pyannote_segmentation_model(
+                    app.clone(),
+                )
+                .await
+                {
+                    Ok(seg_path) => match crate::speaker_diarization::model::default_model_path() {
+                        Some(emb_path) if emb_path.exists() => {
+                            emit_progress(&app, "diarizing", 28, "Analyzing speakers...");
+
+                            let seg_path = PathBuf::from(seg_path);
+                            let samples = audio_for_diar;
+                            let threads = crate::audio::hardware_detector::HardwareProfile::detect()
+                                .get_whisper_config()
+                                .max_threads
+                                .unwrap_or(1)
+                                .max(1) as i32;
+
+                            match tokio::task::spawn_blocking(move || {
+                                crate::speaker_diarization::offline::diarize_offline(
+                                    &samples,
+                                    &seg_path,
+                                    &emb_path,
+                                    num_speakers,
+                                    threads,
+                                )
+                            })
+                            .await
+                            {
+                                Ok(Ok(turns)) => {
+                                    info!(
+                                        "Offline diarization ready: {} turns (num_speakers={})",
+                                        turns.len(),
+                                        num_speakers
+                                    );
+                                    Some(turns)
+                                }
+                                Ok(Err(e)) => {
+                                    warn!(
+                                        "Offline diarization failed ({e}); falling back to \
+                                         the online clusterer"
+                                    );
+                                    None
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "Offline diarization task panicked ({e}); falling \
+                                         back to the online clusterer"
+                                    );
+                                    None
+                                }
+                            }
+                        }
+                        _ => {
+                            info!("Speaker embedding model absent; skipping offline diarization");
+                            None
+                        }
+                    },
+                    Err(e) => {
+                        warn!(
+                            "Pyannote segmentation model unavailable ({e}); falling back to \
+                             the online clusterer"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
     // Split-at-silence -> per-segment transcribe -> diarize is shared with
     // retranscription (see `common::run_batch_transcription`); only the
     // progress-event shape/percentage range differs here.
@@ -513,6 +625,7 @@ async fn run_import<R: Runtime>(
             language.clone(),
             engine,
             diarizer.clone(),
+            offline_turns.as_deref(),
             &IMPORT_CANCELLED,
             move |i, total, segment_duration_sec| {
                 let progress = 30 + ((i as f32 / total.max(1) as f32) * 50.0) as u32;
@@ -612,6 +725,32 @@ async fn run_import<R: Runtime>(
             "Installed import diarizer as current_diarizer for meeting {}",
             meeting_id
         );
+
+        // Re-cluster offline and persist any improved labels — addresses #9
+        // for the online-clustering fallback too (when offline diarization
+        // above did run, hinted labels are already accurate and this is a
+        // no-op; `refine_and_persist` only rewrites rows that actually
+        // change). Backgrounded so import completion isn't held up by it,
+        // same as the equivalent post-recording pass in
+        // `recording_commands::trigger_post_meeting_refine`. Transcripts are
+        // already persisted at this point (see `create_meeting_with_transcripts`
+        // above), which `refine_and_persist` requires.
+        let app_for_refine = app.clone();
+        let meeting_id_for_refine = meeting_id.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = crate::speaker_diarization::commands::refine_and_persist(
+                &app_for_refine,
+                &meeting_id_for_refine,
+            )
+            .await
+            {
+                warn!(
+                    "Speaker refinement failed for imported meeting {}: {} \
+                     (labels left as recorded)",
+                    meeting_id_for_refine, e
+                );
+            }
+        });
     }
 
     Ok(ImportResult {
@@ -863,15 +1002,28 @@ pub async fn start_import_audio_command<R: Runtime>(
     language: Option<String>,
     model: Option<String>,
     provider: Option<String>,
+    num_speakers: Option<i32>,
 ) -> Result<ImportStarted, String> {
     // Check if import is already in progress (guard will be acquired in start_import)
     if IMPORT_IN_PROGRESS.load(Ordering::SeqCst) {
         return Err("Import already in progress".to_string());
     }
 
+    // 0 / absent → auto-estimate the speaker count.
+    let num_speakers = num_speakers.unwrap_or(0);
+
     // Spawn import in background
     tauri::async_runtime::spawn(async move {
-        let result = start_import(app, source_path, title, language, model, provider).await;
+        let result = start_import(
+            app,
+            source_path,
+            title,
+            language,
+            model,
+            provider,
+            num_speakers,
+        )
+        .await;
 
         if let Err(e) = result {
             error!("Import failed: {}", e);
@@ -901,8 +1053,8 @@ pub async fn is_import_in_progress_command() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::common::{split_segment_at_silence, BatchTranscript};
+    use super::*;
 
     #[test]
     fn test_audio_extensions() {

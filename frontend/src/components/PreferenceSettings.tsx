@@ -7,6 +7,7 @@ import { FolderOpen } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { Heading } from "@/components/ui/typography";
 import { useConfig, NotificationSettings } from "@/contexts/ConfigContext";
+import { ThemeToggle } from "./ThemeToggle";
 
 export function PreferenceSettings() {
   const {
@@ -137,6 +138,25 @@ export function PreferenceSettings() {
 
   return (
     <div className="space-y-6">
+      {/* Appearance Section */}
+      <div
+        className="
+        rounded-lg border border-border bg-card p-5 shadow-sm
+      "
+      >
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <Heading level={3} className="mb-2">
+              Appearance
+            </Heading>
+            <p className="text-sm text-muted-foreground">
+              Choose a light or dark theme, or follow your system setting.
+            </p>
+          </div>
+          <ThemeToggle />
+        </div>
+      </div>
+
       {/* Notifications Section */}
       <div
         className="
