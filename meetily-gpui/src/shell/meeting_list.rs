@@ -71,6 +71,39 @@ pub fn filter_by_title<'a>(meetings: &'a [MeetingRow], query: &str) -> Vec<&'a M
         .collect()
 }
 
+/// One transcript-content search hit, already reduced to the shape the
+/// sidebar renders: which meeting, its title, and a snippet of context
+/// around the first match (mirrors the Tauri transcript-search command's
+/// `TranscriptSearchResult`, kept as a local plain type so this module has
+/// no dependency on the database layer — see [`MeetingRow`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContentMatch {
+    pub meeting_id: String,
+    pub title: String,
+    pub snippet: String,
+}
+
+/// Reduces raw search rows (one per matching transcript segment, as
+/// `TranscriptsRepository::search_transcripts` returns them) to at most one
+/// [`ContentMatch`] per meeting — the first hit, preserving row order — and
+/// drops any meeting whose title already matched the same query (so the
+/// sidebar doesn't show a meeting twice).
+pub fn build_content_matches(
+    rows: impl IntoIterator<Item = ContentMatch>,
+    already_shown_ids: &[String],
+) -> Vec<ContentMatch> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut out = Vec::new();
+    for row in rows {
+        if already_shown_ids.contains(&row.meeting_id) || seen.contains(&row.meeting_id) {
+            continue;
+        }
+        seen.push(row.meeting_id.clone());
+        out.push(row);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,5 +193,31 @@ mod tests {
     fn filter_by_title_empty_query_matches_all() {
         let meetings = vec![row("1", "Team Standup", 2026, 9, 11), row("2", "1:1 with Sam", 2026, 9, 11)];
         assert_eq!(filter_by_title(&meetings, "   ").len(), 2);
+    }
+
+    fn content_match(id: &str) -> ContentMatch {
+        ContentMatch { meeting_id: id.to_string(), title: format!("Meeting {id}"), snippet: "…hit…".to_string() }
+    }
+
+    #[test]
+    fn build_content_matches_dedupes_by_meeting_keeping_first_hit() {
+        let rows = vec![content_match("1"), content_match("1"), content_match("2")];
+        let matches = build_content_matches(rows, &[]);
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].meeting_id, "1");
+        assert_eq!(matches[1].meeting_id, "2");
+    }
+
+    #[test]
+    fn build_content_matches_excludes_already_shown_meetings() {
+        let rows = vec![content_match("1"), content_match("2")];
+        let matches = build_content_matches(rows, &["1".to_string()]);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].meeting_id, "2");
+    }
+
+    #[test]
+    fn build_content_matches_empty_input_is_empty() {
+        assert!(build_content_matches(Vec::new(), &[]).is_empty());
     }
 }
