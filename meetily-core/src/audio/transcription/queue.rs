@@ -105,6 +105,11 @@ mod tests {
     use super::*;
     use crate::audio::recording_state::DeviceType;
 
+    /// `QUEUE_DEPTH` is process-global, so these tests must not interleave:
+    /// one test's `reset_queue_depth()` or `dequeued()` would otherwise land
+    /// in the middle of another's send/receive sequence.
+    static QUEUE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     fn sample_chunk(id: u64) -> AudioChunk {
         AudioChunk {
             data: vec![0.0; 1600],
@@ -117,6 +122,7 @@ mod tests {
 
     #[tokio::test]
     async fn depth_increments_on_send_and_decrements_on_dequeue() {
+        let _serial = QUEUE_TEST_LOCK.lock().await;
         reset_queue_depth();
         let (raw_tx, raw_rx) = mpsc::unbounded_channel::<AudioChunk>();
         let mut counted_rx = spawn_counting_forwarder(raw_rx);
@@ -140,6 +146,7 @@ mod tests {
 
     #[tokio::test]
     async fn completion_signal_survives_the_forwarder() {
+        let _serial = QUEUE_TEST_LOCK.lock().await;
         reset_queue_depth();
         let (raw_tx, raw_rx) = mpsc::unbounded_channel::<AudioChunk>();
         let mut counted_rx = spawn_counting_forwarder(raw_rx);
@@ -157,6 +164,7 @@ mod tests {
 
     #[tokio::test]
     async fn dequeue_never_underflows() {
+        let _serial = QUEUE_TEST_LOCK.lock().await;
         reset_queue_depth();
         dequeued();
         dequeued();
