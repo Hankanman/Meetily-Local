@@ -5,13 +5,15 @@
 mod app_state;
 mod core_events;
 mod notifications;
+mod recovery;
+mod root;
 mod runtime;
 mod shell;
 mod tray;
 mod views;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 
 use gpui_kit::component::{Root, TitleBar};
 use gpui_kit::*;
@@ -21,8 +23,8 @@ use meetily_core::events::SharedEventSink;
 
 use app_state::AppServices;
 use core_events::CoreEvents;
+use root::RootView;
 use runtime::Io;
-use shell::AppShell;
 
 /// Set once a close/quit request has started finishing the recording, so a
 /// second request (mashing close, or close + tray Quit) doesn't start another.
@@ -44,7 +46,7 @@ fn main() {
     let db = match io.block_on(bootstrap::prepare_database()) {
         Ok(StartupOutcome::Initialized(db)) => Some(db),
         Ok(StartupOutcome::FirstLaunch) => {
-            log::warn!("First launch: no database yet — complete onboarding in the Tauri app for now");
+            log::info!("First launch: no database yet — the onboarding flow will create one");
             None
         }
         Err(e) => {
@@ -61,6 +63,12 @@ fn main() {
             model_manager,
         );
     }
+    // `AppServices::set_db` fills this in later, without a restart, once
+    // first-launch onboarding creates the database (see `root.rs` /
+    // `views/onboarding`). Wrapped in a lock (rather than moved into
+    // `AppServices` by value) so the shutdown path below can still see
+    // whatever onboarding installed after the run loop exits.
+    let db: app_state::DbSlot = Arc::new(RwLock::new(db));
 
     let app = gpui_kit::application()
         .with_assets(gpui_kit::assets::AllAssets)
@@ -88,7 +96,7 @@ fn main() {
         cx.spawn(async move |cx| {
             let window = cx
                 .open_window(window_options, |window, cx| {
-                    let view = cx.new(|cx| AppShell::new(window, cx));
+                    let view = cx.new(|cx| RootView::new(window, cx));
                     cx.new(|cx| Root::new(view, window, cx))
                 })
                 .expect("failed to open window");
@@ -114,7 +122,12 @@ fn main() {
     });
 
     // The run loop has exited: release the DB, sidecar and Whisper model.
-    io_for_shutdown.block_on(bootstrap::shutdown(db_for_shutdown.as_ref()));
+    // Read the slot fresh here (rather than the `db` captured before
+    // `app.run`) so a database created during onboarding still gets cleaned
+    // up even though it didn't exist at process startup.
+    let db_guard = db_for_shutdown.read().unwrap();
+    io_for_shutdown.block_on(bootstrap::shutdown(db_guard.as_ref()));
+    drop(db_guard);
     log::info!("Application cleanup complete");
 
     // Exit immediately, skipping C/C++ static destructors — same reason as
