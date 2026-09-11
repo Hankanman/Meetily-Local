@@ -20,10 +20,20 @@ use meetily_core::audio::recording_service::{self, RecordingArgs, StartRequest};
 use crate::app_state::AppServices;
 use crate::core_events::CoreEvent;
 use crate::notifications;
+use crate::shell::{navigate, Route};
 
 actions!(
     parley_tray,
-    [TrayStartRecording, TrayStopRecording, TrayOpenParley, TrayQuit]
+    [
+        TrayStartRecording,
+        TrayStopRecording,
+        TrayPauseRecording,
+        TrayResumeRecording,
+        TrayOpenParley,
+        TraySettings,
+        TrayCheckForUpdates,
+        TrayQuit,
+    ]
 );
 
 /// The main window, stashed here so the tray's "Open Parley" action can
@@ -93,6 +103,8 @@ fn build_menu(cx: &mut App) -> Vec<MenuItem> {
 
     let can_start = matches!(phase, Idle);
     let can_stop = matches!(phase, Recording | Paused);
+    let can_pause = matches!(phase, Recording);
+    let can_resume = matches!(phase, Paused);
 
     vec![
         disabled(MenuItem::action(status_label, NoAction), true),
@@ -102,11 +114,22 @@ fn build_menu(cx: &mut App) -> Vec<MenuItem> {
             !can_start,
         ),
         disabled(
+            MenuItem::action("Pause recording", TrayPauseRecording),
+            !can_pause,
+        ),
+        disabled(
+            MenuItem::action("Resume recording", TrayResumeRecording),
+            !can_resume,
+        ),
+        disabled(
             MenuItem::action("Stop recording", TrayStopRecording),
             !can_stop,
         ),
         MenuItem::separator(),
         MenuItem::action("Open Parley", TrayOpenParley),
+        MenuItem::action("Settings", TraySettings),
+        MenuItem::action("Check for updates", TrayCheckForUpdates),
+        MenuItem::separator(),
         MenuItem::action("Quit", TrayQuit),
     ]
 }
@@ -147,6 +170,35 @@ fn start_recording_from_tray(cx: &mut App) {
     });
 }
 
+fn pause_recording_from_tray(cx: &mut App) {
+    let services = AppServices::global(cx);
+    let io = services.io.clone();
+    let ctx = services.recording_context();
+    io.spawn(async move {
+        if let Err(e) = recording_service::pause_recording(&ctx).await {
+            log::error!("tray: failed to pause recording: {}", e);
+        }
+    });
+}
+
+fn resume_recording_from_tray(cx: &mut App) {
+    let services = AppServices::global(cx);
+    let io = services.io.clone();
+    let ctx = services.recording_context();
+    io.spawn(async move {
+        if let Err(e) = recording_service::resume_recording(&ctx).await {
+            log::error!("tray: failed to resume recording: {}", e);
+        }
+    });
+}
+
+/// Show + focus the main window, then navigate to Settings — used by both
+/// the tray's "Settings" item.
+fn open_settings(cx: &mut App) {
+    open_parley(cx);
+    navigate(Route::Settings, cx);
+}
+
 fn stop_recording_from_tray(cx: &mut App) {
     let services = AppServices::global(cx);
     let ctx = services.recording_context();
@@ -180,9 +232,25 @@ pub fn install(cx: &mut App) -> gpui_tray::Result<()> {
         log::info!("tray: stop recording");
         stop_recording_from_tray(cx);
     });
+    cx.on_action(|_: &TrayPauseRecording, cx: &mut App| {
+        log::info!("tray: pause recording");
+        pause_recording_from_tray(cx);
+    });
+    cx.on_action(|_: &TrayResumeRecording, cx: &mut App| {
+        log::info!("tray: resume recording");
+        resume_recording_from_tray(cx);
+    });
     cx.on_action(|_: &TrayOpenParley, cx: &mut App| {
         log::info!("tray: open Parley");
         open_parley(cx);
+    });
+    cx.on_action(|_: &TraySettings, cx: &mut App| {
+        log::info!("tray: settings");
+        open_settings(cx);
+    });
+    cx.on_action(|_: &TrayCheckForUpdates, cx: &mut App| {
+        log::info!("tray: check for updates");
+        notifications::check_for_updates(cx);
     });
     cx.on_action(|_: &TrayQuit, cx: &mut App| {
         log::info!("tray: quit");
@@ -208,11 +276,38 @@ pub fn install(cx: &mut App) -> gpui_tray::Result<()> {
                 else {
                     return;
                 };
+                let previous = cx.try_global::<TrayPhase>().copied().unwrap_or_default().0;
+                // Pause/resume have no dedicated `recording-*` event (unlike
+                // start/stop) — the Tauri shell doesn't notify on them
+                // either (see `notifications.rs`'s module doc). Detect the
+                // transition here, off the canonical phase machine.
+                if previous == RecordingPhase::Recording && snapshot.phase == RecordingPhase::Paused {
+                    notifications::maybe_notify(cx, notifications::Kind::Paused);
+                } else if previous == RecordingPhase::Paused && snapshot.phase == RecordingPhase::Recording {
+                    notifications::maybe_notify(cx, notifications::Kind::Resumed);
+                }
                 cx.set_global(TrayPhase(snapshot.phase));
                 refresh(cx);
             }
             "recording-started" => notifications::maybe_notify(cx, notifications::Kind::Started),
             "recording-stopped" => notifications::maybe_notify(cx, notifications::Kind::Stopped),
+            "meeting-refined" => {
+                notifications::maybe_notify(cx, notifications::Kind::TranscriptionComplete)
+            }
+            "recording-error" => {
+                if let Some(message) = event.decode::<String>() {
+                    notifications::maybe_notify(cx, notifications::Kind::SystemError(message));
+                }
+            }
+            "transcription-error" => {
+                let message = event
+                    .payload
+                    .get("userMessage")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "Transcription error".to_string());
+                notifications::maybe_notify(cx, notifications::Kind::SystemError(message));
+            }
             _ => {}
         }
     })

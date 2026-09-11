@@ -117,6 +117,7 @@ fn main() {
                         e
                     );
                 }
+                notifications::start_meeting_reminder_loop(cx);
             });
         })
         .detach();
