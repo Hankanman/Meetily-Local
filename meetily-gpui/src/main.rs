@@ -63,7 +63,7 @@ fn main() {
     }
 
     let app = gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(gpui_kit::assets::AllAssets)
         .with_quit_mode(QuitMode::Explicit);
 
     let db_for_shutdown = db.clone();
