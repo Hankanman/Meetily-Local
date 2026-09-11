@@ -80,6 +80,32 @@ pub fn copy_summary_text(
     format!("{header}{metadata}{summary_markdown}")
 }
 
+/// Picks the default summary template for the generate/regenerate picker:
+/// the stored default setting if it names a template that actually exists,
+/// else `"standard_meeting"` if that exists, else the first available
+/// template, else `"standard_meeting"` regardless (so a caller always gets
+/// *some* id to pass to summary generation even if the template list
+/// couldn't be loaded yet).
+pub fn resolve_default_template(configured: Option<&str>, available: &[String]) -> String {
+    if let Some(configured) = configured {
+        if available.iter().any(|id| id == configured) {
+            return configured.to_string();
+        }
+    }
+    if available.iter().any(|id| id == "standard_meeting") {
+        return "standard_meeting".to_string();
+    }
+    available.first().cloned().unwrap_or_else(|| "standard_meeting".to_string())
+}
+
+/// Whether the summary editor is open (`editing`) with text that differs
+/// from the last-saved markdown — the condition the navigation-away guard
+/// checks before letting the user leave the meeting page or switch to a
+/// different meeting.
+pub fn has_unsaved_summary_edits(editing: bool, editor_text: &str, saved_markdown: &str) -> bool {
+    editing && editor_text != saved_markdown
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +174,44 @@ mod tests {
         assert!(text.contains("**Date:**"));
         assert!(text.contains("**Copied on:**"));
         assert!(text.ends_with("---\n\n## Key Points\n\n- Shipped"));
+    }
+
+    #[test]
+    fn resolve_default_template_uses_configured_when_available() {
+        let available = vec!["standard_meeting".to_string(), "one_on_one".to_string()];
+        assert_eq!(resolve_default_template(Some("one_on_one"), &available), "one_on_one");
+    }
+
+    #[test]
+    fn resolve_default_template_falls_back_to_standard_meeting() {
+        let available = vec!["standard_meeting".to_string(), "one_on_one".to_string()];
+        assert_eq!(resolve_default_template(Some("missing"), &available), "standard_meeting");
+        assert_eq!(resolve_default_template(None, &available), "standard_meeting");
+    }
+
+    #[test]
+    fn resolve_default_template_falls_back_to_first_available() {
+        let available = vec!["one_on_one".to_string(), "retro".to_string()];
+        assert_eq!(resolve_default_template(None, &available), "one_on_one");
+    }
+
+    #[test]
+    fn resolve_default_template_falls_back_to_standard_meeting_id_when_nothing_loaded() {
+        assert_eq!(resolve_default_template(None, &[]), "standard_meeting");
+    }
+
+    #[test]
+    fn no_unsaved_edits_when_not_editing() {
+        assert!(!has_unsaved_summary_edits(false, "changed", "original"));
+    }
+
+    #[test]
+    fn no_unsaved_edits_when_text_matches_saved() {
+        assert!(!has_unsaved_summary_edits(true, "same", "same"));
+    }
+
+    #[test]
+    fn unsaved_edits_when_editing_and_text_differs() {
+        assert!(has_unsaved_summary_edits(true, "changed", "original"));
     }
 }

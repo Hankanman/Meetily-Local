@@ -82,6 +82,17 @@ pub struct MeetingView {
     saving_summary: bool,
     _poll_task: Option<Task<()>>,
 
+    /// Available summary templates (id, name, description), loaded once at
+    /// startup — same list `list_templates` returns for the Tauri UI.
+    templates: Vec<(String, String, String)>,
+    selected_template: String,
+    /// Set once the user manually cycles the template picker, so the async
+    /// default-setting fetch (`load_default_template`) doesn't clobber their
+    /// choice if it resolves afterwards.
+    template_user_selected: bool,
+    custom_prompt: Entity<InputState>,
+    show_custom_prompt: bool,
+
     retranscribe_open: bool,
     retranscribe_language: Entity<InputState>,
     /// Downloaded (`Available`) whisper models, fetched lazily the first
@@ -119,7 +130,13 @@ impl MeetingView {
             }
         })];
 
-        Self {
+        let templates = meetily_core::summary::templates::list_templates();
+        let template_ids: Vec<String> = templates.iter().map(|(id, _, _)| id.clone()).collect();
+        let selected_template = format::resolve_default_template(None, &template_ids);
+        let custom_prompt =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Custom instructions (optional)…"));
+
+        let view = Self {
             meeting_id: None,
             generation: 0,
             title: String::new(),
@@ -138,6 +155,11 @@ impl MeetingView {
             summary_editor,
             saving_summary: false,
             _poll_task: None,
+            templates,
+            selected_template,
+            template_user_selected: false,
+            custom_prompt,
+            show_custom_prompt: false,
             retranscribe_open: false,
             retranscribe_language,
             retranscribe_models: Vec::new(),
@@ -147,7 +169,42 @@ impl MeetingView {
             retranscribe_progress_message: String::new(),
             retranscribe_error: None,
             _subscriptions: subscriptions,
-        }
+        };
+        view.load_default_template(cx);
+        view
+    }
+
+    /// Fetch the stored default-template setting (if the Summary settings
+    /// page has written one — see `views/settings/summary.rs`) and apply it
+    /// as the picker's initial selection. A no-op if there's no pool yet or
+    /// no such setting; the picker already has a sane default from
+    /// `resolve_default_template(None, ..)`.
+    fn load_default_template(&self, cx: &mut Context<Self>) {
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let io = Io::global(cx);
+        let template_ids: Vec<String> = self.templates.iter().map(|(id, _, _)| id.clone()).collect();
+        cx.spawn(async move |this, cx| {
+            let configured = io
+                .spawn(async move {
+                    SettingsRepository::get_setting::<String>(&pool, "summary_default_template").await
+                })
+                .await;
+            let default = match configured {
+                Ok(Ok(Some(id))) => format::resolve_default_template(Some(&id), &template_ids),
+                _ => format::resolve_default_template(None, &template_ids),
+            };
+            let _ = this.update(cx, |this, cx| {
+                // Don't clobber a selection the user already made while this
+                // was in flight.
+                if !this.template_user_selected {
+                    this.selected_template = default;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Show the meeting with `id` (called by the shell on navigation).
@@ -348,6 +405,23 @@ impl MeetingView {
         .detach();
     }
 
+    fn cycle_template(&mut self, cx: &mut Context<Self>) {
+        if self.templates.is_empty() {
+            return;
+        }
+        let ids: Vec<String> = self.templates.iter().map(|(id, _, _)| id.clone()).collect();
+        let current = ids.iter().position(|id| *id == self.selected_template).unwrap_or(0);
+        let next = (current + 1) % ids.len();
+        self.selected_template = ids[next].clone();
+        self.template_user_selected = true;
+        cx.notify();
+    }
+
+    fn toggle_custom_prompt(&mut self, cx: &mut Context<Self>) {
+        self.show_custom_prompt = !self.show_custom_prompt;
+        cx.notify();
+    }
+
     fn generate_summary(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = self.meeting_id.clone() else {
             return;
@@ -363,6 +437,8 @@ impl MeetingView {
         let sink = AppServices::global(cx).sink.clone();
         let io = Io::global(cx);
         let generation = self.generation;
+        let template_id = self.selected_template.clone();
+        let custom_prompt = self.custom_prompt.read(cx).value().to_string();
 
         self.summary_phase = SummaryPhase::Generating;
         self.summary_has_content = false;
@@ -394,8 +470,8 @@ impl MeetingView {
                 text,
                 config.provider,
                 config.model,
-                String::new(),
-                "standard_meeting".to_string(),
+                custom_prompt,
+                template_id,
             ));
 
             let _ = this.update(cx, |this, cx| {
@@ -461,6 +537,31 @@ impl MeetingView {
     fn cancel_edit_summary(&mut self, cx: &mut Context<Self>) {
         self.editing_summary = false;
         cx.notify();
+    }
+
+    /// Whether the summary editor is open with edits that differ from the
+    /// saved markdown — the trigger for the navigation-away guard (see
+    /// [`format::has_unsaved_summary_edits`] and `shell::AppShell::guard_navigate`).
+    pub fn has_unsaved_summary_edits(&self, cx: &App) -> bool {
+        format::has_unsaved_summary_edits(
+            self.editing_summary,
+            &self.summary_editor.read(cx).text(),
+            &self.summary_markdown,
+        )
+    }
+
+    /// Discard the in-progress summary edit without saving. Used by the
+    /// "Discard" choice of the unsaved-changes dialog.
+    pub fn discard_summary_edits(&mut self, cx: &mut Context<Self>) {
+        self.cancel_edit_summary(cx);
+    }
+
+    /// Save the in-progress summary edit. Used by the "Save" choice of the
+    /// unsaved-changes dialog — fire-and-forget, like the regular Save
+    /// button: the save task keeps running (and updates this entity) even
+    /// after the shell has already navigated away, guarded by `generation`.
+    pub fn save_summary_and_leave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save_summary(window, cx);
     }
 
     fn save_summary(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1148,6 +1249,18 @@ impl MeetingView {
             SummaryPhase::Error(e) => (Some(e.clone()), "Regenerate summary", false),
         };
         let has_summary = self.summary_has_content;
+        let template_label = self
+            .templates
+            .iter()
+            .find(|(id, _, _)| *id == self.selected_template)
+            .map(|(_, name, _)| name.clone())
+            .unwrap_or_else(|| "Template".to_string());
+        let template_tooltip = self
+            .templates
+            .iter()
+            .find(|(id, _, _)| *id == self.selected_template)
+            .map(|(_, _, desc)| desc.clone())
+            .unwrap_or_default();
 
         v_flex()
             .size_full()
@@ -1195,6 +1308,27 @@ impl MeetingView {
                                         .on_click(cx.listener(|this, _, _, cx| this.start_edit_summary(cx))),
                                 )
                                 .child(
+                                    Button::new("cycle-summary-template")
+                                        .outline()
+                                        .icon(Lucide::FileText)
+                                        .label(template_label)
+                                        .tooltip(if template_tooltip.is_empty() {
+                                            "Summary template".to_string()
+                                        } else {
+                                            template_tooltip
+                                        })
+                                        .disabled(self.templates.is_empty() || matches!(self.summary_phase, SummaryPhase::Generating))
+                                        .on_click(cx.listener(|this, _, _, cx| this.cycle_template(cx))),
+                                )
+                                .child(
+                                    Button::new("toggle-custom-prompt")
+                                        .ghost()
+                                        .icon(Lucide::MessageSquare)
+                                        .tooltip("Custom instructions")
+                                        .disabled(matches!(self.summary_phase, SummaryPhase::Generating))
+                                        .on_click(cx.listener(|this, _, _, cx| this.toggle_custom_prompt(cx))),
+                                )
+                                .child(
                                     Button::new("generate-summary")
                                         .primary()
                                         .label(if has_summary && button_label == "Generate summary" {
@@ -1227,6 +1361,20 @@ impl MeetingView {
                             }),
                     ),
             )
+            .when(self.show_custom_prompt && !self.editing_summary, |this| {
+                this.child(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_center()
+                        .px_4()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(div().flex_1().min_w_0().child(Input::new(&self.custom_prompt)))
+                        .into_any_element(),
+                )
+            })
             .child(
                 div()
                     .id("summary-scroll")

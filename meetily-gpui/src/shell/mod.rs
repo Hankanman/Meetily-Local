@@ -4,9 +4,13 @@
 
 mod meeting_list;
 
+use std::time::Duration;
+
 use chrono::Local;
 use gpui_kit::component::{
-    ActiveTheme, IconName, TitleBar, h_flex, v_flex,
+    ActiveTheme, IconName, TitleBar, WindowExt as _, h_flex, v_flex,
+    button::{Button, ButtonVariants as _},
+    dialog::DialogFooter,
     input::{Input, InputEvent, InputState},
     sidebar::{Sidebar, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem},
 };
@@ -20,7 +24,7 @@ use crate::views::{
     action_items::ActionItemsView, import, meeting::MeetingView, recording::RecordingView,
     settings::SettingsView, speakers::SpeakersView,
 };
-use meeting_list::MeetingRow;
+use meeting_list::{ContentMatch, MeetingRow};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Route {
@@ -79,6 +83,15 @@ pub struct AppShell {
     meetings: Vec<MeetingRow>,
     meetings_loading: bool,
     search: Entity<InputState>,
+    /// Transcript-content search hits for the current query (debounced —
+    /// see [`Self::search_transcript_content`]), shown below the
+    /// title-filtered groups. Mirrors the React sidebar's "search inside
+    /// transcripts" behaviour, backed by the same
+    /// `TranscriptsRepository::search_transcripts` the Tauri
+    /// `transcript-search` command uses.
+    content_matches: Vec<ContentMatch>,
+    content_search_loading: bool,
+    _content_search_debounce: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -88,8 +101,9 @@ impl AppShell {
         cx.set_global(Refresher(cx.entity().downgrade()));
 
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search meetings…"));
-        let mut subscriptions = vec![cx.subscribe(&search, |_this, _, event, cx| {
+        let mut subscriptions = vec![cx.subscribe(&search, |this, _, event, cx| {
             if matches!(event, InputEvent::Change) {
+                this.search_transcript_content(cx);
                 cx.notify();
             }
         })];
@@ -111,6 +125,9 @@ impl AppShell {
             meetings: Vec::new(),
             meetings_loading: false,
             search,
+            content_matches: Vec::new(),
+            content_search_loading: false,
+            _content_search_debounce: None,
             _subscriptions: subscriptions,
         };
         shell.load_meetings(cx);
@@ -124,6 +141,75 @@ impl AppShell {
         }
         self.route = route;
         cx.notify();
+    }
+
+    /// Navigation entry point for in-shell UI (sidebar clicks): asks the
+    /// currently-shown page whether it's OK to leave before switching routes
+    /// — today only the Meeting page (an unsaved summary edit) cares, via
+    /// [`crate::views::meeting::MeetingView::has_unsaved_summary_edits`].
+    /// The free `navigate(route, cx)` function stays ungated for callers
+    /// without a `Window` (core-event handlers, post-delete redirects, …).
+    fn attempt_navigate(&mut self, route: Route, window: &mut Window, cx: &mut Context<Self>) {
+        if route == self.route {
+            return;
+        }
+        let leaving_meeting_with_unsaved_edits =
+            matches!(self.route, Route::Meeting(_)) && self.meeting.read(cx).has_unsaved_summary_edits(cx);
+        if leaving_meeting_with_unsaved_edits {
+            self.confirm_leave_meeting(route, window, cx);
+        } else {
+            self.navigate(route, cx);
+        }
+    }
+
+    /// "You have unsaved summary edits" dialog with Save / Discard / Cancel,
+    /// shown by [`Self::attempt_navigate`].
+    fn confirm_leave_meeting(&mut self, route: Route, window: &mut Window, cx: &mut Context<Self>) {
+        let shell = cx.entity();
+        let meeting = self.meeting.clone();
+
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let shell_discard = shell.clone();
+            let meeting_discard = meeting.clone();
+            let route_discard = route.clone();
+            let shell_save = shell.clone();
+            let meeting_save = meeting.clone();
+            let route_save = route.clone();
+
+            alert
+                .title("Unsaved summary edits")
+                .description("You have unsaved changes to this meeting's summary. Save them before leaving?")
+                .footer(
+                    DialogFooter::new()
+                        .justify_center()
+                        .child(
+                            Button::new("leave-cancel")
+                                .ghost()
+                                .label("Cancel")
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            Button::new("leave-discard")
+                                .danger()
+                                .label("Discard")
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    meeting_discard.update(cx, |m, cx| m.discard_summary_edits(cx));
+                                    shell_discard.update(cx, |shell, cx| shell.navigate(route_discard.clone(), cx));
+                                }),
+                        )
+                        .child(
+                            Button::new("leave-save")
+                                .primary()
+                                .label("Save")
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    meeting_save.update(cx, |m, cx| m.save_summary_and_leave(window, cx));
+                                    shell_save.update(cx, |shell, cx| shell.navigate(route_save.clone(), cx));
+                                }),
+                        ),
+                )
+        });
     }
 
     /// (Re)load the meeting list from the database, replacing what's shown.
@@ -166,6 +252,80 @@ impl AppShell {
         .detach();
     }
 
+    /// Debounced transcript-content search: 300ms after the last keystroke,
+    /// searches transcript text for the current query via the same core fn
+    /// (`TranscriptsRepository::search_transcripts`) the Tauri
+    /// `transcript-search` command uses, and stashes the results as
+    /// [`ContentMatch`]es for `render` to show below the title-filtered
+    /// groups. Superseded debounces are dropped by replacing
+    /// `_content_search_debounce`, which cancels the previous task.
+    fn search_transcript_content(&mut self, cx: &mut Context<Self>) {
+        let query = self.search.read(cx).value().to_string();
+        if query.trim().is_empty() {
+            self.content_matches.clear();
+            self.content_search_loading = false;
+            self._content_search_debounce = None;
+            cx.notify();
+            return;
+        }
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        self.content_search_loading = true;
+        let io = Io::global(cx);
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(300)).await;
+
+            // Bail if the query changed while we were waiting out the debounce.
+            let still_current = this
+                .update(cx, |this, cx| this.search.read(cx).value().to_string() == query)
+                .unwrap_or(false);
+            if !still_current {
+                return;
+            }
+
+            let query_for_search = query.clone();
+            let result = io
+                .spawn(async move {
+                    meetily_core::database::repositories::transcript::TranscriptsRepository::search_transcripts(
+                        &pool,
+                        &query_for_search,
+                    )
+                    .await
+                })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                this.content_search_loading = false;
+                if this.search.read(cx).value().to_string() != query {
+                    return;
+                }
+                match result {
+                    Ok(Ok(rows)) => {
+                        let rows = rows.into_iter().map(|r| ContentMatch {
+                            meeting_id: r.id,
+                            title: r.title,
+                            snippet: r.match_context,
+                        });
+                        let already_shown: Vec<String> =
+                            meeting_list::filter_by_title(&this.meetings, &query).into_iter().map(|m| m.id.clone()).collect();
+                        this.content_matches = meeting_list::build_content_matches(rows, &already_shown);
+                    }
+                    Ok(Err(e)) => {
+                        log::error!("Transcript content search failed: {e}");
+                        this.content_matches.clear();
+                    }
+                    Err(e) => {
+                        log::error!("Transcript content search task panicked: {e}");
+                        this.content_matches.clear();
+                    }
+                }
+                cx.notify();
+            });
+        });
+        self._content_search_debounce = Some(task);
+    }
+
     fn nav_item(
         &self,
         label: &'static str,
@@ -177,9 +337,9 @@ impl AppShell {
         SidebarMenuItem::new(label)
             .icon(icon)
             .active(self.route == route)
-            .on_click(move |_, _, cx| {
+            .on_click(move |_, window, cx| {
                 let route = route.clone();
-                this.update(cx, |shell, cx| shell.navigate(route, cx));
+                this.update(cx, |shell, cx| shell.attempt_navigate(route, window, cx));
             })
     }
 
@@ -195,9 +355,26 @@ impl AppShell {
         SidebarMenuItem::new(label)
             .icon(IconName::FileText)
             .active(active)
-            .on_click(move |_, _, cx| {
+            .on_click(move |_, window, cx| {
                 let id = id.clone();
-                this.update(cx, |shell, cx| shell.navigate(Route::Meeting(id), cx));
+                this.update(cx, |shell, cx| shell.attempt_navigate(Route::Meeting(id), window, cx));
+            })
+    }
+}
+
+impl AppShell {
+    fn content_match_item(&self, hit: &ContentMatch, cx: &mut Context<Self>) -> SidebarMenuItem {
+        let this = cx.entity();
+        let id = hit.meeting_id.clone();
+        let title = if hit.title.trim().is_empty() { "Untitled meeting".to_string() } else { hit.title.clone() };
+        let label = format!("{title} — {}", hit.snippet);
+        let active = matches!(&self.route, Route::Meeting(active_id) if *active_id == hit.meeting_id);
+        SidebarMenuItem::new(label)
+            .icon(IconName::Search)
+            .active(active)
+            .on_click(move |_, window, cx| {
+                let id = id.clone();
+                this.update(cx, |shell, cx| shell.attempt_navigate(Route::Meeting(id), window, cx));
             })
     }
 }
@@ -263,6 +440,17 @@ impl Render for AppShell {
                 )
                 .disable(true)])),
             );
+        }
+
+        if !query.trim().is_empty() && (self.content_search_loading || !self.content_matches.is_empty()) {
+            let items: Vec<SidebarMenuItem> = self.content_matches.iter().map(|m| self.content_match_item(m, cx)).collect();
+            let mut group = SidebarGroup::new("In transcripts");
+            group = if items.is_empty() {
+                group.child(SidebarMenu::new().children([SidebarMenuItem::new("Searching…").disable(true)]))
+            } else {
+                group.child(SidebarMenu::new().children(items))
+            };
+            sidebar = sidebar.child(group);
         }
 
         v_flex()
