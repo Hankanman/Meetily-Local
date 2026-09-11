@@ -2,48 +2,15 @@
 
 /experiments
 
-# dependencies
-/node_modules
 **/models
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
 *.mp4
-
-# testing
-/coverage
-/dist
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
 
 # misc
 .DS_Store
 *.pem
 
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
 # env files (can opt-in for committing if needed)
 .env
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
 
 # Audio files
 *.wav
@@ -55,15 +22,11 @@ docs/demo.gif
 
 meeting_minutes.db
 
-# Added by Task Master AI
 # Logs
 logs
 *.log
 dev-debug.log
-# Dependency directories
-node_modules/
-# Environment variables
-.env
+
 # Editor directories and files
 .idea
 .vscode
@@ -77,12 +40,11 @@ experiments/
 .claude/
 target/
 
-frontend/src-tauri/binaries/
 Cargo.lock
 
 # gpui-shell spike: standalone crate, own workspace, own Cargo.lock (committed)
 spikes/gpui-shell/target/
 !spikes/gpui-shell/Cargo.lock
 
-# GPUI AppImage built by ./build.sh gpui
+# AppImage built by ./build.sh
 /Parley-*.AppImage

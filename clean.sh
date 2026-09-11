@@ -1,36 +1,32 @@
 #!/usr/bin/env bash
-# Meetily — clean script: nuke build artifacts + JS deps for a fresh install.
+# Parley (meetily-gpui) — clean script: nuke build artifacts for a fresh build.
 #
 # Usage:
-#   ./clean.sh              # remove build artifacts + node_modules (default)
-#   ./clean.sh --build      # only build artifacts (keeps node_modules)
+#   ./clean.sh              # remove build artifacts (default)
 #   ./clean.sh --all        # also wipe whisper-rs-sys cargo cache (forces full whisper.cpp recompile next build)
 #   ./clean.sh -y / --yes   # skip confirmation
 #   ./clean.sh --help
 #
 # Does NOT touch:
 #   - User data (~/.local/share/com.meetily.ai/  — Whisper/Parakeet models, db, settings)
-#   - Backend Python venvs / state
-#   - The pnpm global store (other projects rely on it)
 #   - Your git working tree
 #
-# After running, do:  pnpm install -C frontend  (or just ./build.sh — it'll install)
+# After running, do:  ./build.sh
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SELF="$ROOT/$(basename "${BASH_SOURCE[0]}")"
 
-MODE=full   # full | build-only | all
+MODE=full   # full | all
 ASSUME_YES=0
 
 for arg in "$@"; do
     case "$arg" in
         --help|-h)
-            sed -n '2,17p' "$SELF" | sed 's/^# \{0,1\}//'
+            sed -n '2,13p' "$SELF" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
-        --build) MODE=build-only ;;
         --all)   MODE=all ;;
         --yes|-y) ASSUME_YES=1 ;;
         *)
@@ -43,17 +39,7 @@ done
 # ----- collect targets -----
 TARGETS=(
     "$ROOT/target"                          # cargo build output (workspace)
-    "$ROOT/frontend/.next"                  # next.js build cache
-    "$ROOT/frontend/out"                    # next.js static export
-    "$ROOT/frontend/dist"                   # any dist artifacts
 )
-
-if [[ "$MODE" != "build-only" ]]; then
-    TARGETS+=(
-        "$ROOT/frontend/node_modules"
-        "$ROOT/node_modules"                # if a root one ever appears
-    )
-fi
 
 if [[ "$MODE" == "all" ]]; then
     # Forces fresh whisper.cpp + CUDA compile next build (~10 min).
@@ -102,4 +88,4 @@ for path in "${EXISTING[@]}"; do
 done
 
 echo
-echo "Done. Next step: ./build.sh   (or: pnpm install -C frontend)"
+echo "Done. Next step: ./build.sh"
