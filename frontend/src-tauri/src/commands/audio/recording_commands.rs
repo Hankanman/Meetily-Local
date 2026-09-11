@@ -76,8 +76,9 @@ impl<R: Runtime> EventSink for TrayRefreshingSink<R> {
 }
 
 /// Build the Tauri-free context `recording_service` needs, from the live
-/// `AppHandle`.
-fn build_context<R: Runtime>(app: &AppHandle<R>) -> RecordingContext {
+/// `AppHandle`. `pub(crate)` so `lib.rs`'s `begin_shutdown_stop` can build
+/// the same tray-refreshing context for `bootstrap::finish_recording_for_exit`.
+pub(crate) fn build_context<R: Runtime>(app: &AppHandle<R>) -> RecordingContext {
     let sink: SharedEventSink = std::sync::Arc::new(TrayRefreshingSink { app: app.clone() });
     RecordingContext::new(sink, db_pool(app))
 }

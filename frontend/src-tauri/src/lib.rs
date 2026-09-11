@@ -24,7 +24,7 @@ use events::EventSinkExt;
 use log::{error as log_error, info as log_info};
 use notifications::commands::NotificationManagerState;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 use tokio::sync::RwLock;
 
 #[derive(Debug, Deserialize)]
@@ -280,202 +280,17 @@ async fn set_language_preference(language: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Diagnostic startup audit — logs the on-disk state of every model the app
-/// depends on. Pure logging, no behavioural side effects: useful for ruling
-/// out missing-model interactions when investigating crashes (especially the
-/// sherpa-onnx / silero-rs / ort coexistence issue tracked in retranscription).
-async fn audit_models_at_startup<R: Runtime>(app: &AppHandle<R>) {
-    log::info!("───────────────── [startup-audit] models report ─────────────────");
-
-    // ── Whisper (ASR) ─────────────────────────────────────────────────────
-    match commands::whisper_engine::commands::whisper_get_available_models().await {
-        Ok(models) if models.is_empty() => {
-            log::warn!("[startup-audit] whisper:  NO models in models directory");
-        }
-        Ok(models) => {
-            for m in &models {
-                log::info!(
-                    "[startup-audit] whisper:  {:<28} status={:?} size={}MB path={}",
-                    m.name,
-                    m.status,
-                    m.size_mb,
-                    m.path.display()
-                );
-            }
-            let n_available = models
-                .iter()
-                .filter(|m| matches!(m.status, whisper_engine::ModelStatus::Available))
-                .count();
-            log::info!(
-                "[startup-audit] whisper:  {} model(s) available, {} total catalog entries",
-                n_available,
-                models.len()
-            );
-        }
-        Err(e) => log::warn!("[startup-audit] whisper:  failed to enumerate models: {}", e),
-    }
-
-    // ── Speaker diarizer ──────────────────────────────────────────────────
-    let speaker_filename = speaker_diarization::model_filename();
-    match speaker_diarization::default_model_path() {
-        Some(path) => {
-            let size_mb = path
-                .metadata()
-                .map(|m| m.len() / (1024 * 1024))
-                .unwrap_or(0);
-            let ready = speaker_diarization::model::model_is_ready(&path);
-            let status = if ready { "PRESENT" } else { "MISSING" };
-            log::info!(
-                "[startup-audit] speaker:  {:<28} status={} size={}MB path={}",
-                speaker_filename,
-                status,
-                size_mb,
-                path.display()
-            );
-        }
-        None => log::warn!("[startup-audit] speaker:  models directory not configured"),
-    }
-
-    // ── VAD (silero via sherpa-onnx) ──────────────────────────────────────
-    match speaker_diarization::model::silero_vad_path() {
-        Some(path) => {
-            let size_mb = path
-                .metadata()
-                .map(|m| m.len() / (1024 * 1024))
-                .unwrap_or(0);
-            let ready = speaker_diarization::model::model_is_ready(&path);
-            let status = if ready { "PRESENT" } else { "MISSING" };
-            log::info!(
-                "[startup-audit] vad:      silero_vad.onnx              status={} size={}MB path={}",
-                status,
-                size_mb,
-                path.display()
-            );
-        }
-        None => log::warn!("[startup-audit] vad:      models directory not configured"),
-    }
-
-    // ── Summary (built-in AI) ─────────────────────────────────────────────
-    match commands::summary::summary_engine::commands::builtin_ai_get_available_summary_model(
-        app.clone(),
-        app.state(),
-    )
-    .await
-    {
-        Ok(Some(name)) => {
-            log::info!("[startup-audit] summary:  {} (built-in AI, available)", name);
-        }
-        Ok(None) => {
-            log::warn!(
-                "[startup-audit] summary:  NO built-in AI model available (gemma3:1b/4b not downloaded)"
-            );
-        }
-        Err(e) => log::warn!("[startup-audit] summary:  status check failed: {}", e),
-    }
-
-    log::info!("─────────────────────────────────────────────────────────────────");
-}
-
-/// Background fetch of any built-in models that are missing on disk. Today
-/// fetches:
-/// - `silero_vad.onnx` — required for VAD (the audio pipeline can't function
-///   without it; this is the model sherpa-onnx's `VoiceActivityDetector` uses).
-/// - The speaker diarization model — required for "Speaker N" attribution
-///   on system audio; without it, system transcripts fall back to the
-///   "Speaker" placeholder.
-///
-/// Both are tiny (~2.3MB + ~28MB). Non-fatal: a failed download just leaves
-/// the corresponding feature degraded.
-async fn ensure_required_models_downloaded<R: Runtime>(app: &AppHandle<R>) {
-    // ── silero VAD ──
-    if let Some(silero_path) = speaker_diarization::model::silero_vad_path() {
-        if !speaker_diarization::model::model_is_ready(&silero_path) {
-            let url = speaker_diarization::model::silero_vad_download_url();
-            log::info!(
-                "[startup-download] silero-vad missing — fetching {} (~2.3MB, one-time)",
-                url
-            );
-            match utils::download_file_to(url, &silero_path).await {
-                Ok(()) => log::info!(
-                    "[startup-download] silero-vad downloaded → {}",
-                    silero_path.display()
-                ),
-                Err(e) => log::warn!(
-                    "[startup-download] silero-vad download failed: {} \
-                     (VAD disabled until next launch — recording / retranscription will error)",
-                    e
-                ),
-            }
-        }
-    }
-
-    // Deliberately NOT fetched here: the pyannote segmentation model (offline
-    // / accurate diarization on Import). It's only needed when a user opts
-    // into `offline_diarization_on_import` and imports a file worth running
-    // it on, so the ~5.7MB download is deferred to first use via
-    // `commands::speaker_diarization::commands::ensure_pyannote_segmentation_model`,
-    // called from `audio::import` — not paid by every install/launch.
-
-    // ── Speaker embedding ──
-    let Some(speaker_path) = speaker_diarization::default_model_path() else {
-        log::warn!(
-            "[startup-download] speaker models dir not configured; cannot fetch speaker model"
-        );
-        return;
-    };
-
-    if speaker_diarization::model::model_is_ready(&speaker_path) {
-        log::debug!(
-            "[startup-download] speaker model already present at {}",
-            speaker_path.display()
-        );
-    } else {
-        log::info!(
-            "[startup-download] speaker model missing — fetching {} (~28MB, one-time)",
-            speaker_diarization::model_filename()
-        );
-        match commands::speaker_diarization::commands::speaker_model_download(app.clone()).await {
-            Ok(()) => log::info!(
-                "[startup-download] speaker model downloaded → {}",
-                speaker_path.display()
-            ),
-            Err(e) => {
-                log::warn!(
-                    "[startup-download] speaker model download failed: {} \
-                     (speaker N attribution disabled)",
-                    e
-                );
-                return;
-            }
-        }
-    }
-
-    // Now that both models are on disk, build the diarizer and pin it in
-    // the global slot so the first recording / retranscription doesn't
-    // pay the load cost.
-    let pool = app
-        .try_state::<state::AppState>()
-        .map(|s| s.db_manager.pool().clone());
-    match commands::speaker_diarization::commands::build_diarizer(pool.as_ref()).await {
-        Ok(Some(diarizer)) => {
-            speaker_diarization::set_current_diarizer(Some(diarizer));
-            log::info!("✅ [startup-download] speaker diarizer initialized");
-        }
-        Ok(None) => log::warn!(
-            "[startup-download] speaker model present but diarizer build returned None"
-        ),
-        Err(e) => log::warn!("[startup-download] diarizer build failed: {}", e),
-    }
-}
-
 /// Initialize the database on app startup: handles first-launch detection
 /// and conditional setup. Thin Tauri shell around
-/// `database::setup::prepare_database_on_startup` (Tauri-free) — this is
-/// just the part that manages the resulting `DatabaseManager` as app state
-/// or, on a first launch, schedules the delayed `first-launch-detected`
-/// event once the window and its React listeners are ready.
-async fn initialize_database_on_startup<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    match database::setup::prepare_database_on_startup().await? {
+/// `meetily_core::bootstrap::prepare_database` (Tauri-free) — this is just
+/// the part that manages the resulting `DatabaseManager` as app state (and
+/// returns a clone of its pool, for `bootstrap::spawn_background_init`), or,
+/// on a first launch, schedules the delayed `first-launch-detected` event
+/// once the window and its React listeners are ready.
+async fn initialize_database_on_startup<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Option<sqlx::SqlitePool>, String> {
+    match meetily_core::bootstrap::prepare_database().await? {
         database::setup::StartupOutcome::FirstLaunch => {
             // Delay event emission to ensure window is ready and React listeners are registered
             let app_handle = app.clone();
@@ -486,12 +301,14 @@ async fn initialize_database_on_startup<R: Runtime>(app: &AppHandle<R>) -> Resul
                     .expect("Failed to emit first-launch-detected event");
                 log_info!("Emitted first-launch-detected after delay");
             });
+            Ok(None)
         }
         database::setup::StartupOutcome::Initialized(db_manager) => {
+            let pool = db_manager.pool().clone();
             app.manage(state::AppState { db_manager });
+            Ok(Some(pool))
         }
     }
-    Ok(())
 }
 
 /// Guards against handling a close/exit request more than once (issue #30):
@@ -508,8 +325,9 @@ static SHUTDOWN_STOP_STARTED: std::sync::atomic::AtomicBool =
 /// flushed to disk. This intercepts the close/exit request, prevents it,
 /// runs the exact same full `stop_recording` flow a user-initiated Stop
 /// runs (only when a recording is actually active or a stop is already
-/// draining one), and only then asks the app to exit for real — which lets
-/// the existing `RunEvent::Exit` cleanup above run unchanged.
+/// draining one, via `bootstrap::finish_recording_for_exit`), and only then
+/// asks the app to exit for real — which lets the existing `RunEvent::Exit`
+/// cleanup above run unchanged.
 fn begin_shutdown_stop<R: Runtime>(app_handle: &AppHandle<R>) {
     if SHUTDOWN_STOP_STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         // Already stopping/exiting from a previous close/exit request.
@@ -518,40 +336,11 @@ fn begin_shutdown_stop<R: Runtime>(app_handle: &AppHandle<R>) {
 
     let app = app_handle.clone();
     tauri::async_runtime::spawn(async move {
-        let recording_active =
-            commands::audio::recording_commands::is_recording().await || commands::audio::recording_commands::is_stop_in_progress();
-
-        if recording_active {
-            log::info!("App close requested mid-recording — finishing recording before exit...");
-            let _ = app.emit(
-                "recording-shutdown-progress",
-                serde_json::json!({
-                    "stage": "app_closing",
-                    "message": "Finishing recording before closing...",
-                    "progress": 0
-                }),
-            );
-
-            let save_path = app
-                .path()
-                .app_data_dir()
-                .map(|dir| {
-                    let timestamp = chrono::Local::now().format("%Y-%m-%dT%H-%M-%S").to_string();
-                    dir.join(format!("recording-{}.wav", timestamp))
-                        .to_string_lossy()
-                        .to_string()
-                })
-                .unwrap_or_else(|_| "recording.wav".to_string());
-
-            if let Err(e) = commands::audio::recording_commands::stop_recording(
-                app.clone(),
-                commands::audio::recording_commands::RecordingArgs { save_path },
-            )
-            .await
-            {
-                log::error!("Failed to stop recording during app close: {}", e);
-            }
-        }
+        // Same context a live `stop_recording` call builds (event sink +
+        // DB pool), including the tray-refreshing sink wrapper — see
+        // `commands::audio::recording_commands::build_context`.
+        let ctx = commands::audio::recording_commands::build_context(&app);
+        meetily_core::bootstrap::finish_recording_for_exit(ctx).await;
 
         app.exit(0);
     });
@@ -590,93 +379,37 @@ pub fn run() {
             // it reads consent and persists settings, so starting it before the
             // DB is ready raced and logged a spurious init error every launch.
 
-            // Set models directory to use app_data_dir (unified storage location)
-            commands::whisper_engine::commands::set_models_directory();
+            // Shared, Tauri-free path setup: whisper models dir, speaker
+            // diarization models dir, custom summary templates dir.
+            meetily_core::bootstrap::init_paths();
 
-            // Initialize Whisper engine on startup
-            tauri::async_runtime::spawn(async {
-                if let Err(e) = commands::whisper_engine::commands::whisper_init().await {
-                    log::error!("Failed to initialize Whisper engine on startup: {}", e);
-                }
-            });
-
-            // Set speaker-diarization models directory (separate from ASR models
-            // so the speaker model can be downloaded independently).
-            speaker_diarization::model::set_models_dir();
-
-            // Pre-warm the speaker diarizer at startup (if model is on disk)
-            // so the first recording / retranscription doesn't pay the model
-            // load latency. Async + non-blocking. Stores in the global slot;
-            // recording start replaces it with a fresh instance to reset
-            // cluster IDs per session.
-            let app_handle_for_diarizer = _app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let pool = app_handle_for_diarizer
-                    .try_state::<state::AppState>()
-                    .map(|s| s.db_manager.pool().clone());
-                match commands::speaker_diarization::commands::build_diarizer(pool.as_ref()).await {
-                    Ok(Some(diarizer)) => {
-                        speaker_diarization::set_current_diarizer(Some(diarizer));
-                        log::info!("✅ Speaker diarizer pre-initialized at startup");
-                    }
-                    Ok(None) => log::info!(
-                        "Speaker diarizer pre-init skipped (model not downloaded yet)"
-                    ),
-                    Err(e) => log::warn!("Speaker diarizer pre-init failed: {}", e),
-                }
-            });
-
-            // Initialize ModelManager for summary engine (async, non-blocking)
-            let model_manager_state = _app
-                .state::<summary::summary_engine::ModelManagerState>()
-                .0
-                .clone();
-            tauri::async_runtime::spawn(async move {
-                match commands::summary::summary_engine::commands::init_model_manager_at_startup(
-                    &model_manager_state,
-                )
-                .await
-                {
-                    Ok(_) => log::info!("ModelManager initialized successfully at startup"),
-                    Err(e) => {
-                        log::warn!("Failed to initialize ModelManager at startup: {}", e);
-                        log::warn!("ModelManager will be lazy-initialized on first use");
-                    }
-                }
-            });
-
-            // Startup model audit — logs the on-disk state of every model the
-            // app uses (Whisper / speaker diarizer / summary builtin-AI / VAD).
-            // Pure diagnostic, non-fatal: helps rule out missing-model side
-            // effects when investigating crashes. Runs after the engines have
-            // had a moment to scan their directories.
-            let app_handle_for_audit = _app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                // Small delay so the other startup tasks have logged first
-                // and the audit shows the steady-state, not the racing init.
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                audit_models_at_startup(&app_handle_for_audit).await;
-            });
-
-            // Auto-download missing built-in models. Only the speaker diarization
-            // model is fetched here today — Whisper is user-selectable so we leave
-            // it to onboarding / settings, and summary models are picked by the
-            // existing built-in AI flow. The speaker model is small (~28MB) and
-            // diarization won't work without it, so silent background fetch is
-            // the right UX. Failures are non-fatal (the diarizer just stays
-            // disabled and labels fall back to the "Speaker" placeholder).
-            let app_handle_for_dl = _app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                // Run after the audit so its log block stays unbroken.
-                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-                ensure_required_models_downloaded(&app_handle_for_dl).await;
-            });
-
-            // Initialize database (handles first launch detection and conditional setup)
-            tauri::async_runtime::block_on(async {
+            // Initialize database (handles first launch detection and
+            // conditional setup). Deliberately runs *before* the background
+            // init spawned below: that init includes the speaker-diarizer
+            // pre-warm, which needs the real DB pool to load voice profiles
+            // — spawning it before the DB existed used to race and log
+            // "DB pool unavailable; cannot load voice profiles" on every
+            // normal (non-first) launch.
+            let pool = tauri::async_runtime::block_on(async {
                 initialize_database_on_startup(&_app.handle()).await
             })
             .expect("Failed to initialize database");
+
+            // Spawn all non-blocking background startup work (whisper init,
+            // speaker diarizer pre-warm, summary ModelManager init, model
+            // audit log, model downloads) now that the DB pool (if any, i.e.
+            // not a first launch) is known. Wrapped in
+            // `tauri::async_runtime::spawn` so `spawn_background_init`'s
+            // internal `tokio::spawn` calls run inside tauri's tokio
+            // runtime — `setup()` itself isn't guaranteed to be.
+            let model_manager_slot = _app
+                .state::<summary::summary_engine::ModelManagerState>()
+                .0
+                .clone();
+            let sink = tauri_events::shared_sink(&_app.handle());
+            tauri::async_runtime::spawn(async move {
+                meetily_core::bootstrap::spawn_background_init(sink, pool, model_manager_slot);
+            });
 
             // Initialize notification system now that the database is ready.
             // (Consent lookup + settings persistence both need the DB pool; the
@@ -709,16 +442,6 @@ pub fn run() {
                     }
                 }
             });
-
-            // User-editable custom templates live under the same app-data
-            // root as every other user-data path. Built-in templates are
-            // embedded in the binary (see `summary::templates::defaults`) so
-            // no resource-dir lookup is needed here.
-            if let Ok(app_data_dir) = crate::paths::app_data_dir() {
-                summary::templates::set_custom_templates_dir(app_data_dir.join("templates"));
-            } else {
-                log::warn!("Failed to resolve app data directory for custom templates");
-            }
 
             Ok(())
         })
@@ -929,54 +652,11 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 log::info!("Application exiting, cleaning up resources...");
                 tauri::async_runtime::block_on(async {
-                    // Clean up database connection and checkpoint WAL
-                    if let Some(app_state) = _app_handle.try_state::<state::AppState>() {
-                        log::info!("Starting database cleanup...");
-                        if let Err(e) = app_state.db_manager.cleanup().await {
-                            log::error!("Failed to cleanup database: {}", e);
-                        } else {
-                            log::info!("Database cleanup completed successfully");
-                        }
-                    } else {
-                        log::warn!(
-                            "AppState not available for database cleanup (likely first launch)"
-                        );
-                    }
-
-                    // Clean up sidecar
-                    log::info!("Cleaning up sidecar...");
-                    if let Err(e) = summary::summary_engine::force_shutdown_sidecar().await {
-                        log::error!("Failed to force shutdown sidecar: {}", e);
-                    }
-
-                    // Unload the Whisper model (see #47 — it otherwise stays
-                    // resident across recordings, and would leak until
-                    // process death). Best-effort and bounded: this happens
-                    // before `_exit` below, so it's safe (unlike the
-                    // GPU-driver-teardown hazard `_exit` itself works around,
-                    // this runs while the process is still fully alive), but
-                    // it must never hang app shutdown if the engine is
-                    // wedged.
-                    let engine_clone = {
-                        let engine_guard = commands::whisper_engine::commands::WHISPER_ENGINE
-                            .lock()
-                            .unwrap();
-                        engine_guard.as_ref().cloned()
-                    };
-                    if let Some(engine) = engine_clone {
-                        match tokio::time::timeout(
-                            tokio::time::Duration::from_secs(3),
-                            engine.unload_model(),
-                        )
-                        .await
-                        {
-                            Ok(true) => log::info!("Whisper model unloaded on exit"),
-                            Ok(false) => log::debug!("No Whisper model was loaded on exit"),
-                            Err(_) => log::warn!(
-                                "Whisper model unload timed out on exit; continuing shutdown"
-                            ),
-                        }
-                    }
+                    let app_state = _app_handle.try_state::<state::AppState>();
+                    meetily_core::bootstrap::shutdown(
+                        app_state.as_deref().map(|s| &s.db_manager),
+                    )
+                    .await;
                 });
                 log::info!("Application cleanup complete");
 
