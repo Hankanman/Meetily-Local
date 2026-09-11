@@ -66,6 +66,37 @@ all in-process via `invoke()` commands and emitted events.
    Ollama (local or remote) / Claude / Groq / OpenRouter / custom OpenAI
 ```
 
+### Crate Layout: Tauri-free core + thin shell
+
+The Rust side is split so the UI shell can be replaced (a GPUI app is
+planned alongside the Tauri one):
+
+- **`meetily-core/`** (lib `meetily_core`) — everything that isn't UI glue:
+  audio pipeline + PipeWire capture, transcription, recording orchestration
+  (`audio/recording_service.rs`), SQLite repositories + `migrations/`,
+  summaries/LLM providers + embedded `templates/`, model management, speaker
+  diarization. **It must never depend on `tauri`** — check with
+  `cargo tree -p meetily-core | grep -i tauri` (must be empty).
+- **`frontend/src-tauri/`** (package `meetily`, lib `app_lib`) — the Tauri
+  shell only: `lib.rs` setup + `generate_handler!`, `tray.rs`,
+  `notifications/`, `api/`, and every `#[tauri::command]` under
+  `src/commands/<domain>/`. It re-exports the core's top-level modules
+  (`crate::audio`, `crate::summary`, …) so shell code uses the same paths.
+
+Core → UI communication goes through the `events::EventSink` trait
+(`emit_event(name, &payload)`), never an `AppHandle`. The shell wraps its
+`AppHandle` in `tauri_events::TauriSink` / `tauri_events::shared_sink(&app)`;
+tests use `NullSink` / `RecordingSink`. Core resolves directories with
+`paths::app_data_dir()` (`~/.local/share/com.meetily.ai`) and takes the DB as
+a `SqlitePool` / `Option<SqlitePool>` argument instead of reading Tauri
+managed state. Recording persistence subscribes to finished segments on the
+in-process `audio::transcript_bus`, not to UI events. Event names and
+payloads are the frontend contract — don't change them when refactoring.
+
+GPU features (`cuda`, `vulkan`, `hipblas`, `openblas`, `openmp`) live on
+`meetily-core`; the shell crate forwards the same feature names, so
+`./dev.sh cuda` etc. are unchanged.
+
 ### Audio Processing Pipeline (Critical Understanding)
 
 The pipeline runs as one tokio task fed by two PipeWire capture streams:
@@ -74,7 +105,7 @@ The pipeline runs as one tokio task fed by two PipeWire capture streams:
 Mic stream (48 kHz)          System stream (48 kHz, sink monitor)
       ↓ raw mono chunks             ↓ raw mono chunks
 ┌────────────────────────────────────────────────────────────────┐
-│  AudioPipeline::run  (frontend/src-tauri/src/audio/pipeline.rs) │
+│  AudioPipeline::run  (meetily-core/src/audio/pipeline.rs) │
 │   1. AudioMixerRingBuffer aligns both sources by absolute      │
 │      sample position into 50 ms windows                        │
 │   2. AEC3 (aec.rs) subtracts the system window from the mic    │
@@ -102,7 +133,7 @@ least 1 s before decoding.
 **Context**: Linux audio input was rewritten to talk to PipeWire directly, replacing the previous cpal-ALSA + `pactl` + `PIPEWIRE_NODE`-env-var stack. See the module doc comment at the top of `audio/pw/mod.rs` for the rationale.
 
 ```
-audio/
+meetily-core/src/audio/
 ├── devices/                    # Device model + PipeWire-backed discovery
 │   ├── discovery.rs           # list_audio_devices, trigger_audio_permission
 │   └── configuration.rs       # AudioDevice, DeviceType
@@ -111,7 +142,7 @@ audio/
 ├── device_detection.rs         # Bluetooth vs wired classification for adaptive buffering
 ├── hardware_detector.rs        # GPU/perf tier detection
 ├── recording_manager.rs        # High-level recording coordination
-├── recording_commands.rs       # Tauri command interface
+├── recording_service.rs        # Tauri-free start/stop/pause orchestration (commands: src-tauri/src/commands/audio/)
 ├── recording_saver.rs          # Audio file writing
 ├── import.rs                   # Import external audio files as new meetings
 ├── retranscription.rs          # Re-process stored audio with different settings
@@ -172,7 +203,7 @@ await listen<TranscriptUpdate>('transcript-update', (event) => {
 - **Development**: `frontend/models/`
 - **Production (Linux)**: `~/.local/share/com.meetily.ai/models/`
 
-**Model Loading** (frontend/src-tauri/src/whisper_engine/whisper_engine.rs):
+**Model Loading** (meetily-core/src/whisper_engine/whisper_engine.rs):
 ```rust
 pub async fn load_model(&self, model_name: &str) -> Result<()> {
     // Automatically detects GPU capabilities (CUDA/Vulkan)
@@ -257,12 +288,16 @@ only as a per-viewer write-ahead cache for the live transcript list.
 
 ### Adding a New Tauri Command
 
-1. Define command in `src/lib.rs`:
+1. Put the logic in `meetily-core` as a plain function (taking a
+   `SharedEventSink` / `SqlitePool` if it emits or touches the DB), then add a
+   thin wrapper in `frontend/src-tauri/src/commands/<domain>/`:
    ```rust
    #[tauri::command]
-   async fn my_command(arg: String) -> Result<String, String> { /* ... */ }
+   pub async fn my_command(arg: String) -> Result<String, String> {
+       meetily_core::my_module::do_thing(arg).await.map_err(|e| e.to_string())
+   }
    ```
-2. Register in `tauri::Builder`:
+2. Register in `tauri::Builder` (`frontend/src-tauri/src/lib.rs`):
    ```rust
    .invoke_handler(tauri::generate_handler![
        start_recording,
@@ -276,7 +311,7 @@ only as a per-viewer write-ahead cache for the live transcript list.
 
 ### Modifying Audio Pipeline Behavior
 
-**Location**: `frontend/src-tauri/src/audio/pipeline.rs`
+**Location**: `meetily-core/src/audio/pipeline.rs`
 
 Key components:
 - `AudioCapture`: minimal real-time capture callback (downmix + forward only)
@@ -289,7 +324,7 @@ Key components:
 **Testing Audio Changes**:
 ```bash
 # Enable verbose audio logging
-RUST_LOG=app_lib::audio=debug ./dev.sh
+RUST_LOG=meetily_core::audio=debug ./dev.sh
 
 # Monitor audio metrics in real-time
 # Check Developer Console in the app (Ctrl+Shift+I)
@@ -297,10 +332,11 @@ RUST_LOG=app_lib::audio=debug ./dev.sh
 
 ### Adding a Tauri Command (Rust → frontend)
 
-Define in any module under `src-tauri/src/api/` or similar, register in
-`lib.rs`'s `generate_handler![]` block, call from JS via `invoke()`. SQLite
-persistence goes through sqlx; see `database/repositories/*.rs` for the
-existing repository patterns.
+Command wrappers live under `frontend/src-tauri/src/commands/<domain>/` (or
+`src/api/`), register in `lib.rs`'s `generate_handler![]` block, call from JS
+via `invoke()`. SQLite persistence goes through sqlx; see
+`meetily-core/src/database/repositories/*.rs` for the existing repository
+patterns.
 
 ## Testing and Debugging
 
@@ -388,17 +424,17 @@ Linux is the only supported platform (see [Repository-Specific Conventions](#rep
 
 **Core Coordination**:
 - [frontend/src-tauri/src/lib.rs](frontend/src-tauri/src/lib.rs) - Main Tauri entry point, command registration
-- [frontend/src-tauri/src/audio/mod.rs](frontend/src-tauri/src/audio/mod.rs) - Audio module exports
+- [meetily-core/src/audio/mod.rs](meetily-core/src/audio/mod.rs) - Audio module exports
 - [frontend/src-tauri/src/api/api.rs](frontend/src-tauri/src/api/api.rs) - Tauri command handlers (meetings, summaries, transcripts)
 
 **Audio System**:
-- [frontend/src-tauri/src/audio/recording_manager.rs](frontend/src-tauri/src/audio/recording_manager.rs) - Recording orchestration
-- [frontend/src-tauri/src/audio/pipeline.rs](frontend/src-tauri/src/audio/pipeline.rs) - Audio mixing and VAD
-- [frontend/src-tauri/src/audio/recording_saver.rs](frontend/src-tauri/src/audio/recording_saver.rs) - Audio file writing
+- [meetily-core/src/audio/recording_manager.rs](meetily-core/src/audio/recording_manager.rs) - Recording orchestration
+- [meetily-core/src/audio/pipeline.rs](meetily-core/src/audio/pipeline.rs) - Audio mixing and VAD
+- [meetily-core/src/audio/recording_saver.rs](meetily-core/src/audio/recording_saver.rs) - Audio file writing
 
 **UI Components**:
 - [frontend/src/app/page.tsx](frontend/src/app/page.tsx) - Main recording interface
 - [frontend/src/components/Sidebar/SidebarProvider.tsx](frontend/src/components/Sidebar/SidebarProvider.tsx) - Global state management
 
 **Whisper Integration**:
-- [frontend/src-tauri/src/whisper_engine/whisper_engine.rs](frontend/src-tauri/src/whisper_engine/whisper_engine.rs) - Whisper model management and transcription
+- [meetily-core/src/whisper_engine/whisper_engine.rs](meetily-core/src/whisper_engine/whisper_engine.rs) - Whisper model management and transcription
