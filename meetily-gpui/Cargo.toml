@@ -38,6 +38,10 @@ gpui-tray = { git = "https://github.com/domenkozar/gpui-tray", rev = "dfcd45b4bd
 # Desktop notifications (recording started/stopped) via D-Bus.
 notify-rust = "4"
 
+# Rich-text summary editor (WYSIWYG markdown) for the Meeting page's summary
+# edit toggle, on the same gpui-pre line as gpui-kit.
+zorite-editor = "0.10"
+
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
