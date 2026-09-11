@@ -10,6 +10,7 @@
 //! must keep the JSON field names identical.
 
 use gpui_kit::component::{
+    button::Button,
     setting::{SettingField, SettingGroup, SettingItem, SettingPage},
     IconName,
 };
@@ -17,6 +18,7 @@ use gpui_kit::*;
 
 use super::state::{NotificationPreferences, NotificationSettings, SettingsCache};
 use super::SettingsView;
+use crate::notifications;
 
 pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> SettingPage {
     let _ = cx;
@@ -115,6 +117,17 @@ pub fn page(view: &Entity<SettingsView>, cx: &mut Context<SettingsView>) -> Sett
                     |p, v| p.show_system_errors = v,
                 ),
             ]),
+        )
+        .group(
+            SettingGroup::new().title("Test").items(vec![SettingItem::render(
+                |_options, _window, _cx| {
+                    Button::new("send-test-notification")
+                        .outline()
+                        .label("Send test notification")
+                        .on_click(|_, _, cx| notifications::send_test_notification(cx))
+                        .into_any_element()
+                },
+            )]),
         )
 }
 

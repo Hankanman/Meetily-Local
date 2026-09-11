@@ -46,9 +46,12 @@ setup_common_env() {
     #   - app_lib at info  → our own logs visible
     #   - whisper_rs at warn → drop the per-decoder beam-search trace noise
     #                          (whisper.cpp emits these at INFO, very chatty)
+    #   - zbus / tracing / wgpu / naga at warn → D-Bus (tray, portals) and
+    #                          GPU-backend chatter the GPUI shell would
+    #                          otherwise log at INFO on every tray poll
     #   - everything else at info
     # Override by exporting RUST_LOG before invoking dev.sh.
-    export RUST_LOG="${RUST_LOG:-info,whisper_rs=warn}"
+    export RUST_LOG="${RUST_LOG:-info,whisper_rs=warn,zbus=warn,tracing=warn,wgpu_hal=warn,wgpu_core=warn,naga=warn}"
 
     if command -v sccache >/dev/null 2>&1; then
         export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
@@ -158,18 +161,21 @@ run_gpui_dev() {
 
     setup_dev_cuda_env "$mode"
 
-    # llama-helper sidecar: meetily-core falls back to
-    # target/{release,debug}/llama-helper in dev builds (via
-    # CARGO_MANIFEST_DIR), so build it once up front with the matching GPU
-    # feature if it's missing or stale isn't worth detecting here — just
-    # make sure a debug build exists.
+    # llama-helper sidecar, built in *release* even for dev: a debug
+    # llama.cpp is far too slow for real summaries, and this reuses the same
+    # cached build `./build.sh` produces. Its CUDA objects must be
+    # position-independent or rust-lld refuses to link them (same export as
+    # build.sh). Note llama-cpp-sys doesn't rebuild when this env var
+    # changes, so a stale non-PIC build needs `cargo clean -p llama-cpp-sys-2`.
+    export CMAKE_POSITION_INDEPENDENT_CODE="${CMAKE_POSITION_INDEPENDENT_CODE:-ON}"
     local helper_features=()
     case "$mode" in
         cuda)   helper_features=(--features cuda) ;;
         vulkan) helper_features=(--features vulkan) ;;
     esac
-    echo "==> Building llama-helper sidecar (${mode}, debug)"
-    ( cd "$ROOT/llama-helper" && cargo build "${helper_features[@]}" )
+    echo "==> Building llama-helper sidecar (${mode}, release)"
+    ( cd "$ROOT/llama-helper" && cargo build --release "${helper_features[@]}" )
+    export MEETILY_LLAMA_HELPER="${MEETILY_LLAMA_HELPER:-$ROOT/target/release/llama-helper}"
 
     local gpui_features=()
     case "$mode" in

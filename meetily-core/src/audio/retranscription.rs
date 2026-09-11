@@ -405,6 +405,16 @@ async fn run_retranscription(
     // Create transcript segments with proper timestamps from VAD
     let segments = create_transcript_segments(&all_transcripts);
 
+    // Never replace a meeting's transcript with nothing. If the batch pass
+    // produced no text (VAD found no speech, or Whisper returned only
+    // silence/hallucination-filtered output), the existing transcript — often
+    // the live one, for auto-refine — is strictly better than an empty one.
+    if segments.is_empty() {
+        return Err(anyhow!(
+            "Retranscription produced no transcript text; the existing transcript was kept"
+        ));
+    }
+
     // Save to database
     let pool = pool.ok_or_else(|| anyhow!("App state not available"))?;
 

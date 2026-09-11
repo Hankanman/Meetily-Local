@@ -13,7 +13,7 @@ mod logic;
 use std::path::PathBuf;
 
 use gpui_kit::component::{
-    ActiveTheme, Disableable as _, IndexPath, Root, StyledExt as _, WindowExt as _, h_flex,
+    ActiveTheme, Disableable as _, IndexPath, StyledExt as _, WindowExt as _, h_flex,
     v_flex,
     button::{Button, ButtonVariants as _},
     dialog::Dialog,
@@ -230,7 +230,7 @@ impl ImportState {
     fn finish(&mut self, result: ImportResult, cx: &mut Context<Self>) {
         self.status = Status::Idle;
         self.progress = None;
-        with_main_window(cx, |_, window, cx| window.close_dialog(cx));
+        with_main_window(cx, |window, cx| window.close_dialog(cx));
         shell::refresh_meetings(cx);
         shell::navigate(Route::Meeting(result.meeting_id), cx);
     }
@@ -354,15 +354,12 @@ fn warning_message(warning: ImportWarning) -> String {
 /// Push a toast on the main window from a context that only has `&mut App`
 /// (a core-event subscription has no `Window`) — the same
 /// `tray::MainWindow` global the tray menu uses to reach the window.
-fn with_main_window(cx: &mut App, f: impl FnOnce(&mut Root, &mut Window, &mut Context<Root>)) {
-    let Some(handle) = cx.try_global::<crate::tray::MainWindow>().map(|m| m.0) else {
-        return;
-    };
-    let _ = handle.update(cx, f);
+fn with_main_window(cx: &mut App, f: impl FnOnce(&mut Window, &mut App)) {
+    crate::ui::with_main_window(cx, f);
 }
 
 fn toast(cx: &mut App, kind: NotificationType, message: String) {
-    with_main_window(cx, move |_, window, cx| {
+    with_main_window(cx, move |window, cx| {
         window.push_notification(Notification::new().message(message).with_type(kind), cx);
     });
 }
