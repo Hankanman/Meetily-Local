@@ -164,7 +164,7 @@ pub async fn play_meeting_audio_clip<R: Runtime>(
         tokio::task::spawn_blocking(move || parse_wav_pcm16(&bytes))
             .await
             .map_err(|e| format!("Clip decode task failed: {}", e))??;
-    crate::audio::playback::play_pcm_i16(&app, samples, sample_rate, channels)
+    crate::audio::playback::play_pcm_i16(&crate::events::shared_sink(&app), samples, sample_rate, channels)
 }
 
 /// Stop any transcript-segment clip that's currently playing.

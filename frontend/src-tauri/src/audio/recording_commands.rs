@@ -16,6 +16,7 @@ use super::recording_phase::{self, RecordingPhase};
 use super::transcript_db_writer::TranscriptDbWriter;
 use super::RecordingManager;
 use crate::database::repositories::meeting::MeetingsRepository;
+use crate::events;
 use crate::state::AppState;
 
 // Import transcription modules
@@ -542,7 +543,13 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     }
 
     // Start optimized parallel transcription task and store handle
-    let task_handle = transcription::start_transcription_task(app.clone(), transcription_receiver);
+    let transcription_pool = db_pool(&app)
+        .ok_or_else(|| "Database not initialized yet; cannot start transcription".to_string())?;
+    let task_handle = transcription::start_transcription_task(
+        events::shared_sink(&app),
+        transcription_pool,
+        transcription_receiver,
+    );
     {
         let mut global_task = TRANSCRIPTION_TASK.lock().unwrap();
         *global_task = Some(task_handle);
@@ -551,7 +558,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     // Start the streaming-partial preview task (best-effort, additive to the
     // final path). Detached — it ends when the pipeline drops its sender.
     if let Some(rx) = partial_receiver {
-        transcription::start_partial_decode_task(app.clone(), rx);
+        transcription::start_partial_decode_task(events::shared_sink(&app), rx);
     }
 
     // Persist every finished segment for this session (SQLite writer +
@@ -788,7 +795,13 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     }
 
     // Start optimized parallel transcription task and store handle
-    let task_handle = transcription::start_transcription_task(app.clone(), transcription_receiver);
+    let transcription_pool = db_pool(&app)
+        .ok_or_else(|| "Database not initialized yet; cannot start transcription".to_string())?;
+    let task_handle = transcription::start_transcription_task(
+        events::shared_sink(&app),
+        transcription_pool,
+        transcription_receiver,
+    );
     {
         let mut global_task = TRANSCRIPTION_TASK.lock().unwrap();
         *global_task = Some(task_handle);
@@ -797,7 +810,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     // Start the streaming-partial preview task (best-effort, additive to the
     // final path). Detached — it ends when the pipeline drops its sender.
     if let Some(rx) = partial_receiver {
-        transcription::start_partial_decode_task(app.clone(), rx);
+        transcription::start_partial_decode_task(events::shared_sink(&app), rx);
     }
 
     // Persist every finished segment for this session (SQLite writer +

@@ -6,7 +6,7 @@
 
 use log::{info, warn};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Runtime};
 
 // Transcription engine abstraction.
 pub enum TranscriptionEngine {
@@ -65,11 +65,11 @@ pub async fn validate_transcription_model_ready<R: Runtime>(
 /// Get or initialize the Whisper transcription engine for live recording.
 /// Remote providers (e.g., OpenAI) are not used during the live audio path —
 /// the worker pool is currently Whisper-only.
-pub async fn get_or_init_transcription_engine<R: Runtime>(
-    app: &AppHandle<R>,
+pub async fn get_or_init_transcription_engine(
+    pool: &sqlx::SqlitePool,
 ) -> Result<TranscriptionEngine, String> {
     info!("🎤 Initializing Whisper transcription engine");
-    let whisper_engine = get_or_init_whisper(app).await?;
+    let whisper_engine = get_or_init_whisper(pool).await?;
     Ok(TranscriptionEngine::Whisper(whisper_engine))
 }
 
@@ -85,8 +85,8 @@ pub async fn get_or_init_transcription_engine<R: Runtime>(
 /// The currently loaded model is only unloaded once the replacement has been
 /// resolved to something loadable, so a bad config never leaves the engine
 /// empty mid-recording.
-pub async fn get_or_init_whisper<R: Runtime>(
-    app: &AppHandle<R>,
+pub async fn get_or_init_whisper(
+    pool: &sqlx::SqlitePool,
 ) -> Result<Arc<crate::whisper_engine::WhisperEngine>, String> {
     let existing_engine = {
         let engine_guard = crate::whisper_engine::commands::WHISPER_ENGINE
@@ -118,9 +118,16 @@ pub async fn get_or_init_whisper<R: Runtime>(
         None
     };
 
-    // Which model does the saved config ask for (if any)?
+    // Which model does the saved config ask for (if any)? Reads the setting
+    // directly from the pool rather than through `api_get_transcript_config`
+    // (a `#[tauri::command]`) — this only needs `provider`/`model`, not the
+    // API key that command also resolves.
     let configured_model: Option<String> =
-        match crate::api::api::api_get_transcript_config(app.clone(), app.clone().state()).await {
+        match crate::database::repositories::setting::SettingsRepository::get_transcript_config(
+            pool,
+        )
+        .await
+        {
             Ok(Some(config)) => {
                 info!(
                     "📝 Saved transcript config - provider: {}, model: {}",

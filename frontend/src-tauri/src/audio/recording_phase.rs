@@ -13,11 +13,11 @@
 // snapshot is built or emitted; this module never reaches for them itself,
 // so it stays independently unit-testable.
 
+use crate::events::EventSinkExt;
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Runtime};
 
 /// Recording lifecycle phase, owned entirely by the Rust side. The frontend
 /// maps this onto its own `RecordingStatus` enum rather than deriving status
@@ -225,8 +225,8 @@ pub fn build_snapshot(
 /// `RecordingPhase` transition in `recording_commands.rs` goes through it,
 /// so `seq` is a true total order over every transition regardless of which
 /// command triggered it.
-pub fn set_phase<R: Runtime>(
-    app: &AppHandle<R>,
+pub fn set_phase(
+    sink: &dyn crate::events::EventSink,
     phase: RecordingPhase,
     active_duration_secs: Option<f64>,
     total_pause_secs: f64,
@@ -239,7 +239,7 @@ pub fn set_phase<R: Runtime>(
         snapshot.phase,
         snapshot.seq
     );
-    if let Err(e) = app.emit("recording-state", &snapshot) {
+    if let Err(e) = sink.emit_event("recording-state", &snapshot) {
         log::warn!("Failed to emit recording-state: {}", e);
     }
 }
@@ -301,5 +301,18 @@ mod tests {
 
         apply(Idle);
         assert!(PHASE_STATE.lock().unwrap().started_at_ms.is_none());
+
+        // set_phase emits `recording-state` with a strictly increasing seq
+        // on every call; exercised here (rather than in its own #[test])
+        // since it touches the same process-global PHASE_STATE/SEQ statics.
+        use crate::events::RecordingSink;
+        let sink = RecordingSink::new();
+        set_phase(&sink, Idle, None, 0.0, 0);
+        set_phase(&sink, Idle, None, 0.0, 0);
+        let payloads = sink.payloads("recording-state");
+        assert_eq!(payloads.len(), 2);
+        let seq_before = payloads[0]["seq"].as_u64().unwrap();
+        let seq_after = payloads[1]["seq"].as_u64().unwrap();
+        assert!(seq_after > seq_before);
     }
 }
