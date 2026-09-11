@@ -240,23 +240,18 @@ impl SidecarManager {
             log::warn!("RESOURCE_DIR environment variable not set");
         }
 
-        // 3. Fallback for dev: try relative paths from workspace (no target triple in dev builds)
+        // 3. Fallback for dev: the workspace target dir (no target triple in
+        //    dev builds). Walk up from the running crate's manifest dir, since
+        //    the app crate may sit one level below the workspace root
+        //    (meetily-gpui/) or two (frontend/src-tauri/).
         if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-            let project_root = PathBuf::from(&manifest_dir)
-                .parent()
-                .and_then(|p| p.parent())
-                .ok_or_else(|| anyhow!("Failed to determine project root"))?
-                .to_path_buf();
-
-            let candidates = vec![
-                project_root.join("target/release/llama-helper"),
-                project_root.join("target/debug/llama-helper"),
-            ];
-
-            for candidate in candidates {
-                if candidate.exists() {
-                    log::info!("Using dev llama-helper: {}", candidate.display());
-                    return Ok(candidate);
+            for dir in PathBuf::from(&manifest_dir).ancestors() {
+                for profile in ["release", "debug"] {
+                    let candidate = dir.join("target").join(profile).join("llama-helper");
+                    if candidate.exists() {
+                        log::info!("Using dev llama-helper: {}", candidate.display());
+                        return Ok(candidate);
+                    }
                 }
             }
         }
