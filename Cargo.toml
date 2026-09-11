@@ -4,6 +4,7 @@ members = [
     "frontend/src-tauri",
     "llama-helper",
     "llama-protocol",
+    "meetily-core",
     "meetily-mcp",
     "whisper-helper",
     "whisper-protocol",
