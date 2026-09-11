@@ -5,6 +5,9 @@ use super::constants::AUDIO_EXTENSIONS;
 use crate::audio::decoder::{decode_audio_file_with_progress, ProgressCallback};
 use crate::audio::vad::get_speech_chunks_with_progress;
 use crate::config::DEFAULT_WHISPER_MODEL;
+use crate::database::repositories::setting::SettingsRepository;
+use crate::database::repositories::transcript::TranscriptsRepository;
+use crate::events::{EventSink, EventSinkExt};
 use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
 use anyhow::{anyhow, Result};
@@ -13,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 
 /// Global flag to track if retranscription is in progress
 static RETRANSCRIPTION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
@@ -124,9 +127,9 @@ pub async fn start_retranscription<R: Runtime>(
 
     match &result {
         Ok(res) => {
-            let _ = app.emit(
+            let _ = app.emit_event(
                 "retranscription-complete",
-                serde_json::json!({
+                &serde_json::json!({
                     "meeting_id": res.meeting_id,
                     "segments_count": res.segments_count,
                     "duration_seconds": res.duration_seconds,
@@ -135,9 +138,9 @@ pub async fn start_retranscription<R: Runtime>(
             );
         }
         Err(e) => {
-            let _ = app.emit(
+            let _ = app.emit_event(
                 "retranscription-error",
-                RetranscriptionError {
+                &RetranscriptionError {
                     meeting_id: meeting_id.clone(),
                     error: e.to_string(),
                 },
@@ -402,49 +405,11 @@ async fn run_retranscription<R: Runtime>(
         .try_state::<AppState>()
         .ok_or_else(|| anyhow!("App state not available"))?;
 
-    // Wrap delete+insert+update in a transaction to prevent data loss
+    // Full delete+insert replace, in one transaction, to prevent data loss.
     let pool = app_state.db_manager.pool();
-    let mut conn = pool
-        .acquire()
+    TranscriptsRepository::replace_transcripts_for_meeting(pool, &meeting_id, &segments)
         .await
-        .map_err(|e| anyhow!("DB error: {}", e))?;
-    let mut tx = sqlx::Connection::begin(&mut *conn)
-        .await
-        .map_err(|e| anyhow!("Failed to start transaction: {}", e))?;
-
-    sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
-        .bind(&meeting_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| anyhow!("Failed to delete existing transcripts: {}", e))?;
-
-    for segment in &segments {
-        sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, voice_profile_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&segment.id)
-        .bind(&meeting_id)
-        .bind(&segment.text)
-        .bind(
-            segment
-                .timestamp
-                .clone()
-                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-        )
-        .bind(segment.audio_start_time)
-        .bind(segment.audio_end_time)
-        .bind(segment.duration)
-        .bind(&segment.speaker)
-        .bind(&segment.voice_profile_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
-    }
-
-    tx.commit()
-        .await
-        .map_err(|e| anyhow!("Failed to commit transaction: {}", e))?;
+        .map_err(|e| anyhow!("Failed to replace transcripts: {}", e))?;
 
     info!(
         "Updated {} transcripts for meeting {} in transaction",
@@ -546,17 +511,12 @@ async fn run_retranscription<R: Runtime>(
     })
 }
 
-/// Emit progress event
-fn emit_progress<R: Runtime>(
-    app: &AppHandle<R>,
-    meeting_id: &str,
-    stage: &str,
-    progress: u32,
-    message: &str,
-) {
-    let _ = app.emit(
+/// Emit progress event. Takes a `&dyn EventSink` rather than an `AppHandle`
+/// since this only ever emits — see `events.rs`.
+fn emit_progress(sink: &dyn EventSink, meeting_id: &str, stage: &str, progress: u32, message: &str) {
+    let _ = sink.emit_event(
         "retranscription-progress",
-        RetranscriptionProgress {
+        &RetranscriptionProgress {
             meeting_id: meeting_id.to_string(),
             stage: stage.to_string(),
             progress_percentage: progress,
@@ -667,31 +627,29 @@ async fn get_configured_whisper_model<R: Runtime>(app: &AppHandle<R>) -> Result<
     debug!("Querying transcript_settings table...");
 
     // Query the transcript settings from the database - get both provider and model
-    let result: Option<(String, String)> =
-        sqlx::query_as("SELECT provider, model FROM transcript_settings WHERE id = '1'")
-            .fetch_optional(app_state.db_manager.pool())
-            .await
-            .map_err(|e| {
-                error!("Failed to query transcript config: {}", e);
-                anyhow!("Failed to query transcript config: {}", e)
-            })?;
+    let result = SettingsRepository::get_transcript_config(app_state.db_manager.pool())
+        .await
+        .map_err(|e| {
+            error!("Failed to query transcript config: {}", e);
+            anyhow!("Failed to query transcript config: {}", e)
+        })?;
 
     match result {
-        Some((provider, model)) => {
+        Some(config) => {
             info!(
                 "Found transcript config: provider={}, model={}",
-                provider, model
+                config.provider, config.model
             );
 
             // Check if provider is Whisper-based
-            if provider == "localWhisper" || provider == "whisper" {
-                Ok(model)
+            if config.provider == "localWhisper" || config.provider == "whisper" {
+                Ok(config.model)
             } else {
                 error!(
                     "Retranscription requires Whisper provider, but configured provider is: {}",
-                    provider
+                    config.provider
                 );
-                Err(anyhow!("Retranscription requires Whisper. Current provider '{}' does not support retranscription with language selection.", provider))
+                Err(anyhow!("Retranscription requires Whisper. Current provider '{}' does not support retranscription with language selection.", config.provider))
             }
         }
         None => {
@@ -801,9 +759,9 @@ async fn run_auto_refine<R: Runtime>(
         "✨ Auto-refine starting for meeting {}: live model '{}' -> '{}'",
         meeting_id, live_model, target_model
     );
-    let _ = app.emit(
+    let _ = app.emit_event(
         "meeting-refining",
-        serde_json::json!({ "meeting_id": meeting_id }),
+        &serde_json::json!({ "meeting_id": meeting_id }),
     );
 
     let result = start_retranscription(
@@ -837,9 +795,9 @@ async fn run_auto_refine<R: Runtime>(
                 "✨ Auto-refine complete for meeting {} ({} segments, model '{}')",
                 meeting_id, res.segments_count, target_model
             );
-            let _ = app.emit(
+            let _ = app.emit_event(
                 "meeting-refined",
-                serde_json::json!({
+                &serde_json::json!({
                     "meeting_id": meeting_id,
                     "segments_count": res.segments_count,
                 }),
@@ -854,9 +812,9 @@ async fn run_auto_refine<R: Runtime>(
                 "Auto-refine failed for meeting {} (live transcript preserved): {}",
                 meeting_id, e
             );
-            let _ = app.emit(
+            let _ = app.emit_event(
                 "meeting-refine-failed",
-                serde_json::json!({ "meeting_id": meeting_id, "error": e.to_string() }),
+                &serde_json::json!({ "meeting_id": meeting_id, "error": e.to_string() }),
             );
         }
     }

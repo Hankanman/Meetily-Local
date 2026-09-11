@@ -1,15 +1,16 @@
 use log::{info, warn};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use super::manager::DatabaseManager;
 use super::repositories::meeting::MeetingsRepository;
+use crate::events::EventSinkExt;
 use crate::state::AppState;
 
 /// Initialize database on app startup
 /// Handles first launch detection and conditional initialization
 pub async fn initialize_database_on_startup(app: &AppHandle) -> Result<(), String> {
     // Check if this is the first launch (no database exists yet)
-    let is_first_launch = DatabaseManager::is_first_launch(app)
+    let is_first_launch = DatabaseManager::is_first_launch()
         .await
         .map_err(|e| format!("Failed to check first launch status: {}", e))?;
 
@@ -21,13 +22,13 @@ pub async fn initialize_database_on_startup(app: &AppHandle) -> Result<(), Strin
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             app_handle
-                .emit("first-launch-detected", ())
+                .emit_event("first-launch-detected", &())
                 .expect("Failed to emit first-launch-detected event");
             info!("Emitted first-launch-detected after delay");
         });
     } else {
         // Normal flow - initialize database immediately
-        let db_manager = DatabaseManager::new_from_app_handle(app)
+        let db_manager = DatabaseManager::new_default()
             .await
             .map_err(|e| format!("Failed to initialize database manager: {}", e))?;
 

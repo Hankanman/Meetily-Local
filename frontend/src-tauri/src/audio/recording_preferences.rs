@@ -126,13 +126,9 @@ fn db_pool<R: Runtime>(app: &AppHandle<R>) -> Option<sqlx::SqlitePool> {
 /// with its default serializer) so this module no longer depends on the
 /// plugin at all. The file is left in place afterward.
 fn import_legacy_recording_preferences<R: Runtime>(
-    app: &AppHandle<R>,
+    _app: &AppHandle<R>,
 ) -> Option<RecordingPreferences> {
-    let path = app
-        .path()
-        .app_data_dir()
-        .ok()?
-        .join("recording_preferences.json");
+    let path = crate::paths::app_data_dir().ok()?.join("recording_preferences.json");
     let content = std::fs::read_to_string(&path).ok()?;
     let root: serde_json::Value = serde_json::from_str(&content).ok()?;
     let value = root.get("preferences")?;
@@ -152,8 +148,8 @@ fn import_legacy_recording_preferences<R: Runtime>(
 /// `recordingNotification.tsx`). Folded into `RecordingPreferences` on
 /// import so it lives in the same SQLite row going forward. The file is
 /// left in place afterward.
-fn import_legacy_show_recording_notification<R: Runtime>(app: &AppHandle<R>) -> Option<bool> {
-    let path = app.path().app_data_dir().ok()?.join("preferences.json");
+fn import_legacy_show_recording_notification<R: Runtime>(_app: &AppHandle<R>) -> Option<bool> {
+    let path = crate::paths::app_data_dir().ok()?.join("preferences.json");
     let content = std::fs::read_to_string(&path).ok()?;
     let root: serde_json::Value = serde_json::from_str(&content).ok()?;
     root.get("show_recording_notification")?.as_bool()

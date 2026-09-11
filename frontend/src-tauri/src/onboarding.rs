@@ -56,12 +56,8 @@ fn db_pool<R: Runtime>(app: &AppHandle<R>) -> Option<sqlx::SqlitePool> {
 /// and flat `{"status": ...}` shape the store plugin used, with its default
 /// serializer) so this module no longer depends on the plugin at all. The
 /// file is left in place afterward.
-fn import_legacy_onboarding_status<R: Runtime>(app: &AppHandle<R>) -> Option<OnboardingStatus> {
-    let path = app
-        .path()
-        .app_data_dir()
-        .ok()?
-        .join("onboarding-status.json");
+fn import_legacy_onboarding_status<R: Runtime>(_app: &AppHandle<R>) -> Option<OnboardingStatus> {
+    let path = crate::paths::app_data_dir().ok()?.join("onboarding-status.json");
     let content = std::fs::read_to_string(&path).ok()?;
     let root: serde_json::Value = serde_json::from_str(&content).ok()?;
     let value = root.get("status")?;

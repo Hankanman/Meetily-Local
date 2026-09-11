@@ -3,7 +3,6 @@ use sqlx::{migrate::MigrateDatabase, Result, Sqlite, SqlitePool, Transaction};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
-use tauri::Manager;
 
 #[derive(Clone)]
 pub struct DatabaseManager {
@@ -50,12 +49,13 @@ impl DatabaseManager {
         Ok(DatabaseManager { pool })
     }
 
-    pub async fn new_from_app_handle(app_handle: &tauri::AppHandle) -> Result<Self> {
+    /// Open (creating if needed) the database at the app's default data
+    /// directory (`crate::paths::app_data_dir()` — Tauri's `app_data_dir()`
+    /// resolver on Linux resolves to the exact same path, see that module's
+    /// doc comment).
+    pub async fn new_default() -> Result<Self> {
         // Resolve the app's data directory
-        let app_data_dir = app_handle
-            .path()
-            .app_data_dir()
-            .expect("failed to get app data dir");
+        let app_data_dir = crate::paths::app_data_dir().expect("failed to get app data dir");
         if !app_data_dir.exists() {
             fs::create_dir_all(&app_data_dir).map_err(|e| sqlx::Error::Io(e))?;
         }
@@ -123,11 +123,8 @@ impl DatabaseManager {
     }
 
     /// Check if this is the first launch (sqlite database doesn't exist yet)
-    pub async fn is_first_launch(app_handle: &tauri::AppHandle) -> Result<bool> {
-        let app_data_dir = app_handle
-            .path()
-            .app_data_dir()
-            .expect("failed to get app data dir");
+    pub async fn is_first_launch() -> Result<bool> {
+        let app_data_dir = crate::paths::app_data_dir().expect("failed to get app data dir");
 
         let tauri_db_path = app_data_dir.join("meeting_minutes.sqlite");
 
