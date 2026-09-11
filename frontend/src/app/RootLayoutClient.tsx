@@ -17,8 +17,8 @@ import { SidebarProvider } from "@/components/Sidebar/SidebarProvider";
 import { RecordingPostProcessingProvider } from "@/contexts/RecordingPostProcessingProvider";
 import { ImportDialogProvider } from "@/contexts/ImportDialogContext";
 
+import { ThemeProvider } from "@/contexts/ThemeContext";
 import { TitleBar } from "@/components/TitleBar";
-import { TauriThemeSync } from "@/components/TauriThemeSync";
 import { ProviderStack } from "@/components/ProviderStack";
 import { AppShell } from "@/components/layout/AppShell";
 import { DownloadProgressToastProvider } from "@/components/shared/DownloadProgressToast";
@@ -29,6 +29,7 @@ import { FileDropBridge } from "@/components/bridges/FileDropBridge";
 
 // Outer-to-inner. Each provider may consume the providers above it.
 const PROVIDERS = [
+  ThemeProvider,
   RecordingStateProvider,
   TranscriptProvider,
   ConfigProvider,
@@ -49,8 +50,8 @@ export default function RootLayoutClient({
 }) {
   return (
     <>
-      {/* App-wide DOM/window concerns. Each does one thing. */}
-      <TauriThemeSync />
+      {/* App-wide DOM/window concerns. Each does one thing.
+          Theme is now managed by ThemeProvider (in the provider stack). */}
       <ProductionContextMenuBlocker />
 
       {/* TitleBar replaces native window decorations on every platform
