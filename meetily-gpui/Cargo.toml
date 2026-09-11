@@ -39,7 +39,6 @@ gpui-tray = { git = "https://github.com/domenkozar/gpui-tray", rev = "dfcd45b4bd
 notify-rust = "4"
 
 anyhow = "1"
-chrono = "0.4.31"
 log = "0.4"
 env_logger = "0.11"
 serde = { version = "1", features = ["derive"] }
