@@ -17,7 +17,7 @@ pub struct RecordingManager {
     recording_saver: RecordingSaver,
     /// Receiver for streaming-partial snapshots, produced in `start_recording`
     /// when partials are enabled and claimed once by the command layer (which
-    /// owns the AppHandle needed to emit `transcript-partial` events).
+    /// owns the event sink needed to emit `transcript-partial` events).
     partial_receiver: Option<mpsc::UnboundedReceiver<PartialAudioChunk>>,
 }
 
@@ -78,7 +78,7 @@ impl RecordingManager {
 
         // Streaming-partial channel (only when enabled). The command layer
         // claims the receiver via take_partial_receiver() and spawns the
-        // partial-decode task with its AppHandle.
+        // partial-decode task with its event sink.
         let partial_sender = if enable_partials {
             let (tx, rx) = mpsc::unbounded_channel::<PartialAudioChunk>();
             self.partial_receiver = Some(rx);
@@ -261,9 +261,9 @@ impl RecordingManager {
     /// and the active recording duration used to save it, so the caller can
     /// finalise the meeting's database row (issue #57 slice 2) without
     /// re-deriving either value.
-    pub async fn save_recording_only<R: tauri::Runtime>(
+    pub async fn save_recording_only(
         &mut self,
-        app: &tauri::AppHandle<R>,
+        sink: &dyn crate::events::EventSink,
     ) -> Result<(Option<String>, Option<f64>)> {
         debug!("Saving recording with transcript chunks");
 
@@ -274,7 +274,7 @@ impl RecordingManager {
         // Save the recording with actual duration
         let audio_path = match self
             .recording_saver
-            .stop_and_save(app, recording_duration)
+            .stop_and_save(sink, recording_duration)
             .await
         {
             Ok(Some(file_path)) => {
@@ -297,9 +297,9 @@ impl RecordingManager {
     }
 
     /// Stop recording and save audio (legacy method)
-    pub async fn stop_recording<R: tauri::Runtime>(
+    pub async fn stop_recording(
         &mut self,
-        app: &tauri::AppHandle<R>,
+        sink: &dyn crate::events::EventSink,
     ) -> Result<()> {
         info!("Stopping recording manager");
 
@@ -323,7 +323,7 @@ impl RecordingManager {
         // Save the recording with actual duration
         match self
             .recording_saver
-            .stop_and_save(app, recording_duration)
+            .stop_and_save(sink, recording_duration)
             .await
         {
             Ok(Some(file_path)) => {

@@ -176,7 +176,7 @@ async fn start_audio_level_monitoring<R: Runtime>(
         system_device
     );
 
-    audio::simple_level_monitor::start_monitoring(app, mic_device, system_device)
+    audio::simple_level_monitor::start_monitoring(events::shared_sink(&app), mic_device, system_device)
         .await
         .map_err(|e| format!("Failed to start audio level monitoring: {}", e))
 }

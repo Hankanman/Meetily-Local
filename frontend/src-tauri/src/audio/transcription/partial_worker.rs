@@ -13,11 +13,11 @@ use std::sync::Mutex;
 
 use log::{debug, info};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::audio::recording_state::{DeviceType, PartialAudioChunk};
+use crate::events::{EventSinkExt, SharedEventSink};
 
 /// Sliding-window size for partial decoding: only the trailing 6s of an
 /// in-progress utterance is re-decoded on each tick, instead of the whole
@@ -104,8 +104,8 @@ fn source_str(source: DeviceType) -> &'static str {
 /// otherwise emit a late `transcript-partial` after `recording-stopped` has
 /// already fired, re-populating an overlay the frontend believes is done
 /// with.
-pub fn start_partial_decode_task<R: Runtime>(
-    app: AppHandle<R>,
+pub fn start_partial_decode_task(
+    sink: SharedEventSink,
     mut receiver: mpsc::UnboundedReceiver<PartialAudioChunk>,
 ) {
     let handle = tokio::spawn(async move {
@@ -159,7 +159,7 @@ pub fn start_partial_decode_task<R: Runtime>(
 
             for (source, chunk) in latest {
                 if let Err(e) =
-                    decode_and_emit(&app, &mut states, source, chunk, partial_max_threads).await
+                    decode_and_emit(&sink, &mut states, source, chunk, partial_max_threads).await
                 {
                     debug!("partial decode skipped for {:?}: {}", source, e);
                 }
@@ -178,7 +178,7 @@ pub fn start_partial_decode_task<R: Runtime>(
                     text: String::new(),
                     utterance_id: state.utterance_id,
                 };
-                let _ = app.emit("transcript-partial", &update);
+                let _ = sink.emit_event("transcript-partial", &update);
             }
         }
 
@@ -194,8 +194,8 @@ pub fn start_partial_decode_task<R: Runtime>(
     *PARTIAL_TASK.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
 }
 
-async fn decode_and_emit<R: Runtime>(
-    app: &AppHandle<R>,
+async fn decode_and_emit(
+    sink: &SharedEventSink,
     states: &mut HashMap<DeviceType, SourceState>,
     source: DeviceType,
     chunk: PartialAudioChunk,
@@ -275,7 +275,7 @@ async fn decode_and_emit<R: Runtime>(
         text: state.committed.join(" "),
         utterance_id: chunk.utterance_id,
     };
-    let _ = app.emit("transcript-partial", &update);
+    let _ = sink.emit_event("transcript-partial", &update);
     Ok(())
 }
 

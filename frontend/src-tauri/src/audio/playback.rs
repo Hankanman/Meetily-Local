@@ -18,7 +18,8 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 
 use rodio::buffer::SamplesBuffer;
 use rodio::{OutputStream, OutputStreamHandle, Sink};
-use tauri::{AppHandle, Emitter, Runtime};
+
+use crate::events::{EventSinkExt, SharedEventSink};
 
 /// Emitted (payload: the playback generation) when a clip finishes on its own,
 /// so the UI can clear the "playing" state. Not emitted when playback is
@@ -90,8 +91,8 @@ fn player() -> Result<&'static Player, String> {
 
 /// Play interleaved 16-bit PCM natively, replacing any clip already playing.
 /// Returns as soon as playback starts.
-pub fn play_pcm_i16<R: Runtime>(
-    app: &AppHandle<R>,
+pub fn play_pcm_i16(
+    event_sink: &SharedEventSink,
     samples: Vec<i16>,
     sample_rate: u32,
     channels: u16,
@@ -113,7 +114,7 @@ pub fn play_pcm_i16<R: Runtime>(
     // Watch for natural completion. `sleep_until_end` also returns when the
     // sink is stopped (by a replacement or an explicit stop); the generation
     // check ensures only a genuine, still-current end emits the event.
-    let app = app.clone();
+    let event_sink = event_sink.clone();
     std::thread::spawn(move || {
         sink.sleep_until_end();
         if GENERATION.load(Ordering::SeqCst) == generation {
@@ -123,7 +124,7 @@ pub fn play_pcm_i16<R: Runtime>(
                     *current = None;
                 }
             }
-            let _ = app.emit(PLAYBACK_ENDED_EVENT, generation);
+            let _ = event_sink.emit_event(PLAYBACK_ENDED_EVENT, &generation);
         }
     });
 

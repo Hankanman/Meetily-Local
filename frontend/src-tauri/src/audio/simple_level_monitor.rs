@@ -13,11 +13,11 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use tauri::{AppHandle, Emitter, Runtime};
 
 use super::pw::{PwCaptureStream, PwStreamEvent};
 use super::recording_state::DeviceType;
 use super::stream::capture_target_for;
+use crate::events::{EventSinkExt, SharedEventSink};
 
 #[derive(Debug, Serialize, Clone)]
 pub struct AudioLevelData {
@@ -102,8 +102,8 @@ fn open_role_stream(
 ///
 /// `mic_device` / `system_device`: PipeWire node id, `"default"`, or
 /// `None` to skip that role.
-pub async fn start_monitoring<R: Runtime>(
-    app_handle: AppHandle<R>,
+pub async fn start_monitoring(
+    sink: SharedEventSink,
     mic_device: Option<String>,
     system_device: Option<String>,
 ) -> Result<()> {
@@ -188,7 +188,6 @@ pub async fn start_monitoring<R: Runtime>(
         return Ok(());
     }
 
-    let app = app_handle.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
         while is_generation_current(generation, GENERATION.load(Ordering::SeqCst)) {
@@ -210,7 +209,7 @@ pub async fn start_monitoring<R: Runtime>(
                 levels: snapshot,
             };
 
-            if app.emit("audio-levels", &update).is_err() {
+            if sink.emit_event("audio-levels", &update).is_err() {
                 break;
             }
         }

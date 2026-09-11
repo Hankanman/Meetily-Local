@@ -2,7 +2,6 @@ use anyhow::Result;
 use log::{error, info, warn};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, Runtime};
 use tokio::sync::mpsc;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -13,6 +12,7 @@ use super::common::{
 };
 use super::incremental_saver::IncrementalAudioSaver;
 use super::recording_state::AudioChunk;
+use crate::events::EventSinkExt;
 
 /// Canonical transcript segment type — re-exported here for compatibility
 /// with the many call sites that already `use
@@ -634,11 +634,11 @@ impl RecordingSaver {
     /// Stop and save using incremental saving approach
     ///
     /// # Arguments
-    /// * `app` - Tauri app handle for emitting events
+    /// * `sink` - event sink for emitting `recording-saved`
     /// * `recording_duration` - Actual recording duration in seconds (from RecordingState)
-    pub async fn stop_and_save<R: Runtime>(
+    pub async fn stop_and_save(
         &mut self,
-        app: &AppHandle<R>,
+        sink: &dyn crate::events::EventSink,
         recording_duration: Option<f64>,
     ) -> Result<Option<String>, String> {
         info!("Stopping recording saver");
@@ -777,7 +777,7 @@ impl RecordingSaver {
                 .map(|f| f.to_string_lossy().to_string())
         });
 
-        if let Err(e) = app.emit("recording-saved", &save_event) {
+        if let Err(e) = sink.emit_event("recording-saved", &save_event) {
             warn!("Failed to emit recording-saved event: {}", e);
         }
 

@@ -13,11 +13,11 @@ use super::echo_dedup::{EchoDecision, EchoDedup};
 use super::engine::TranscriptionEngine;
 use crate::audio::recording_state::DeviceType;
 use crate::audio::AudioChunk;
+use crate::events::{EventSinkExt, SharedEventSink};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tauri::{AppHandle, Emitter, Runtime};
 
 /// Granular error types for transcription operations.
 #[derive(Debug, Clone)]
@@ -160,8 +160,9 @@ async fn split_chunk_by_speaker(chunk: AudioChunk) -> Vec<PendingChunk> {
 /// closes, processing every chunk in order. The channel-closed return of
 /// `recv()` doubles as the completion signal — by then every queued chunk
 /// has been pulled and processed, so nothing is ever lost.
-pub fn start_transcription_task<R: Runtime>(
-    app: AppHandle<R>,
+pub fn start_transcription_task(
+    sink: SharedEventSink,
+    pool: sqlx::SqlitePool,
     mut receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -176,11 +177,11 @@ pub fn start_transcription_task<R: Runtime>(
         // `whisper_engine::lease` for the full rationale.
         let _live_engine_lease = crate::whisper_engine::LIVE_ENGINE_LEASE.acquire_live();
 
-        let engine = match super::engine::get_or_init_transcription_engine(&app).await {
+        let engine = match super::engine::get_or_init_transcription_engine(&pool).await {
             Ok(engine) => engine,
             Err(e) => {
                 error!("Failed to initialize transcription engine: {}", e);
-                let _ = app.emit("transcription-error", serde_json::json!({
+                let _ = sink.emit_event("transcription-error", &serde_json::json!({
                     "error": e,
                     "userMessage": "Recording failed: Unable to initialize speech recognition. Please check your model settings.",
                     "actionable": true
@@ -249,7 +250,7 @@ pub fn start_transcription_task<R: Runtime>(
                 },
             };
 
-            process_chunk(&engine, item, &app, &mut echo_dedup).await;
+            process_chunk(&engine, item, &sink, &mut echo_dedup).await;
             processed += 1;
         }
 
@@ -261,10 +262,10 @@ pub fn start_transcription_task<R: Runtime>(
 }
 
 /// Transcribe, filter, diarize, and emit a single (sub-)chunk.
-async fn process_chunk<R: Runtime>(
+async fn process_chunk(
     engine: &TranscriptionEngine,
     item: PendingChunk,
-    app: &AppHandle<R>,
+    sink: &dyn crate::events::EventSink,
     echo_dedup: &mut EchoDedup,
 ) {
     let PendingChunk { chunk, embedding } = item;
@@ -309,7 +310,7 @@ async fn process_chunk<R: Runtime>(
     };
 
     let (transcript, confidence_opt, is_partial) =
-        match transcribe_chunk_with_provider(engine, chunk, app, None).await {
+        match transcribe_chunk_with_provider(engine, chunk, sink, None).await {
             Ok(result) => result,
             Err(e) => {
                 match e {
@@ -322,7 +323,7 @@ async fn process_chunk<R: Runtime>(
                     }
                     _ => {
                         warn!("Transcription failed: {}", e);
-                        let _ = app.emit("transcription-warning", e.to_string());
+                        let _ = sink.emit_event("transcription-warning", &e.to_string());
                     }
                 }
                 return;
@@ -386,9 +387,9 @@ async fn process_chunk<R: Runtime>(
 
     // Emit speech-detected once per session for frontend UX.
     if !SPEECH_DETECTED_EMITTED.swap(true, Ordering::SeqCst) {
-        match app.emit(
+        match sink.emit_event(
             "speech-detected",
-            serde_json::json!({ "message": "Speech activity detected" }),
+            &serde_json::json!({ "message": "Speech activity detected" }),
         ) {
             Ok(_) => info!("🎤 First speech detected - emitted speech-detected event"),
             Err(e) => error!("🎤 Failed to emit speech-detected event: {}", e),
@@ -469,7 +470,7 @@ async fn process_chunk<R: Runtime>(
 
     // Persistence first (in-process, synchronous), then the UI.
     crate::audio::transcript_bus::publish(&update);
-    if let Err(e) = app.emit("transcript-update", &update) {
+    if let Err(e) = sink.emit_event("transcript-update", &update) {
         error!("Failed to emit transcript update: {}", e);
     }
 }
@@ -529,10 +530,10 @@ pub fn is_likely_hallucination(text: &str, confidence: f32) -> bool {
 
 /// Transcribe audio chunk using the configured engine.
 /// Returns: (text, confidence Option, is_partial)
-async fn transcribe_chunk_with_provider<R: Runtime>(
+async fn transcribe_chunk_with_provider(
     engine: &TranscriptionEngine,
     chunk: AudioChunk,
-    app: &AppHandle<R>,
+    sink: &dyn crate::events::EventSink,
     context_prompt: Option<String>,
 ) -> std::result::Result<(String, Option<f32>, bool), TranscriptionError> {
     // Convert to 16kHz mono for transcription
@@ -634,7 +635,7 @@ async fn transcribe_chunk_with_provider<R: Runtime>(
                     if matches!(transcription_error, TranscriptionError::ModelNotLoaded) {
                         return Err(transcription_error);
                     }
-                    let _ = app.emit(
+                    let _ = sink.emit_event(
                         "transcription-error",
                         &serde_json::json!({
                             "error": transcription_error.to_string(),
