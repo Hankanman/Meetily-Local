@@ -50,6 +50,7 @@ mod embedder;
 pub(crate) mod embedding_math;
 pub mod enrollment;
 pub mod model;
+pub mod offline;
 mod profile_matcher;
 mod refinement;
 
