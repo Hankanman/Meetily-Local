@@ -8,7 +8,8 @@ members = [
     "meetily-mcp",
     "whisper-helper",
     "whisper-protocol",
-    "whisper-core"
+    "whisper-core",
+    "meetily-gpui"
 ]
 
 # Shared workspace settings
