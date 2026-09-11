@@ -32,6 +32,7 @@ pub mod stream;
 // slice 2) and the crash-recovery commands (`list_interrupted_meetings`,
 // `recover_meeting`) that read the meeting-row lifecycle it feeds.
 pub mod recovery_commands;
+pub mod transcript_bus;
 pub mod transcript_db_writer;
 
 // Transcription module (provider abstraction, engine management, worker pool)

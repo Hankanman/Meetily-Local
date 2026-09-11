@@ -467,6 +467,8 @@ async fn process_chunk<R: Runtime>(
     // a match target.
     echo_dedup.record(chunk_source, &update.text, audio_start_time, audio_end_time);
 
+    // Persistence first (in-process, synchronous), then the UI.
+    crate::audio::transcript_bus::publish(&update);
     if let Err(e) = app.emit("transcript-update", &update) {
         error!("Failed to emit transcript update: {}", e);
     }

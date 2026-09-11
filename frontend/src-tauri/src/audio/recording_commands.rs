@@ -36,7 +36,7 @@ static TRANSCRIPTION_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 /// (issue #57 slice 2), and its task handle. Started once `start_recording*`
 /// has a `meeting_id` and a DB pool; shut down (sender dropped, task
 /// awaited) partway through `stop_recording`, after the transcription drain
-/// has delivered every tail segment to the `transcript-update` listener.
+/// has published every tail segment to the transcript bus.
 static TRANSCRIPT_DB_WRITER: Mutex<Option<TranscriptDbWriter>> = Mutex::new(None);
 static TRANSCRIPT_DB_WRITER_TASK: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
@@ -170,10 +170,58 @@ pub fn snapshot_segments() -> Vec<crate::audio::common::TranscriptSegment> {
         .unwrap_or_default()
 }
 
-// Listener ID for proper cleanup - prevents microphone from staying active after recording stops
-static TRANSCRIPT_LISTENER_ID: Mutex<Option<tauri::EventId>> = Mutex::new(None);
+/// Subscribe this session's persistence to the transcript bus: every finished
+/// segment is enqueued for SQLite (issue #57 slice 2) and handed to the
+/// recording manager. `meeting_id` is captured by value so each segment
+/// carries it without touching the (frequently swapped) `RECORDING_MANAGER`
+/// lock to look it up. Removed by `transcript_bus::unsubscribe` in
+/// `stop_recording` once the transcription worker has drained.
+fn subscribe_transcript_persistence(meeting_id: String) {
+    let replaced_stale = super::transcript_bus::subscribe(move |update: &TranscriptUpdate| {
+        let segment = crate::audio::recording_saver::TranscriptSegment {
+            id: format!("seg_{}", update.sequence_id),
+            text: update.text.clone(),
+            timestamp: None,
+            audio_start_time: Some(update.audio_start_time),
+            audio_end_time: Some(update.audio_end_time),
+            duration: Some(update.duration),
+            display_time: Some(update.timestamp.clone()), // Use wall-clock timestamp for display
+            confidence: Some(update.confidence),
+            sequence_id: Some(update.sequence_id),
+            speaker: update.speaker.clone(),
+            voice_profile_id: update.voice_profile_id.clone(),
+            source: Some(update.source.clone()),
+        };
 
-/// Transcript segments that arrived via the `transcript-update` listener
+        // Persist to SQLite via the batched writer — a cheap channel send,
+        // non-blocking, independent of the RecordingSaver copy saved below.
+        if let Ok(writer_guard) = TRANSCRIPT_DB_WRITER.lock() {
+            if let Some(writer) = writer_guard.as_ref() {
+                writer.enqueue(meeting_id.clone(), segment.clone());
+            }
+        }
+
+        if let Ok(manager_guard) = RECORDING_MANAGER.lock() {
+            if let Some(manager) = manager_guard.as_ref() {
+                manager.add_transcript_segment(segment);
+            } else {
+                // Manager is briefly out of the slot (e.g. mid force-flush
+                // during stop) — buffer instead of dropping; replayed once
+                // it's back (issue #25).
+                PENDING_SEGMENT_BUFFER.lock().unwrap().push(segment);
+            }
+        }
+    });
+    // A stale subscriber means a previous session never reached its
+    // unsubscribe (error-path stop, crash recovery); it has just been
+    // replaced, otherwise every segment would be persisted twice.
+    if replaced_stale {
+        warn!("⚠️ Replaced a stale transcript subscriber from a previous session");
+    }
+    info!("✅ Transcript persistence subscribed for this session");
+}
+
+/// Transcript segments that arrived on the transcript bus
 /// while `RECORDING_MANAGER` was briefly empty — e.g. during the
 /// `stop_streams_and_force_flush().await` call in `stop_recording`, which
 /// takes the manager out of the slot for its duration. Without this they'd
@@ -460,7 +508,7 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         *TRANSCRIPT_DB_WRITER.lock().unwrap() = Some(writer);
         let stale_task = TRANSCRIPT_DB_WRITER_TASK.lock().unwrap().replace(writer_task);
         if let Some(stale_task) = stale_task {
-            // Same defensive cleanup as the stale transcript-update listener
+            // Same defensive cleanup as the stale transcript subscriber
             // below: a previous session's task should already be gone, but
             // never leave two writers racing against the same DB rows.
             stale_task.abort();
@@ -506,67 +554,9 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
         transcription::start_partial_decode_task(app.clone(), rx);
     }
 
-    // CRITICAL: Listen for transcript-update events and save to recording manager
-    // This enables transcript history persistence for page reload sync
-    // Store listener ID for cleanup during stop_recording to ensure microphone is released
-    {
-        use tauri::Listener;
-        // Captured by value into the listener closure below so every
-        // segment it enqueues for SQLite carries this session's meeting_id,
-        // without touching the (frequently swapped) RECORDING_MANAGER lock
-        // to look it up on every event.
-        let meeting_id_for_listener = meeting_id.clone();
-        let listener_id = app.listen("transcript-update", move |event: tauri::Event| {
-            // Parse the transcript update from the event payload
-            if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
-                // Create structured transcript segment
-                let segment = crate::audio::recording_saver::TranscriptSegment {
-                    id: format!("seg_{}", update.sequence_id),
-                    text: update.text.clone(),
-                    timestamp: None,
-                    audio_start_time: Some(update.audio_start_time),
-                    audio_end_time: Some(update.audio_end_time),
-                    duration: Some(update.duration),
-                    display_time: Some(update.timestamp.clone()), // Use wall-clock timestamp for display
-                    confidence: Some(update.confidence),
-                    sequence_id: Some(update.sequence_id),
-                    speaker: update.speaker.clone(),
-                    voice_profile_id: update.voice_profile_id.clone(),
-                    source: Some(update.source.clone()),
-                };
-
-                // Persist to SQLite via the batched writer (issue #57 slice
-                // 2) — a cheap channel send, non-blocking, independent of
-                // the RecordingSaver copy saved just below.
-                if let Ok(writer_guard) = TRANSCRIPT_DB_WRITER.lock() {
-                    if let Some(writer) = writer_guard.as_ref() {
-                        writer.enqueue(meeting_id_for_listener.clone(), segment.clone());
-                    }
-                }
-
-                // Save to recording manager
-                if let Ok(manager_guard) = RECORDING_MANAGER.lock() {
-                    if let Some(manager) = manager_guard.as_ref() {
-                        manager.add_transcript_segment(segment);
-                    } else {
-                        // Manager is briefly out of the slot (e.g. mid
-                        // force-flush during stop) — buffer instead of
-                        // dropping; replayed once it's back (issue #25).
-                        PENDING_SEGMENT_BUFFER.lock().unwrap().push(segment);
-                    }
-                }
-            }
-        });
-        // A stale id here means a previous session never reached its unlisten
-        // (error-path stop, crash recovery); drop it or every segment would be
-        // persisted twice for the rest of the process lifetime.
-        let stale = TRANSCRIPT_LISTENER_ID.lock().unwrap().replace(listener_id);
-        if let Some(stale_id) = stale {
-            app.unlisten(stale_id);
-            warn!("⚠️ Removed a stale transcript-update listener from a previous session");
-        }
-        info!("✅ Transcript-update event listener registered for history persistence");
-    }
+    // Persist every finished segment for this session (SQLite writer +
+    // RecordingSaver copy) via the in-process transcript bus.
+    subscribe_transcript_persistence(meeting_id.clone());
 
     // Emit success event
     app.emit(
@@ -764,7 +754,7 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         *TRANSCRIPT_DB_WRITER.lock().unwrap() = Some(writer);
         let stale_task = TRANSCRIPT_DB_WRITER_TASK.lock().unwrap().replace(writer_task);
         if let Some(stale_task) = stale_task {
-            // Same defensive cleanup as the stale transcript-update listener
+            // Same defensive cleanup as the stale transcript subscriber
             // below: a previous session's task should already be gone, but
             // never leave two writers racing against the same DB rows.
             stale_task.abort();
@@ -810,67 +800,9 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
         transcription::start_partial_decode_task(app.clone(), rx);
     }
 
-    // CRITICAL: Listen for transcript-update events and save to recording manager
-    // This enables transcript history persistence for page reload sync
-    // Store listener ID for cleanup during stop_recording to ensure microphone is released
-    {
-        use tauri::Listener;
-        // Captured by value into the listener closure below so every
-        // segment it enqueues for SQLite carries this session's meeting_id,
-        // without touching the (frequently swapped) RECORDING_MANAGER lock
-        // to look it up on every event.
-        let meeting_id_for_listener = meeting_id.clone();
-        let listener_id = app.listen("transcript-update", move |event: tauri::Event| {
-            // Parse the transcript update from the event payload
-            if let Ok(update) = serde_json::from_str::<TranscriptUpdate>(event.payload()) {
-                // Create structured transcript segment
-                let segment = crate::audio::recording_saver::TranscriptSegment {
-                    id: format!("seg_{}", update.sequence_id),
-                    text: update.text.clone(),
-                    timestamp: None,
-                    audio_start_time: Some(update.audio_start_time),
-                    audio_end_time: Some(update.audio_end_time),
-                    duration: Some(update.duration),
-                    display_time: Some(update.timestamp.clone()), // Use wall-clock timestamp for display
-                    confidence: Some(update.confidence),
-                    sequence_id: Some(update.sequence_id),
-                    speaker: update.speaker.clone(),
-                    voice_profile_id: update.voice_profile_id.clone(),
-                    source: Some(update.source.clone()),
-                };
-
-                // Persist to SQLite via the batched writer (issue #57 slice
-                // 2) — a cheap channel send, non-blocking, independent of
-                // the RecordingSaver copy saved just below.
-                if let Ok(writer_guard) = TRANSCRIPT_DB_WRITER.lock() {
-                    if let Some(writer) = writer_guard.as_ref() {
-                        writer.enqueue(meeting_id_for_listener.clone(), segment.clone());
-                    }
-                }
-
-                // Save to recording manager
-                if let Ok(manager_guard) = RECORDING_MANAGER.lock() {
-                    if let Some(manager) = manager_guard.as_ref() {
-                        manager.add_transcript_segment(segment);
-                    } else {
-                        // Manager is briefly out of the slot (e.g. mid
-                        // force-flush during stop) — buffer instead of
-                        // dropping; replayed once it's back (issue #25).
-                        PENDING_SEGMENT_BUFFER.lock().unwrap().push(segment);
-                    }
-                }
-            }
-        });
-        // A stale id here means a previous session never reached its unlisten
-        // (error-path stop, crash recovery); drop it or every segment would be
-        // persisted twice for the rest of the process lifetime.
-        let stale = TRANSCRIPT_LISTENER_ID.lock().unwrap().replace(listener_id);
-        if let Some(stale_id) = stale {
-            app.unlisten(stale_id);
-            warn!("⚠️ Removed a stale transcript-update listener from a previous session");
-        }
-        info!("✅ Transcript-update event listener registered for history persistence");
-    }
+    // Persist every finished segment for this session (SQLite writer +
+    // RecordingSaver copy) via the in-process transcript bus.
+    subscribe_transcript_persistence(meeting_id.clone());
 
     // Emit success event
     app.emit(
@@ -959,7 +891,7 @@ pub async fn stop_recording<R: Runtime>(
 
     // Step 1: Stop audio capture immediately (no more new chunks). Take the
     // manager out just long enough to force-flush the pipeline, then put it
-    // BACK in the global slot so the transcript-update listener can still reach
+    // BACK in the global slot so the transcript bus subscriber can still reach
     // it while the worker drains the flushed tail below. `force_flush` calls
     // `state.cleanup()`, so `is_recording()` already reads false here even with
     // the manager present. It's taken out again for the final save after the
@@ -973,7 +905,7 @@ pub async fn stop_recording<R: Runtime>(
         // Use FORCE FLUSH to immediately process all accumulated audio - eliminates 30s delay!
         info!("🚀 Using FORCE FLUSH to eliminate pipeline accumulation delays");
         let result = manager.stop_streams_and_force_flush().await;
-        // Replay any segments the transcript-update listener buffered while
+        // Replay any segments the transcript bus subscriber buffered while
         // the manager was out of RECORDING_MANAGER during the await above
         // (issue #25) — before putting the manager back, so nothing else
         // can observe it as "present but missing tail segments".
@@ -988,7 +920,7 @@ pub async fn stop_recording<R: Runtime>(
             }
         }
         // Return the manager to the global slot for the drain window so the
-        // listener can persist the tail segments transcribed below.
+        // bus subscriber can persist the tail segments transcribed below.
         *RECORDING_MANAGER.lock().unwrap() = Some(manager);
         result
     } else {
@@ -1013,10 +945,10 @@ pub async fn stop_recording<R: Runtime>(
         }
     }
 
-    // NOTE: the transcript-update listener and the speaker diarizer are torn
+    // NOTE: the transcript bus subscriber and the speaker diarizer are torn
     // down *after* the transcription drain below — not here. The force-flush
     // above only *queues* the tail segments; they're transcribed during the
-    // drain and their `transcript-update` events must still reach the listener
+    // drain and their segments must still reach the subscriber
     // (which persists them) and the diarizer (which attributes them). Removing
     // either now drops the final utterance(s) — and for a short recording whose
     // entire content is one un-closed utterance, that means zero saved
@@ -1110,20 +1042,15 @@ pub async fn stop_recording<R: Runtime>(
     }
 
     // The worker has drained: the flushed tail segments are transcribed and
-    // their `transcript-update` events emitted. Let the event loop deliver
-    // those final events to the listener (which persists them) before we remove
-    // it. Doing this earlier loses the last utterance(s) — see the note above.
-    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-    {
-        use tauri::Listener;
-        if let Some(listener_id) = TRANSCRIPT_LISTENER_ID.lock().unwrap().take() {
-            app.unlisten(listener_id);
-            info!("✅ Transcript-update listener removed (after transcription drain)");
-        }
+    // were published to the transcript bus synchronously as they finished,
+    // so every one has already been persisted. Removing the subscriber
+    // earlier than this would lose the last utterance(s) — see the note above.
+    if super::transcript_bus::unsubscribe() {
+        info!("✅ Transcript persistence unsubscribed (after transcription drain)");
     }
 
     // Shut down the transcript DB writer (issue #57 slice 2): every segment
-    // this session enqueued has been sent by now (the listener above is
+    // this session enqueued has been sent by now (the subscriber above is
     // gone), so dropping the writer closes its channel — the task then
     // flushes whatever's left in its current batch and returns, which this
     // awaits (bounded) before moving on.
