@@ -54,6 +54,9 @@ pub struct Transcript {
     /// rows and imports; used to play the matching channel of the stereo
     /// recording (mic = left, system = right).
     pub source: Option<String>,
+    /// Whisper confidence score (0.0-1.0) from the live-recording path. Null
+    /// for older rows, imports, and retranscription.
+    pub confidence: Option<f32>,
 }
 
 /// Stored speaker voice profile used to recognize returning speakers across meetings.
@@ -246,4 +249,10 @@ pub struct MeetingTranscript {
     /// per-segment playback. Null for older rows / imports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// Whisper confidence score (0.0-1.0), when persisted from the
+    /// live-recording path. Null for older rows, imports, and
+    /// retranscription — the frontend's `ConfidenceIndicator` renders
+    /// nothing in that case, and the GPUI mirror does the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
 }

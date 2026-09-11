@@ -17,6 +17,7 @@ use std::time::Duration;
 use gpui_kit::component::{
     ActiveTheme, Disableable as _, IconName, WindowExt as _,
     button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
     h_flex,
     input::{Input, InputState},
     notification::Notification,
@@ -32,9 +33,13 @@ use gpui_kit::*;
 use meetily_core::calendar::models::CalendarEvent;
 use meetily_core::calendar::repository::CalendarRepository;
 use meetily_core::calendar::service::link_meeting_with_snapshot;
-use meetily_core::database::models::{MeetingDetails, MeetingTranscript, VoiceProfile};
+use meetily_core::database::models::{ActionItem, MeetingDetails, MeetingNote, MeetingTranscript, VoiceProfile};
+use meetily_core::database::repositories::action_item::{
+    ActionItemsRepository, NewActionItem, SOURCE_MANUAL as ACTION_ITEM_SOURCE_MANUAL, STATUS_DONE, STATUS_OPEN,
+};
 use meetily_core::database::repositories::meeting::MeetingsRepository;
-use meetily_core::database::repositories::setting::SettingsRepository;
+use meetily_core::database::repositories::meeting_note::{MeetingNotesRepository, SOURCE_MANUAL as NOTE_SOURCE_MANUAL};
+use meetily_core::database::repositories::setting::{SettingsRepository, KEY_UI_CONFIG};
 use meetily_core::database::repositories::summary::SummaryProcessesRepository;
 use meetily_core::database::repositories::voice_profile::VoiceProfilesRepository;
 use meetily_core::speaker_diarization::service::{merge_cluster_into_profile_core, promote_speaker_to_profile_core};
@@ -172,6 +177,37 @@ pub struct MeetingView {
     /// actually starting), if any.
     loading_segment: Option<String>,
 
+    // -- Confidence indicator ---------------------------------------------
+    /// `ui_config.showConfidenceIndicator`, read once per `load()` — mirrors
+    /// `ConfidenceIndicator.tsx`'s `showIndicator` gate.
+    show_confidence: bool,
+
+    // -- Meeting notes ------------------------------------------------------
+    // Mirrors `MeetingNotesPanel.tsx`: append-only (no edit; delete+re-add).
+    notes: Vec<MeetingNote>,
+    notes_composing: bool,
+    notes_draft: Entity<InputState>,
+    notes_saving: bool,
+
+    // -- Per-meeting action items --------------------------------------------
+    // Mirrors `ActionItemsPanel.tsx`.
+    action_items: Vec<ActionItem>,
+    action_items_loading: bool,
+    /// Item currently shown with an editable text field, if any.
+    ai_editing_id: Option<String>,
+    ai_edit_input: Entity<InputState>,
+    ai_adding: bool,
+    ai_add_input: Entity<InputState>,
+    ai_extracting: bool,
+
+    // -- Summary typewriter reveal --------------------------------------------
+    // `on_summary_stream` buffers incoming deltas here instead of pushing
+    // them straight to `summary_state`; `_summary_reveal_task` drains the
+    // buffer at `format::SUMMARY_REVEAL_INTERVAL_MS`, mirroring
+    // `useTranscriptStreaming.ts`'s pacing (see `format.rs`).
+    summary_reveal_pending: String,
+    _summary_reveal_task: Option<Task<()>>,
+
     _subscriptions: Vec<Subscription>,
 }
 
@@ -194,6 +230,7 @@ impl MeetingView {
                 "retranscription-progress" => this.on_retranscription_progress(event, cx),
                 "retranscription-complete" => this.on_retranscription_complete(event, cx),
                 "retranscription-error" => this.on_retranscription_error(event, cx),
+                "action-items-extracted" => this.on_action_items_extracted(event, cx),
                 meetily_core::audio::playback::PLAYBACK_ENDED_EVENT => this.on_segment_playback_ended(cx),
                 _ => {}
             }
@@ -206,6 +243,9 @@ impl MeetingView {
             cx.new(|cx| InputState::new(window, cx).placeholder("Custom instructions (optional)…"));
         let calendar_picker_query =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search events…"));
+        let notes_draft = cx.new(|cx| InputState::new(window, cx).placeholder("Add a note…"));
+        let ai_edit_input = cx.new(|cx| InputState::new(window, cx).placeholder("Action item text"));
+        let ai_add_input = cx.new(|cx| InputState::new(window, cx).placeholder("Add an action item…"));
 
         let view = Self {
             meeting_id: None,
@@ -249,6 +289,20 @@ impl MeetingView {
             speaker_edit: None,
             playing_segment: None,
             loading_segment: None,
+            show_confidence: false,
+            notes: Vec::new(),
+            notes_composing: false,
+            notes_draft,
+            notes_saving: false,
+            action_items: Vec::new(),
+            action_items_loading: false,
+            ai_editing_id: None,
+            ai_edit_input,
+            ai_adding: false,
+            ai_add_input,
+            ai_extracting: false,
+            summary_reveal_pending: String::new(),
+            _summary_reveal_task: None,
             _subscriptions: subscriptions,
         };
         view.load_default_template(cx);
@@ -323,6 +377,16 @@ impl MeetingView {
         self.speaker_edit = None;
         self.playing_segment = None;
         self.loading_segment = None;
+        self.notes = Vec::new();
+        self.notes_composing = false;
+        self.notes_saving = false;
+        self.action_items = Vec::new();
+        self.action_items_loading = true;
+        self.ai_editing_id = None;
+        self.ai_adding = false;
+        self.ai_extracting = false;
+        self.summary_reveal_pending.clear();
+        self._summary_reveal_task = None;
         self.summary_state.update(cx, |state, cx| state.set_text("", cx));
         cx.notify();
 
@@ -371,6 +435,9 @@ impl MeetingView {
         // in flight (e.g. started from the Tauri UI).
         self.refresh_summary(generation, cx);
         self.load_calendar_event(generation, cx);
+        self.load_notes(generation, cx);
+        self.load_action_items(generation, cx);
+        self.load_confidence_setting(generation, cx);
 
         // A clip from the previous meeting shouldn't keep playing once we've
         // navigated away from its transcript.
@@ -602,6 +669,12 @@ impl MeetingView {
         self._poll_task = Some(task);
     }
 
+    /// Buffers the incoming delta instead of pushing it straight to
+    /// `summary_state` — [`Self::start_summary_reveal_task`] drains the
+    /// buffer at a typewriter pace (see `format::summary_reveal_chars_per_tick`).
+    /// `summary_markdown` (the source-of-truth for save/copy/export) still
+    /// gets the delta immediately: only the *rendered* `summary_state` text
+    /// lags behind.
     fn on_summary_stream(&mut self, event: &crate::core_events::CoreEvent, cx: &mut Context<Self>) {
         #[derive(serde::Deserialize)]
         struct Delta {
@@ -619,7 +692,63 @@ impl MeetingView {
         }
         self.summary_has_content = true;
         self.summary_markdown.push_str(&payload.delta);
-        self.summary_state.update(cx, |state, cx| state.push_str(&payload.delta, cx));
+
+        if cx.reduce_motion() {
+            // Mirrors `useTranscriptStreaming.ts`'s reduced-motion path:
+            // skip the reveal animation and show text immediately.
+            self.summary_state.update(cx, |state, cx| state.push_str(&payload.delta, cx));
+            return;
+        }
+
+        self.summary_reveal_pending.push_str(&payload.delta);
+        if self._summary_reveal_task.is_none() {
+            self.start_summary_reveal_task(cx);
+        }
+    }
+
+    /// Drains `summary_reveal_pending` into `summary_state` a few characters
+    /// at a time on a repeating timer, mirroring `useTranscriptStreaming.ts`'s
+    /// pacing. Stops itself once the buffer empties (a later delta restarts
+    /// it via `on_summary_stream`), so at most one timer runs at a time.
+    fn start_summary_reveal_task(&mut self, cx: &mut Context<Self>) {
+        let generation = self.generation;
+        let task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(format::SUMMARY_REVEAL_INTERVAL_MS))
+                    .await;
+                let done = this
+                    .update(cx, |this, cx| {
+                        if this.generation != generation || this.summary_reveal_pending.is_empty() {
+                            return true;
+                        }
+                        let n = format::summary_reveal_chars_per_tick(this.summary_reveal_pending.len())
+                            .min(this.summary_reveal_pending.len());
+                        // Drain on a char boundary — `n` counts bytes of a
+                        // UTF-8 buffer, which may land mid-codepoint.
+                        let mut boundary = n;
+                        while boundary < this.summary_reveal_pending.len()
+                            && !this.summary_reveal_pending.is_char_boundary(boundary)
+                        {
+                            boundary += 1;
+                        }
+                        let chunk: String = this.summary_reveal_pending.drain(..boundary).collect();
+                        this.summary_state.update(cx, |state, cx| state.push_str(&chunk, cx));
+                        this.summary_reveal_pending.is_empty()
+                    })
+                    .unwrap_or(true);
+                if done {
+                    break;
+                }
+            }
+            let _ = this.update(cx, |this, cx| {
+                if this.generation == generation {
+                    this._summary_reveal_task = None;
+                    cx.notify();
+                }
+            });
+        });
+        self._summary_reveal_task = Some(task);
     }
 
     // ---- Summary editing (zorite) ----------------------------------------
@@ -1404,6 +1533,424 @@ impl MeetingView {
         self.loading_segment = None;
         cx.notify();
     }
+
+    // ---- Confidence indicator ---------------------------------------------
+
+    /// Read `ui_config.showConfidenceIndicator` (default `true`, matching
+    /// `ConfigContext.tsx`'s `readStoredBool(.., true)`) once per `load()`.
+    /// Read directly via `SettingsRepository` rather than `SettingsCache`
+    /// (the Settings page's own global) — this view doesn't depend on the
+    /// Settings page being visited first.
+    fn load_confidence_setting(&mut self, generation: u64, cx: &mut Context<Self>) {
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let io = Io::global(cx);
+        cx.spawn(async move |this, cx| {
+            let result = io.spawn(async move { SettingsRepository::get_setting_json(&pool, KEY_UI_CONFIG).await }).await;
+            let show = match result {
+                Ok(Ok(Some(json))) => serde_json::from_str::<serde_json::Value>(&json)
+                    .ok()
+                    .and_then(|v| v.get("showConfidenceIndicator").and_then(|v| v.as_bool()))
+                    .unwrap_or(true),
+                _ => true,
+            };
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                this.show_confidence = show;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    // ---- Meeting notes ------------------------------------------------------
+    // Mirrors `MeetingNotesPanel.tsx`: load silently (no loading/error UI),
+    // oldest-first, append-only (delete + re-add instead of editing).
+
+    fn load_notes(&mut self, generation: u64, cx: &mut Context<Self>) {
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let Some(id) = self.meeting_id.clone() else {
+            return;
+        };
+        let io = Io::global(cx);
+        cx.spawn(async move |this, cx| {
+            let result = io.spawn(async move { MeetingNotesRepository::list_by_meeting(&pool, &id).await }).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                if let Ok(Ok(notes)) = result {
+                    this.notes = notes;
+                }
+                // Silent on error, matching the React panel (console.error only).
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn open_note_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.notes_composing = true;
+        self.notes_draft.update(cx, |s, cx| s.set_value("", window, cx));
+        cx.notify();
+    }
+
+    fn cancel_note_composer(&mut self, cx: &mut Context<Self>) {
+        self.notes_composing = false;
+        cx.notify();
+    }
+
+    fn save_note(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.meeting_id.clone() else {
+            return;
+        };
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let body = self.notes_draft.read(cx).value().trim().to_string();
+        if body.is_empty() || self.notes_saving {
+            return;
+        }
+        self.notes_saving = true;
+        cx.notify();
+
+        let io = Io::global(cx);
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let result = io
+                .spawn(async move { MeetingNotesRepository::create(&pool, &id, &body, NOTE_SOURCE_MANUAL).await })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.notes_saving = false;
+                if this.generation != generation {
+                    return;
+                }
+                match result {
+                    Ok(Ok(note)) => {
+                        this.notes.push(note);
+                        this.notes_composing = false;
+                        this.notes_draft.update(cx, |s, cx| s.set_value("", window, cx));
+                    }
+                    Ok(Err(e)) => notify(cx, Notification::error(format!("Failed to add note: {e}"))),
+                    Err(e) => notify(cx, Notification::error(format!("Failed to add note: {e}"))),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Optimistic removal, mirroring `MeetingNotesPanel.tsx`'s
+    /// `handleDelete`: removed from view immediately, re-inserted
+    /// (sorted back into place) on failure.
+    fn delete_note(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let removed = self.notes.iter().position(|n| n.id == id).map(|ix| self.notes.remove(ix));
+        cx.notify();
+
+        let io = Io::global(cx);
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let result = io.spawn(async move { MeetingNotesRepository::delete(&pool, &id).await }).await;
+            let ok = matches!(result, Ok(Ok(true)));
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                if !ok {
+                    if let Some(note) = removed {
+                        this.notes.push(note);
+                        this.notes.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+                    }
+                    notify(cx, Notification::error("Failed to delete note"));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    // ---- Per-meeting action items -------------------------------------------
+    // Mirrors `ActionItemsPanel.tsx`: `list_by_meeting`'s order (open first,
+    // oldest-first within each group) is used as-is, no client-side re-sort.
+
+    fn load_action_items(&mut self, generation: u64, cx: &mut Context<Self>) {
+        let Some(pool) = AppServices::global(cx).pool() else {
+            self.action_items_loading = false;
+            return;
+        };
+        let Some(id) = self.meeting_id.clone() else {
+            self.action_items_loading = false;
+            return;
+        };
+        let io = Io::global(cx);
+        cx.spawn(async move |this, cx| {
+            let result = io.spawn(async move { ActionItemsRepository::list_by_meeting(&pool, &id).await }).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                this.action_items_loading = false;
+                if let Ok(Ok(items)) = result {
+                    this.action_items = items;
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn on_action_items_extracted(&mut self, event: &crate::core_events::CoreEvent, cx: &mut Context<Self>) {
+        #[derive(serde::Deserialize)]
+        struct Payload {
+            meeting_id: String,
+        }
+        let Some(payload) = event.decode::<Payload>() else {
+            return;
+        };
+        if self.meeting_id.as_deref() != Some(payload.meeting_id.as_str()) {
+            return;
+        }
+        self.ai_extracting = false;
+        self.load_action_items(self.generation, cx);
+    }
+
+    fn toggle_action_item_status(&mut self, id: String, currently_done: bool, cx: &mut Context<Self>) {
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let next = if currently_done { STATUS_OPEN } else { STATUS_DONE };
+        if let Some(item) = self.action_items.iter_mut().find(|i| i.id == id) {
+            item.status = next.to_string();
+        }
+        cx.notify();
+
+        let io = Io::global(cx);
+        let generation = self.generation;
+        let id_for_task = id.clone();
+        cx.spawn(async move |this, cx| {
+            let result = io.spawn(async move { ActionItemsRepository::set_status(&pool, &id_for_task, next).await }).await;
+            if !matches!(result, Ok(Ok(Some(_)))) {
+                let _ = this.update(cx, |this, cx| {
+                    if this.generation == generation {
+                        this.load_action_items(generation, cx);
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn start_action_item_edit(&mut self, item_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(item) = self.action_items.iter().find(|i| i.id == item_id) else {
+            return;
+        };
+        let text = item.text.clone();
+        self.ai_editing_id = Some(item_id);
+        self.ai_edit_input.update(cx, |s, cx| s.set_value(text, window, cx));
+        cx.notify();
+    }
+
+    fn cancel_action_item_edit(&mut self, cx: &mut Context<Self>) {
+        self.ai_editing_id = None;
+        cx.notify();
+    }
+
+    fn save_action_item_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.ai_editing_id.take() else {
+            return;
+        };
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let text = self.ai_edit_input.read(cx).value().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        if let Some(item) = self.action_items.iter_mut().find(|i| i.id == id) {
+            item.text = text.clone();
+        }
+        cx.notify();
+
+        let io = Io::global(cx);
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let result = io.spawn(async move { ActionItemsRepository::update(&pool, &id, Some(&text), None, None).await }).await;
+            if !matches!(result, Ok(Ok(Some(_)))) {
+                let _ = this.update(cx, |this, cx| {
+                    if this.generation == generation {
+                        this.load_action_items(generation, cx);
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn delete_action_item(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        self.action_items.retain(|i| i.id != id);
+        cx.notify();
+
+        let io = Io::global(cx);
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let result = io.spawn(async move { ActionItemsRepository::delete(&pool, &id).await }).await;
+            if !matches!(result, Ok(Ok(true))) {
+                let _ = this.update(cx, |this, cx| {
+                    if this.generation == generation {
+                        this.load_action_items(generation, cx);
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn open_action_item_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ai_adding = true;
+        self.ai_add_input.update(cx, |s, cx| s.set_value("", window, cx));
+        cx.notify();
+    }
+
+    fn cancel_action_item_composer(&mut self, cx: &mut Context<Self>) {
+        self.ai_adding = false;
+        cx.notify();
+    }
+
+    fn save_new_action_item(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.meeting_id.clone() else {
+            return;
+        };
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let text = self.ai_add_input.read(cx).value().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        self.ai_adding = false;
+        cx.notify();
+
+        let io = Io::global(cx);
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let item = NewActionItem { text, ..Default::default() };
+            let result =
+                io.spawn(async move { ActionItemsRepository::create(&pool, &id, &item, ACTION_ITEM_SOURCE_MANUAL).await }).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.generation != generation {
+                    return;
+                }
+                match result {
+                    Ok(Ok(_)) => this.load_action_items(generation, cx),
+                    Ok(Err(e)) => notify(cx, Notification::error(format!("Failed to add action item: {e}"))),
+                    Err(e) => notify(cx, Notification::error(format!("Failed to add action item: {e}"))),
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// "Extract from summary" / "Re-extract" — mirrors the Tauri
+    /// `extract_action_items` command: try the transcript-grounded
+    /// extractor first, falling back to the summary-markdown extractor if
+    /// it errors (e.g. no transcript rows to window over).
+    fn extract_action_items(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.meeting_id.clone() else {
+            return;
+        };
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        if self.ai_extracting {
+            return;
+        }
+        self.ai_extracting = true;
+        cx.notify();
+
+        let sink = AppServices::global(cx).sink.clone();
+        let summary_markdown = self.summary_markdown.clone();
+        let io = Io::global(cx);
+        let generation = self.generation;
+        cx.spawn(async move |this, cx| {
+            let pool_for_config = pool.clone();
+            let config = io.spawn(async move { SettingsRepository::get_model_config(&pool_for_config).await }).await;
+            let Ok(Ok(Some(config))) = config else {
+                let _ = this.update(cx, |this, cx| {
+                    this.ai_extracting = false;
+                    if this.generation == generation {
+                        notify(cx, Notification::error("No model configured — set one up in Settings first."));
+                    }
+                    cx.notify();
+                });
+                return;
+            };
+
+            let provider = config.provider;
+            let model = config.model;
+            let pool_for_transcript = pool.clone();
+            let sink_for_transcript = sink.clone();
+            let id_for_transcript = id.clone();
+            let provider_for_transcript = provider.clone();
+            let model_for_transcript = model.clone();
+            let transcript_result = io
+                .spawn(async move {
+                    meetily_core::summary::transcript_action_items::extract_from_transcript(
+                        sink_for_transcript.as_ref(),
+                        &pool_for_transcript,
+                        &id_for_transcript,
+                        &provider_for_transcript,
+                        &model_for_transcript,
+                    )
+                    .await
+                })
+                .await;
+
+            let outcome = match transcript_result {
+                Ok(Ok(count)) => Ok(count),
+                _ => {
+                    // Fall back to extracting from the stored summary markdown.
+                    let id_for_summary = id.clone();
+                    io.spawn(async move {
+                        meetily_core::summary::action_extraction::extract_for_meeting(
+                            sink.as_ref(),
+                            &pool,
+                            &id_for_summary,
+                            &summary_markdown,
+                            &provider,
+                            &model,
+                        )
+                        .await
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(format!("Task panicked: {e}")))
+                }
+            };
+
+            let _ = this.update(cx, |this, cx| {
+                this.ai_extracting = false;
+                if this.generation != generation {
+                    return;
+                }
+                match outcome {
+                    Ok(_) => this.load_action_items(generation, cx),
+                    Err(e) => notify(cx, Notification::error(format!("Extraction failed: {e}"))),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
 }
 
 /// Show a notification on the main window from a context that doesn't carry
@@ -2120,6 +2667,7 @@ impl MeetingView {
         let speaker_edit = self.speaker_edit.clone();
         let playing_segment = self.playing_segment.clone();
         let loading_segment = self.loading_segment.clone();
+        let show_confidence = self.show_confidence;
 
         v_flex()
             .size_full()
@@ -2197,6 +2745,25 @@ impl MeetingView {
                                 header_row = header_row.child(speaker.clone());
                             }
                             header_row = header_row.child(time);
+
+                            if show_confidence {
+                                if let Some(conf) = t.confidence {
+                                    let color = match format::ConfidenceLevel::for_confidence(conf) {
+                                        format::ConfidenceLevel::High => cx.theme().success,
+                                        format::ConfidenceLevel::Good | format::ConfidenceLevel::Medium => {
+                                            cx.theme().warning
+                                        }
+                                        format::ConfidenceLevel::Low => cx.theme().danger,
+                                    };
+                                    header_row = header_row.child(
+                                        Button::new(SharedString::from(format!("confidence-{}", t.id)))
+                                            .ghost()
+                                            .xsmall()
+                                            .tooltip(format::confidence_tooltip(conf))
+                                            .child(div().size(px(8.)).rounded_full().bg(color)),
+                                    );
+                                }
+                            }
 
                             let row = v_flex()
                                 .w_full()
@@ -2358,10 +2925,325 @@ impl MeetingView {
                     .min_h_0()
                     .overflow_y_scroll()
                     .p_4()
-                    .when(!self.editing_summary, |this| {
-                        this.child(TextView::new(&self.summary_state).selectable(true))
-                    })
-                    .when(self.editing_summary, |this| this.child(self.summary_editor.clone())),
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .gap_4()
+                            .when(!self.editing_summary, |this| {
+                                this.child(TextView::new(&self.summary_state).selectable(true))
+                            })
+                            .when(self.editing_summary, |this| this.child(self.summary_editor.clone()))
+                            .child(self.render_action_items_panel(cx))
+                            .child(self.render_notes_panel(cx)),
+                    ),
             )
+    }
+
+    // ---- Per-meeting action items panel -------------------------------------
+    // Mirrors `ActionItemsPanel.tsx`'s card layout: header (icon, title, open
+    // count / "All done"), an "Extract from summary"/"Re-extract" button
+    // (only once there's a summary), the item list, then an add row.
+
+    fn render_action_items_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        let open_count = self.action_items.iter().filter(|i| i.status != STATUS_DONE).count();
+        let is_empty = self.action_items.is_empty();
+        let has_summary = self.summary_has_content;
+
+        let mut card = v_flex()
+            .w_full()
+            .gap_2()
+            .p_3()
+            .rounded_md()
+            .bg(cx.theme().muted.opacity(0.3))
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(Lucide::ListChecks.view(cx))
+                            .child(div().text_sm().font_semibold().child("Action Items"))
+                            .when(open_count > 0, |this| {
+                                this.child(
+                                    div()
+                                        .text_xs()
+                                        .px_2()
+                                        .rounded_full()
+                                        .bg(cx.theme().primary.opacity(0.15))
+                                        .text_color(cx.theme().primary)
+                                        .child(open_count.to_string()),
+                                )
+                            })
+                            .when(!is_empty && open_count == 0, |this| {
+                                this.child(
+                                    div().text_xs().text_color(cx.theme().muted_foreground).child("All done"),
+                                )
+                            }),
+                    )
+                    .when(has_summary, |this| {
+                        let label = if is_empty { "Extract from summary" } else { "Re-extract" };
+                        this.child(
+                            Button::new("extract-action-items")
+                                .ghost()
+                                .xsmall()
+                                .icon(Lucide::Sparkles)
+                                .label(label)
+                                .loading(self.ai_extracting)
+                                .disabled(self.ai_extracting)
+                                .on_click(cx.listener(|this, _, _, cx| this.extract_action_items(cx))),
+                        )
+                    }),
+            );
+
+        if is_empty {
+            let empty_text = if has_summary {
+                "No action items yet. Extract them from the summary, or add one below."
+            } else {
+                "No action items yet. Add one below."
+            };
+            card = card.child(div().text_xs().text_color(cx.theme().muted_foreground).child(empty_text));
+        } else {
+            for item in &self.action_items {
+                card = card.child(self.render_action_item_row(item, cx));
+            }
+        }
+
+        card = card.child(self.render_action_item_composer(cx));
+        card.into_any_element()
+    }
+
+    fn render_action_item_row(&self, item: &ActionItem, cx: &mut Context<Self>) -> AnyElement {
+        let is_done = item.status == STATUS_DONE;
+        let id = item.id.clone();
+
+        if self.ai_editing_id.as_deref() == Some(item.id.as_str()) {
+            return h_flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .child(div().flex_1().min_w_0().child(Input::new(&self.ai_edit_input)))
+                .child(
+                    Button::new(SharedString::from(format!("save-ai-{id}")))
+                        .primary()
+                        .xsmall()
+                        .label("Save")
+                        .on_click(cx.listener(|this, _, _, cx| this.save_action_item_edit(cx))),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("cancel-ai-{id}")))
+                        .ghost()
+                        .xsmall()
+                        .label("Cancel")
+                        .on_click(cx.listener(|this, _, _, cx| this.cancel_action_item_edit(cx))),
+                )
+                .into_any_element();
+        }
+
+        let id_for_toggle = id.clone();
+        let id_for_edit = id.clone();
+        let id_for_delete = id.clone();
+
+        h_flex()
+            .w_full()
+            .items_start()
+            .gap_2()
+            .child(
+                Checkbox::new(SharedString::from(format!("ai-done-{id}"))).checked(is_done).on_click(cx.listener(
+                    move |this, _, _, cx| this.toggle_action_item_status(id_for_toggle.clone(), is_done, cx),
+                )),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .when(is_done, |this| this.line_through().text_color(cx.theme().muted_foreground))
+                            .child(item.text.clone()),
+                    )
+                    .when(item.assignee.is_some() || item.due_hint.is_some(), |this| {
+                        this.child(
+                            h_flex()
+                                .gap_2()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .when_some(item.assignee.clone(), |this, a| this.child(a))
+                                .when_some(item.due_hint.clone(), |this, d| this.child(d)),
+                        )
+                    }),
+            )
+            .child(
+                Button::new(SharedString::from(format!("edit-ai-{id}")))
+                    .ghost()
+                    .xsmall()
+                    .icon(Lucide::Pencil)
+                    .tooltip("Edit")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.start_action_item_edit(id_for_edit.clone(), window, cx);
+                    })),
+            )
+            .child(
+                Button::new(SharedString::from(format!("delete-ai-{id}")))
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Delete)
+                    .tooltip("Delete")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.delete_action_item(id_for_delete.clone(), cx);
+                    })),
+            )
+            .into_any_element()
+    }
+
+    fn render_action_item_composer(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.ai_adding {
+            return h_flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .child(div().flex_1().min_w_0().child(Input::new(&self.ai_add_input)))
+                .child(
+                    Button::new("save-add-ai")
+                        .primary()
+                        .xsmall()
+                        .label("Add")
+                        .on_click(cx.listener(|this, _, _, cx| this.save_new_action_item(cx))),
+                )
+                .child(
+                    Button::new("cancel-add-ai")
+                        .ghost()
+                        .xsmall()
+                        .label("Cancel")
+                        .on_click(cx.listener(|this, _, _, cx| this.cancel_action_item_composer(cx))),
+                )
+                .into_any_element();
+        }
+
+        Button::new("open-add-ai")
+            .ghost()
+            .xsmall()
+            .icon(IconName::Plus)
+            .label("Add item")
+            .on_click(cx.listener(|this, _, window, cx| this.open_action_item_composer(window, cx)))
+            .into_any_element()
+    }
+
+    // ---- Meeting notes panel -------------------------------------------------
+    // Mirrors `MeetingNotesPanel.tsx`'s card layout: header (icon, title,
+    // count badge, "Add note" button), a list of notes, no empty-state text.
+
+    fn render_notes_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        let count = self.notes.len();
+
+        let mut card = v_flex()
+            .w_full()
+            .gap_2()
+            .p_3()
+            .rounded_md()
+            .bg(cx.theme().muted.opacity(0.3))
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(Lucide::NotebookPen.view(cx))
+                            .child(div().text_sm().font_semibold().child("Notes"))
+                            .when(count > 0, |this| {
+                                this.child(
+                                    div()
+                                        .text_xs()
+                                        .px_2()
+                                        .rounded_full()
+                                        .bg(cx.theme().primary.opacity(0.15))
+                                        .text_color(cx.theme().primary)
+                                        .child(count.to_string()),
+                                )
+                            }),
+                    )
+                    .when(!self.notes_composing, |this| {
+                        this.child(
+                            Button::new("open-note-composer")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Plus)
+                                .label("Add note")
+                                .on_click(cx.listener(|this, _, window, cx| this.open_note_composer(window, cx))),
+                        )
+                    }),
+            );
+
+        for note in &self.notes {
+            let id = note.id.clone();
+            let time = format::format_note_time(&note.created_at);
+            let suffix = if note.source == "agent" { " · added by an agent" } else { "" };
+            card = card.child(
+                v_flex()
+                    .w_full()
+                    .gap_1()
+                    .child(div().text_sm().child(note.body.clone()))
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!("{time}{suffix}")),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!("delete-note-{id}")))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Delete)
+                                    .tooltip("Delete note")
+                                    .on_click(cx.listener(move |this, _, _, cx| this.delete_note(id.clone(), cx))),
+                            ),
+                    ),
+            );
+        }
+
+        if self.notes_composing {
+            card = card.child(
+                v_flex()
+                    .w_full()
+                    .gap_2()
+                    .child(div().w_full().child(Input::new(&self.notes_draft)))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("save-note")
+                                    .primary()
+                                    .xsmall()
+                                    .label(if self.notes_saving { "Saving…" } else { "Save" })
+                                    .loading(self.notes_saving)
+                                    .disabled(self.notes_saving)
+                                    .on_click(cx.listener(|this, _, window, cx| this.save_note(window, cx))),
+                            )
+                            .child(
+                                Button::new("cancel-note")
+                                    .ghost()
+                                    .xsmall()
+                                    .label("Cancel")
+                                    .disabled(self.notes_saving)
+                                    .on_click(cx.listener(|this, _, _, cx| this.cancel_note_composer(cx))),
+                            ),
+                    ),
+            );
+        }
+
+        card.into_any_element()
     }
 }

@@ -597,6 +597,7 @@ pub async fn api_get_meeting_transcripts<R: Runtime>(
                     speaker: t.speaker,
                     voice_profile_id: t.voice_profile_id,
                     source: t.source,
+                    confidence: t.confidence,
                 })
                 .collect::<Vec<_>>();
 

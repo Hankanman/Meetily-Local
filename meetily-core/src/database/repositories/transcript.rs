@@ -53,8 +53,8 @@ impl TranscriptsRepository {
         for segment in transcripts {
             let transcript_id = format!("transcript-{}", Uuid::new_v4());
             let result = sqlx::query(
-                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, voice_profile_id, sequence_id, source)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, voice_profile_id, sequence_id, source, confidence)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             )
             .bind(&transcript_id)
             .bind(&meeting_id)
@@ -72,6 +72,7 @@ impl TranscriptsRepository {
             .bind(&segment.voice_profile_id)
             .bind(segment.sequence_id.map(|s| s as i64))
             .bind(&segment.source)
+            .bind(segment.confidence)
             .execute(&mut *transaction)
             .await;
 
@@ -131,8 +132,8 @@ impl TranscriptsRepository {
         for (meeting_id, segment) in items {
             let transcript_id = format!("transcript-{}", Uuid::new_v4());
             let result = sqlx::query(
-                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, voice_profile_id, sequence_id, source)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, voice_profile_id, sequence_id, source, confidence)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(meeting_id, sequence_id) DO UPDATE SET
                      transcript = excluded.transcript,
                      timestamp = excluded.timestamp,
@@ -141,7 +142,8 @@ impl TranscriptsRepository {
                      duration = excluded.duration,
                      speaker = excluded.speaker,
                      voice_profile_id = excluded.voice_profile_id,
-                     source = excluded.source",
+                     source = excluded.source,
+                     confidence = excluded.confidence",
             )
             .bind(&transcript_id)
             .bind(meeting_id)
@@ -159,6 +161,7 @@ impl TranscriptsRepository {
             .bind(&segment.voice_profile_id)
             .bind(segment.sequence_id.map(|s| s as i64))
             .bind(&segment.source)
+            .bind(segment.confidence)
             .execute(&mut *transaction)
             .await;
 
