@@ -536,9 +536,11 @@ async fn run_import<R: Runtime>(
     // segmentation over a long file is minutes of CPU.
     let offline_turns: Option<Vec<crate::speaker_diarization::offline::SpeakerTurn>> =
         if total_segments > 0 && diarizer.is_some() {
-            let prefs = super::recording_preferences::load_recording_preferences(&app)
-                .await
-                .unwrap_or_default();
+            let prefs = super::recording_preferences::load_recording_preferences(
+                app.try_state::<AppState>().map(|s| s.db_manager.pool().clone()),
+            )
+            .await
+            .unwrap_or_default();
             let worth_it = num_speakers != 0 || duration_seconds > 60.0;
 
             if prefs.offline_diarization_on_import && worth_it {

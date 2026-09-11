@@ -710,7 +710,10 @@ async fn run_auto_refine<R: Runtime>(
     meeting_folder_path: String,
 ) -> Result<()> {
     // Preference check.
-    let prefs = super::recording_preferences::load_recording_preferences(&app).await?;
+    let prefs = super::recording_preferences::load_recording_preferences(
+        app.try_state::<AppState>().map(|s| s.db_manager.pool().clone()),
+    )
+    .await?;
     if !prefs.auto_refine {
         return Err(anyhow!("auto-refine disabled in recording preferences"));
     }

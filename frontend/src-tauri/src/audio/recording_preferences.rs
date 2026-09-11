@@ -125,9 +125,7 @@ fn db_pool<R: Runtime>(app: &AppHandle<R>) -> Option<sqlx::SqlitePool> {
 /// location and flat `{"preferences": ...}` shape the store plugin used,
 /// with its default serializer) so this module no longer depends on the
 /// plugin at all. The file is left in place afterward.
-fn import_legacy_recording_preferences<R: Runtime>(
-    _app: &AppHandle<R>,
-) -> Option<RecordingPreferences> {
+fn import_legacy_recording_preferences() -> Option<RecordingPreferences> {
     let path = crate::paths::app_data_dir().ok()?.join("recording_preferences.json");
     let content = std::fs::read_to_string(&path).ok()?;
     let root: serde_json::Value = serde_json::from_str(&content).ok()?;
@@ -148,18 +146,21 @@ fn import_legacy_recording_preferences<R: Runtime>(
 /// `recordingNotification.tsx`). Folded into `RecordingPreferences` on
 /// import so it lives in the same SQLite row going forward. The file is
 /// left in place afterward.
-fn import_legacy_show_recording_notification<R: Runtime>(_app: &AppHandle<R>) -> Option<bool> {
+fn import_legacy_show_recording_notification() -> Option<bool> {
     let path = crate::paths::app_data_dir().ok()?.join("preferences.json");
     let content = std::fs::read_to_string(&path).ok()?;
     let root: serde_json::Value = serde_json::from_str(&content).ok()?;
     root.get("show_recording_notification")?.as_bool()
 }
 
-/// Load recording preferences from the database
-pub async fn load_recording_preferences<R: Runtime>(
-    app: &AppHandle<R>,
+/// Load recording preferences from the database. `pool` is `None` when
+/// `AppState` hasn't been managed yet (e.g. a first-launch cold start) — the
+/// caller resolves it once (typically via `AppState`'s Tauri-managed pool)
+/// and passes it in, so this module itself never depends on Tauri.
+pub async fn load_recording_preferences(
+    pool: Option<sqlx::SqlitePool>,
 ) -> Result<RecordingPreferences> {
-    let pool = match db_pool(app) {
+    let pool = match pool {
         Some(pool) => pool,
         None => {
             info!("Database not yet initialized, using default recording preferences");
@@ -178,8 +179,8 @@ pub async fn load_recording_preferences<R: Runtime>(
             p
         }
         Ok(None) => {
-            let base_imported = import_legacy_recording_preferences(app);
-            let notification_imported = import_legacy_show_recording_notification(app);
+            let base_imported = import_legacy_recording_preferences();
+            let notification_imported = import_legacy_show_recording_notification();
 
             if base_imported.is_none() && notification_imported.is_none() {
                 info!("No stored preferences found, using defaults");
@@ -242,7 +243,7 @@ pub async fn save_recording_preferences<R: Runtime>(
 pub async fn get_recording_preferences<R: Runtime>(
     app: AppHandle<R>,
 ) -> Result<RecordingPreferences, String> {
-    load_recording_preferences(&app)
+    load_recording_preferences(db_pool(&app))
         .await
         .map_err(|e| format!("Failed to load recording preferences: {}", e))
 }
@@ -265,7 +266,7 @@ pub async fn get_default_recordings_folder_path() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn open_recordings_folder<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    let preferences = load_recording_preferences(&app)
+    let preferences = load_recording_preferences(db_pool(&app))
         .await
         .map_err(|e| format!("Failed to load preferences: {}", e))?;
 
