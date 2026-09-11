@@ -10,11 +10,23 @@ use gpui_kit::*;
 
 use crate::views::{meeting::MeetingView, recording::RecordingView, settings::SettingsView};
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Route {
     Recording,
     Meeting(String),
     Settings,
+}
+
+/// Lets any view switch pages without holding the shell: `navigate(Route::Meeting(id), cx)`.
+struct Navigator(WeakEntity<AppShell>);
+
+impl Global for Navigator {}
+
+pub fn navigate(route: Route, cx: &mut App) {
+    let Some(shell) = cx.try_global::<Navigator>().map(|n| n.0.clone()) else {
+        return;
+    };
+    let _ = shell.update(cx, |shell, cx| shell.navigate(route, cx));
 }
 
 pub struct AppShell {
@@ -26,6 +38,7 @@ pub struct AppShell {
 
 impl AppShell {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.set_global(Navigator(cx.entity().downgrade()));
         Self {
             route: Route::Recording,
             recording: cx.new(|cx| RecordingView::new(window, cx)),
