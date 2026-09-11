@@ -27,11 +27,11 @@
 use crate::database::repositories::action_item::{
     normalize_text_key, ActionItemsRepository, NewActionItem,
 };
+use crate::events::{EventSink, EventSinkExt};
 use crate::summary::llm_client::{generate_summary, LlmConfig};
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tracing::{debug, info, warn};
 
 /// Ceiling on items stored from one extraction. A well-behaved model returns a
@@ -330,8 +330,8 @@ fn is_generic_speaker_label(s: &str) -> bool {
 /// models, and mentions the commitments in the exact words the user just read.
 /// Feeding the raw transcript would multiply the token cost and reintroduce the
 /// chunking problem the summary already solved.
-pub async fn extract_for_meeting<R: Runtime>(
-    app: &AppHandle<R>,
+pub async fn extract_for_meeting(
+    sink: &dyn EventSink,
     pool: &SqlitePool,
     meeting_id: &str,
     summary_markdown: &str,
@@ -342,7 +342,7 @@ pub async fn extract_for_meeting<R: Runtime>(
         return Err("summary is empty; nothing to extract".to_string());
     }
 
-    let app_data_dir = app.path().app_data_dir().ok();
+    let app_data_dir = crate::paths::app_data_dir().ok();
     let config = LlmConfig::resolve(pool, provider_name, model_name, app_data_dir).await?;
 
     let user_prompt = format!(
@@ -367,9 +367,9 @@ pub async fn extract_for_meeting<R: Runtime>(
 
     info!("Extracted {count} action item(s) for meeting {meeting_id}");
 
-    let _ = app.emit(
+    let _ = sink.emit_event(
         "action-items-extracted",
-        serde_json::json!({ "meeting_id": meeting_id, "count": count }),
+        &serde_json::json!({ "meeting_id": meeting_id, "count": count }),
     );
 
     Ok(count)

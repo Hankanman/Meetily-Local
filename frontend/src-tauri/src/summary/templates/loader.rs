@@ -5,19 +5,8 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 use tracing::{debug, info, warn};
 
-// Global storage for the bundled templates directory path
-static BUNDLED_TEMPLATES_DIR: Lazy<RwLock<Option<PathBuf>>> = Lazy::new(|| RwLock::new(None));
-
 // Global storage for the user's custom templates directory path
 static CUSTOM_TEMPLATES_DIR: Lazy<RwLock<Option<PathBuf>>> = Lazy::new(|| RwLock::new(None));
-
-/// Set the bundled templates directory path (called once at app startup)
-pub fn set_bundled_templates_dir(path: PathBuf) {
-    info!("Bundled templates directory set to: {:?}", path);
-    if let Ok(mut dir) = BUNDLED_TEMPLATES_DIR.write() {
-        *dir = Some(path);
-    }
-}
 
 /// Set the user's custom templates directory (called once at app startup,
 /// from Tauri's app-data dir — the same root every other user-data path in
@@ -32,34 +21,6 @@ pub fn set_custom_templates_dir(path: PathBuf) {
 /// The user's custom templates directory, or `None` before startup wiring.
 fn get_custom_templates_dir() -> Option<PathBuf> {
     CUSTOM_TEMPLATES_DIR.read().ok()?.clone()
-}
-
-/// Load a template from the bundled resources directory
-///
-/// # Arguments
-/// * `template_id` - Template identifier (without .json extension)
-///
-/// # Returns
-/// The template JSON content if found, None otherwise
-fn load_bundled_template(template_id: &str) -> Option<String> {
-    let bundled_dir = BUNDLED_TEMPLATES_DIR.read().ok()?.clone()?;
-    let template_path = bundled_dir.join(format!("{}.json", template_id));
-
-    debug!("Checking for bundled template at: {:?}", template_path);
-
-    match std::fs::read_to_string(&template_path) {
-        Ok(content) => {
-            info!(
-                "Loaded bundled template '{}' from {:?}",
-                template_id, template_path
-            );
-            Some(content)
-        }
-        Err(e) => {
-            debug!("No bundled template '{}' found: {}", template_id, e);
-            None
-        }
-    }
 }
 
 /// Load a template from the user's custom templates directory
@@ -94,9 +55,8 @@ fn load_custom_template(template_id: &str) -> Option<String> {
 ///
 /// This function implements a fallback strategy:
 /// 1. Check user's custom templates directory
-/// 2. Check bundled resources directory (app templates)
-/// 3. Fall back to built-in embedded templates
-/// 4. Return error if not found in any location
+/// 2. Fall back to built-in templates embedded in the binary
+/// 3. Return error if not found in either location
 ///
 /// # Arguments
 /// * `template_id` - Template identifier (e.g., "daily_standup", "standard_meeting")
@@ -106,13 +66,10 @@ fn load_custom_template(template_id: &str) -> Option<String> {
 pub fn get_template(template_id: &str) -> Result<Template, String> {
     info!("Loading template: {}", template_id);
 
-    // Try custom template first, then bundled, then built-in
+    // Try custom template first, then the embedded built-in.
     let json_content = if let Some(custom_content) = load_custom_template(template_id) {
         debug!("Using custom template for '{}'", template_id);
         custom_content
-    } else if let Some(bundled_content) = load_bundled_template(template_id) {
-        debug!("Using bundled template for '{}'", template_id);
-        bundled_content
     } else if let Some(builtin_content) = defaults::get_builtin_template(template_id) {
         debug!("Using built-in template for '{}'", template_id);
         builtin_content.to_string()
@@ -147,39 +104,13 @@ pub fn validate_and_parse_template(json_content: &str) -> Result<Template, Strin
 /// List all available template identifiers
 ///
 /// Returns a combined list of:
-/// - Built-in template IDs
-/// - Bundled template IDs (from app resources)
+/// - Built-in template IDs (embedded in the binary)
 /// - Custom template IDs (from user's data directory)
 pub fn list_template_ids() -> Vec<String> {
     let mut ids: Vec<String> = defaults::list_builtin_template_ids()
         .into_iter()
         .map(|s| s.to_string())
         .collect();
-
-    // Add bundled templates if directory is set
-    if let Ok(bundled_dir_lock) = BUNDLED_TEMPLATES_DIR.read() {
-        if let Some(bundled_dir) = bundled_dir_lock.as_ref() {
-            if bundled_dir.exists() {
-                match std::fs::read_dir(bundled_dir) {
-                    Ok(entries) => {
-                        for entry in entries.flatten() {
-                            if let Some(filename) = entry.file_name().to_str() {
-                                if filename.ends_with(".json") {
-                                    let id = filename.trim_end_matches(".json").to_string();
-                                    if !ids.contains(&id) {
-                                        ids.push(id);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to read bundled templates directory: {}", e);
-                    }
-                }
-            }
-        }
-    }
 
     // Add custom templates if directory exists
     if let Some(custom_dir) = get_custom_templates_dir() {

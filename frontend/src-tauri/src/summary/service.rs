@@ -1,6 +1,7 @@
 use crate::database::repositories::{
     meeting::MeetingsRepository, summary::SummaryProcessesRepository,
 };
+use crate::events::{EventSinkExt, SharedEventSink};
 use crate::summary::llm_client::LlmConfig;
 use crate::summary::processor::{
     extract_meeting_name_from_markdown, generate_meeting_summary, strip_first_heading_line,
@@ -11,7 +12,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tauri::{AppHandle, Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -77,7 +77,7 @@ impl SummaryService {
     /// the main thread. It updates the database with progress and results.
     ///
     /// # Arguments
-    /// * `app` - Tauri app handle
+    /// * `sink` - Event sink events are emitted through
     /// * `pool` - SQLx connection pool
     /// * `meeting_id` - Unique identifier for the meeting
     /// * `text` - Full transcript text
@@ -85,8 +85,8 @@ impl SummaryService {
     /// * `model_name` - Specific model (e.g., "gpt-4", "llama3.2:latest")
     /// * `custom_prompt` - Optional user-provided context
     /// * `template_id` - Template identifier (e.g., "daily_standup", "standard_meeting")
-    pub async fn process_transcript_background<R: tauri::Runtime>(
-        app: AppHandle<R>,
+    pub async fn process_transcript_background(
+        sink: SharedEventSink,
         pool: SqlitePool,
         meeting_id: String,
         text: String,
@@ -107,7 +107,7 @@ impl SummaryService {
 
         // Resolve provider, credentials and endpoints from settings — the
         // same resolution every other LLM caller uses.
-        let app_data_dir = app.path().app_data_dir().ok();
+        let app_data_dir = crate::paths::app_data_dir().ok();
         let config =
             match LlmConfig::resolve(&pool, &model_provider, &model_name, app_data_dir).await {
                 Ok(config) => config,
@@ -124,12 +124,12 @@ impl SummaryService {
         // renders progressively instead of appearing all at once. Providers
         // that don't stream (everything except built-in AI today) simply
         // never invoke the sink and the UI keeps its spinner.
-        let stream_app = app.clone();
+        let stream_event_sink = sink.clone();
         let stream_meeting_id = meeting_id.clone();
         let stream_sink = move |delta: &str| {
-            let _ = stream_app.emit(
+            let _ = stream_event_sink.emit_event(
                 "summary-stream",
-                serde_json::json!({
+                &serde_json::json!({
                     "meeting_id": stream_meeting_id,
                     "delta": delta,
                 }),
@@ -248,7 +248,7 @@ impl SummaryService {
                     // the summary is committed, so a failure here can never
                     // roll one back.
                     crate::summary::transcript_action_items::spawn_transcript_extraction(
-                        app.clone(),
+                        sink.clone(),
                         pool.clone(),
                         meeting_id.clone(),
                         model_provider.clone(),

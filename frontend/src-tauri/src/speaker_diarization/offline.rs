@@ -71,6 +71,10 @@ pub fn diarize_offline(
         clustering: FastClusteringConfig {
             num_clusters: if num_speakers > 0 { num_speakers } else { -1 },
             threshold: 0.5,
+            // Newer sherpa-onnx releases add fields here (e.g.
+            // `compute_confidence`); defaulting the rest compiles against
+            // both the locked baseline and those, with the crate's defaults.
+            ..Default::default()
         },
         min_duration_on: 0.3,
         min_duration_off: 0.5,

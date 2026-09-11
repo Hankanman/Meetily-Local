@@ -633,7 +633,7 @@ pub fn run() {
             // DB is ready raced and logged a spurious init error every launch.
 
             // Set models directory to use app_data_dir (unified storage location)
-            whisper_engine::commands::set_models_directory(&_app.handle());
+            whisper_engine::commands::set_models_directory();
 
             // Initialize Whisper engine on startup
             tauri::async_runtime::spawn(async {
@@ -644,7 +644,7 @@ pub fn run() {
 
             // Set speaker-diarization models directory (separate from ASR models
             // so the speaker model can be downloaded independently).
-            speaker_diarization::model::set_models_dir(&_app.handle());
+            speaker_diarization::model::set_models_dir();
 
             // Pre-warm the speaker diarizer at startup (if model is on disk)
             // so the first recording / retranscription doesn't pay the model
@@ -667,10 +667,13 @@ pub fn run() {
             });
 
             // Initialize ModelManager for summary engine (async, non-blocking)
-            let app_handle_for_model_manager = _app.handle().clone();
+            let model_manager_state = _app
+                .state::<summary::summary_engine::ModelManagerState>()
+                .0
+                .clone();
             tauri::async_runtime::spawn(async move {
                 match summary::summary_engine::commands::init_model_manager_at_startup(
-                    &app_handle_for_model_manager,
+                    &model_manager_state,
                 )
                 .await
                 {
@@ -747,22 +750,11 @@ pub fn run() {
                 }
             });
 
-            // Initialize bundled templates directory for dynamic template discovery
-            log::info!("Initializing bundled templates directory...");
-            if let Ok(resource_path) = _app.handle().path().resource_dir() {
-                let templates_dir = resource_path.join("templates");
-                log::info!(
-                    "Setting bundled templates directory to: {:?}",
-                    templates_dir
-                );
-                summary::templates::set_bundled_templates_dir(templates_dir);
-            } else {
-                log::warn!("Failed to resolve resource directory for templates");
-            }
-
             // User-editable custom templates live under the same app-data
-            // root as every other user-data path.
-            if let Ok(app_data_dir) = _app.handle().path().app_data_dir() {
+            // root as every other user-data path. Built-in templates are
+            // embedded in the binary (see `summary::templates::defaults`) so
+            // no resource-dir lookup is needed here.
+            if let Ok(app_data_dir) = crate::paths::app_data_dir() {
                 summary::templates::set_custom_templates_dir(app_data_dir.join("templates"));
             } else {
                 log::warn!("Failed to resolve app data directory for custom templates");

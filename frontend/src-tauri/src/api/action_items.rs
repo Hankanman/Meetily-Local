@@ -215,7 +215,12 @@ pub async fn start_live_action_extraction<R: Runtime>(
         .map_err(|e| format!("Failed to read model config: {e}"))?
         .ok_or_else(|| "No summary model configured. Set one in settings first.".to_string())?;
 
-    crate::summary::live_action_items::start(app, pool.clone(), config.provider, config.model);
+    crate::summary::live_action_items::start(
+        crate::events::shared_sink(&app),
+        pool.clone(),
+        config.provider,
+        config.model,
+    );
     Ok(())
 }
 

@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 use tokio::sync::Mutex;
 
 use super::model_manager::{DownloadProgress, ModelInfo, ModelManager};
@@ -15,15 +15,20 @@ use super::model_manager::{DownloadProgress, ModelInfo, ModelManager};
 /// Global model manager instance
 pub struct ModelManagerState(pub Arc<Mutex<Option<Arc<ModelManager>>>>);
 
-/// Initialize the model manager
-pub async fn init_model_manager<R: Runtime>(app: &AppHandle<R>) -> anyhow::Result<()> {
-    let models_dir = app.path().app_data_dir()?.join("models").join("summary");
+/// Initialize the model manager, writing the result into `manager_state`
+/// (the shared slot backing [`ModelManagerState`]).
+pub async fn init_model_manager(
+    manager_state: &Arc<Mutex<Option<Arc<ModelManager>>>>,
+) -> anyhow::Result<()> {
+    let models_dir = crate::paths::app_data_dir()
+        .map_err(|e| anyhow::anyhow!(e))?
+        .join("models")
+        .join("summary");
 
     let manager = ModelManager::new_with_models_dir(Some(models_dir))?;
     manager.init().await?;
 
-    let state: State<ModelManagerState> = app.state();
-    let mut manager_lock = state.0.lock().await;
+    let mut manager_lock = manager_state.lock().await;
     *manager_lock = Some(Arc::new(manager));
 
     log::info!("Built-in AI model manager initialized");
@@ -37,7 +42,7 @@ pub async fn init_model_manager<R: Runtime>(app: &AppHandle<R>) -> anyhow::Resul
 /// List all available built-in AI models with their status
 #[tauri::command]
 pub async fn builtin_ai_list_models<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, ModelManagerState>,
 ) -> Result<Vec<ModelInfo>, String> {
     let manager = {
@@ -46,7 +51,7 @@ pub async fn builtin_ai_list_models<R: Runtime>(
             let manager_lock = state.0.lock().await;
             if manager_lock.is_none() {
                 drop(manager_lock);
-                init_model_manager(&app)
+                init_model_manager(&state.0)
                     .await
                     .map_err(|e| format!("Failed to initialize model manager: {}", e))?;
             }
@@ -66,7 +71,7 @@ pub async fn builtin_ai_list_models<R: Runtime>(
 /// Get information about a specific model
 #[tauri::command]
 pub async fn builtin_ai_get_model_info<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, ModelManagerState>,
     model_name: String,
 ) -> Result<Option<ModelInfo>, String> {
@@ -76,7 +81,7 @@ pub async fn builtin_ai_get_model_info<R: Runtime>(
             let manager_lock = state.0.lock().await;
             if manager_lock.is_none() {
                 drop(manager_lock);
-                init_model_manager(&app)
+                init_model_manager(&state.0)
                     .await
                     .map_err(|e| format!("Failed to initialize model manager: {}", e))?;
             }
@@ -106,7 +111,7 @@ pub async fn builtin_ai_download_model<R: Runtime>(
             let manager_lock = state.0.lock().await;
             if manager_lock.is_none() {
                 drop(manager_lock);
-                init_model_manager(&app)
+                init_model_manager(&state.0)
                     .await
                     .map_err(|e| format!("Failed to initialize model manager: {}", e))?;
             }
@@ -235,7 +240,7 @@ pub async fn builtin_ai_delete_model(
 /// Check if a model is ready to use
 #[tauri::command]
 pub async fn builtin_ai_is_model_ready<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, ModelManagerState>,
     model_name: String,
     refresh: Option<bool>, // NEW: Optional refresh parameter
@@ -246,7 +251,7 @@ pub async fn builtin_ai_is_model_ready<R: Runtime>(
             let manager_lock = state.0.lock().await;
             if manager_lock.is_none() {
                 drop(manager_lock);
-                init_model_manager(&app)
+                init_model_manager(&state.0)
                     .await
                     .map_err(|e| format!("Failed to initialize model manager: {}", e))?;
             }
@@ -276,7 +281,7 @@ pub async fn builtin_ai_is_model_ready<R: Runtime>(
 /// Returns the first available model name by priority, or None if no models exist
 #[tauri::command]
 pub async fn builtin_ai_get_available_summary_model<R: Runtime>(
-    app: AppHandle<R>,
+    _app: AppHandle<R>,
     state: State<'_, ModelManagerState>,
 ) -> Result<Option<String>, String> {
     let manager = {
@@ -285,7 +290,7 @@ pub async fn builtin_ai_get_available_summary_model<R: Runtime>(
             let manager_lock = state.0.lock().await;
             if manager_lock.is_none() {
                 drop(manager_lock);
-                init_model_manager(&app)
+                init_model_manager(&state.0)
                     .await
                     .map_err(|e| format!("Failed to initialize model manager: {}", e))?;
             }
@@ -331,25 +336,12 @@ pub async fn builtin_ai_get_available_summary_model<R: Runtime>(
 // Startup Initialization & Utility Commands
 // ============================================================================
 
-pub async fn init_model_manager_at_startup<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    let models_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?
-        .join("models")
-        .join("summary");
-
-    let manager = ModelManager::new_with_models_dir(Some(models_dir))
-        .map_err(|e| format!("Failed to create ModelManager: {}", e))?;
-
-    manager
-        .init()
+pub async fn init_model_manager_at_startup(
+    manager_state: &Arc<Mutex<Option<Arc<ModelManager>>>>,
+) -> Result<(), String> {
+    init_model_manager(manager_state)
         .await
-        .map_err(|e| format!("Failed to initialize ModelManager: {}", e))?;
-
-    let state: State<ModelManagerState> = app.state();
-    let mut manager_lock = state.0.lock().await;
-    *manager_lock = Some(Arc::new(manager));
+        .map_err(|e| e.to_string())?;
 
     log::info!("ModelManager initialized at startup");
     Ok(())

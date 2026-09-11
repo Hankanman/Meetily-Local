@@ -9,7 +9,6 @@
 use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, Runtime};
 
 /// Default speaker-embedding model. English-trained (VoxCeleb), 192-dim,
 /// fast on CPU. The 3D-Speaker family ships its preprocessing inside the
@@ -45,8 +44,8 @@ static MODELS_DIR: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None))
 /// Called once at app startup (from `lib.rs::setup`). Resolves
 /// `<app_data_dir>/speaker_models/`, creates it if missing, and caches the
 /// path so command handlers can look it up without an `AppHandle`.
-pub fn set_models_dir<R: Runtime>(app: &AppHandle<R>) {
-    let Ok(app_data_dir) = app.path().app_data_dir() else {
+pub fn set_models_dir() {
+    let Ok(app_data_dir) = crate::paths::app_data_dir() else {
         log::warn!("Failed to resolve app_data_dir for speaker models");
         return;
     };

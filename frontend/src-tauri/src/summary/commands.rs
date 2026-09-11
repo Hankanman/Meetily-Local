@@ -215,9 +215,9 @@ pub async fn api_process_transcript<R: Runtime>(
 
     // Spawn background task for actual processing
     let meeting_id_clone = m_id.clone();
-    tauri::async_runtime::spawn(async move {
+    tokio::spawn(async move {
         SummaryService::process_transcript_background(
-            app,
+            crate::events::shared_sink(&app),
             pool,
             meeting_id_clone.clone(),
             text,

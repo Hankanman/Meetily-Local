@@ -16,10 +16,10 @@ use crate::database::models::Transcript;
 use crate::database::repositories::action_item::{
     normalize_text_key, ActionItemsRepository, NewActionItem,
 };
+use crate::events::{EventSink, EventSinkExt, SharedEventSink};
 use crate::summary::action_extraction::parse_action_items;
 use crate::summary::llm_client::{generate_summary, LlmConfig};
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tracing::{info, warn};
 
 /// Character budget per window (~2k tokens of transcript), leaving room for the
@@ -74,8 +74,8 @@ impl Segment {
 /// Extract action items from `meeting_id`'s stored transcript segments and
 /// replace the meeting's extractor-owned items. Emits `action-items-extracted`
 /// and returns the number stored. Errors if the meeting has no transcript.
-pub async fn extract_from_transcript<R: Runtime>(
-    app: &AppHandle<R>,
+pub async fn extract_from_transcript(
+    sink: &dyn EventSink,
     pool: &SqlitePool,
     meeting_id: &str,
     provider_name: &str,
@@ -105,7 +105,7 @@ pub async fn extract_from_transcript<R: Runtime>(
         return Err("no transcript segments to extract from".to_string());
     }
 
-    let app_data_dir = app.path().app_data_dir().ok();
+    let app_data_dir = crate::paths::app_data_dir().ok();
     let config = LlmConfig::resolve(pool, provider_name, model_name, app_data_dir).await?;
 
     let windows = window_segments(&segments);
@@ -126,23 +126,23 @@ pub async fn extract_from_transcript<R: Runtime>(
         .map_err(|e| format!("failed to store action items: {e}"))?;
 
     info!("Transcript extraction stored {count} action item(s) for {meeting_id}");
-    let _ = app.emit(
+    let _ = sink.emit_event(
         "action-items-extracted",
-        serde_json::json!({ "meeting_id": meeting_id, "count": count }),
+        &serde_json::json!({ "meeting_id": meeting_id, "count": count }),
     );
     Ok(count)
 }
 
 /// Fire-and-forget wrapper for the summary-completion path (see `service.rs`).
-pub fn spawn_transcript_extraction<R: Runtime>(
-    app: AppHandle<R>,
+pub fn spawn_transcript_extraction(
+    sink: SharedEventSink,
     pool: SqlitePool,
     meeting_id: String,
     provider_name: String,
     model_name: String,
 ) {
-    tauri::async_runtime::spawn(async move {
-        match extract_from_transcript(&app, &pool, &meeting_id, &provider_name, &model_name).await {
+    tokio::spawn(async move {
+        match extract_from_transcript(&sink, &pool, &meeting_id, &provider_name, &model_name).await {
             Ok(count) => info!("Transcript action-item extraction finished for {meeting_id}: {count}"),
             Err(e) => warn!("Transcript action-item extraction failed for {meeting_id}: {e}"),
         }

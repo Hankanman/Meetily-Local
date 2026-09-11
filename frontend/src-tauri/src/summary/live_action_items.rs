@@ -16,10 +16,10 @@ use std::time::Duration;
 
 use serde::Serialize;
 use sqlx::SqlitePool;
-use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tracing::{info, warn};
 
 use crate::database::repositories::action_item::normalize_text_key;
+use crate::events::{EventSinkExt, SharedEventSink};
 use crate::summary::llm_client::LlmConfig;
 use crate::summary::transcript_action_items::{extract_window, Segment};
 
@@ -51,11 +51,11 @@ struct LiveItem {
 /// Start the live extractor for the current recording. Safe to call twice — the
 /// previous loop is superseded. Resolves the model from settings; on failure it
 /// logs and simply doesn't run (the feature is best-effort).
-pub fn start<R: Runtime>(app: AppHandle<R>, pool: SqlitePool, provider_name: String, model_name: String) {
+pub fn start(sink: SharedEventSink, pool: SqlitePool, provider_name: String, model_name: String) {
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
 
-    tauri::async_runtime::spawn(async move {
-        let app_data_dir = app.path().app_data_dir().ok();
+    tokio::spawn(async move {
+        let app_data_dir = crate::paths::app_data_dir().ok();
         let config =
             match LlmConfig::resolve(&pool, &provider_name, &model_name, app_data_dir).await {
                 Ok(c) => c,
@@ -135,7 +135,7 @@ pub fn start<R: Runtime>(app: AppHandle<R>, pool: SqlitePool, provider_name: Str
                 .collect();
 
             if !fresh.is_empty() {
-                let _ = app.emit(LIVE_EVENT, serde_json::json!({ "items": fresh }));
+                let _ = sink.emit_event(LIVE_EVENT, &serde_json::json!({ "items": fresh }));
                 info!("Live action items: emitted {} new item(s)", fresh.len());
             }
         }
