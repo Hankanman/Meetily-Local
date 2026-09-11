@@ -43,7 +43,7 @@ impl std::fmt::Display for OllamaError {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OllamaModel {
     pub name: String,
     pub id: String,

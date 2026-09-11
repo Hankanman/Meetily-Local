@@ -18,8 +18,9 @@
 //! - The "redemption_time_ms" parameter now maps to sherpa's
 //!   `min_silence_duration` (the trailing silence gap that terminates a
 //!   speech segment). Same intent, slightly different name.
-//! - Sherpa accepts arbitrary chunk sizes (no 30 ms windowing here);
-//!   internal windowing is fixed at 512 samples per silero-vad's spec.
+//! - Audio is handed to sherpa one 512-sample silero window per call:
+//!   sherpa updates its speech/silence state once per `accept_waveform`
+//!   call, so larger calls blur or lose segment boundaries (see `feed_16k`).
 
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
@@ -68,6 +69,10 @@ pub struct ContinuousVadProcessor {
 const MAX_PARTIAL_SAMPLES: usize = 30 * 16_000;
 
 const VAD_SAMPLE_RATE: i32 = 16_000;
+
+/// silero-vad's window: 512 samples = 32 ms at 16 kHz. Also the most audio
+/// handed to sherpa per `accept_waveform` call (see `feed_16k`).
+const VAD_WINDOW_SIZE: usize = 512;
 
 impl ContinuousVadProcessor {
     /// Create a VAD processor with no specific source tag (defaults to Mic for
@@ -137,7 +142,7 @@ impl ContinuousVadProcessor {
                 threshold: 0.45,
                 min_silence_duration,           // From caller (typically 400ms live, 800ms batch).
                 min_speech_duration: 0.25,      // Reject segments shorter than 250ms.
-                window_size: 512,               // 32 ms at 16 kHz, silero-vad's expected window.
+                window_size: VAD_WINDOW_SIZE as i32, // 32 ms at 16 kHz, silero-vad's expected window.
                 max_speech_duration,
             },
             ten_vad: Default::default(),
@@ -230,7 +235,16 @@ impl ContinuousVadProcessor {
         if samples_16k.is_empty() {
             return;
         }
-        self.detector.accept_waveform(samples_16k);
+        // Feed sherpa one model window at a time. Its `AcceptWaveform` runs
+        // silero on every window in the call but updates the speech/silence
+        // state machine only once per call (OR of all windows) — so a large
+        // call collapses to one decision: a whole-file batch call yields a
+        // single bogus segment, 1 s calls merge utterances across pauses,
+        // 10 s calls drop entire utterances. sherpa keeps any sub-window
+        // remainder internally, so arbitrary slice boundaries are fine.
+        for window in samples_16k.chunks(VAD_WINDOW_SIZE) {
+            self.detector.accept_waveform(window);
+        }
         self.processed_samples_16k += samples_16k.len() as u64;
 
         // Accumulate the in-progress utterance for streaming partial decodes,
