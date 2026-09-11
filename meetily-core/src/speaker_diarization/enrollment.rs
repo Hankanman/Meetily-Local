@@ -44,7 +44,7 @@
 //! buffer into a profile; [`cancel_self_voice_enrollment`] throws it away.
 
 use anyhow::{anyhow, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -105,7 +105,12 @@ const MIN_RMS: f32 = 0.005;
 const ENROLL_FALLBACK_PEAK: f32 = 0.03;
 
 /// Progress tick for the enrollment UI (level meter + elapsed).
-#[derive(Debug, Clone, Serialize)]
+///
+/// Deserialize is for the GPUI shell, which re-decodes this from the
+/// `self-voice-enrollment-progress` event's JSON payload (see
+/// `core_events::CoreEvent::decode`); the Tauri frontend only ever needs
+/// the Serialize side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnrollmentProgress {
     pub rms_level: f32,
     pub peak_level: f32,

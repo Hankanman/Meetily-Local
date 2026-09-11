@@ -1,32 +1,50 @@
 //! Speakers page: the stored voice profiles list from the frontend's
-//! `SpeakerSettings.tsx` — rename, merge, or delete a saved speaker.
+//! `SpeakerSettings.tsx` — rename, merge, or delete a saved speaker — plus
+//! the "Your voice" self-enrollment section from
+//! `SelfVoiceEnrollment.tsx`, which records a short sample from the
+//! microphone so the local user's own voice is recognised in transcripts
+//! instead of being clustered as "Speaker N". The self-enrolled profile
+//! (`VoiceProfile::is_self`) is excluded from the saved-speakers list below
+//! — same as the frontend, which shows it in this separate section instead.
 //!
-//! Self-voice enrollment (`SelfVoiceEnrollment.tsx`, which records a short
-//! sample from the microphone to name the local user's own voice) is
-//! deliberately **not** implemented here: it's optional per this package's
-//! brief, and this page must stay safe to open in an automated/smoke-test
-//! run without ever touching the microphone. The self-enrolled profile
-//! (`VoiceProfile::is_self`) is simply excluded from the list — same as the
-//! frontend, which owns it in a separate section.
+//! Enrollment never starts on its own — it only runs from an explicit
+//! "Record my voice" / "Re-record" click, so opening this page (including
+//! in an automated/smoke-test run) never touches the microphone.
 
 mod logic;
 
 use gpui_kit::component::{
-    ActiveTheme, Disableable as _, IconName, WindowExt as _,
+    ActiveTheme, Disableable as _, Icon, IconName, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     input::{Input, InputState},
+    notification::{Notification, NotificationType},
     v_flex,
 };
 use gpui_kit::assets::IconName as AssetIcon;
 use gpui_kit::base::StyledExt as _;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use meetily_core::audio::recording_preferences::{self, RecordingPreferences};
 use meetily_core::database::models::VoiceProfile;
 use meetily_core::database::repositories::voice_profile::VoiceProfilesRepository;
+use meetily_core::speaker_diarization::enrollment::{
+    self, EnrollmentProgress, SelfVoiceStatus,
+};
 use meetily_core::speaker_diarization::service::merge_voice_profiles_core;
 
 use crate::app_state::AppServices;
+use crate::core_events::CoreEvent;
 use crate::runtime::Io;
+
+/// Where the "Your voice" section is in its enrollment flow. Mirrors the
+/// React component's `Mode` union.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelfVoiceMode {
+    Idle,
+    Recording,
+    Saving,
+}
 
 pub struct SpeakersView {
     profiles: Vec<VoiceProfile>,
@@ -38,12 +56,26 @@ pub struct SpeakersView {
     email_input: Entity<InputState>,
     /// Profile currently showing a "merge into…" candidate list, if any.
     merging_id: Option<String>,
+
+    // -- Self-voice enrollment ("Your voice" section) --
+    self_status: Option<SelfVoiceStatus>,
+    self_mode: SelfVoiceMode,
+    self_progress: Option<EnrollmentProgress>,
+    self_error: Option<String>,
+    self_name_input: Entity<InputState>,
+    /// Guards against double-saving: the progress listener fires ~10x/sec
+    /// and would otherwise call `save` repeatedly once past the target.
+    self_finishing: bool,
+
+    pending_toasts: Vec<(NotificationType, String)>,
 }
 
 impl SpeakersView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Name"));
         let email_input = cx.new(|cx| InputState::new(window, cx).placeholder("Email (optional)"));
+        let self_name_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Me").default_value("Me"));
 
         let mut this = Self {
             profiles: Vec::new(),
@@ -53,9 +85,219 @@ impl SpeakersView {
             name_input,
             email_input,
             merging_id: None,
+            self_status: None,
+            self_mode: SelfVoiceMode::Idle,
+            self_progress: None,
+            self_error: None,
+            self_name_input,
+            self_finishing: false,
+            pending_toasts: Vec::new(),
         };
         this.refresh(cx);
+        this.refresh_self_voice(cx);
+        this.subscribe_to_core_events(cx);
         this
+    }
+
+    // ------------------------------------------------------------------
+    // Self-voice enrollment ("Your voice")
+    // ------------------------------------------------------------------
+
+    fn subscribe_to_core_events(&mut self, cx: &mut Context<Self>) {
+        let core_events = AppServices::global(cx).core_events.clone();
+        cx.subscribe(&core_events, |this, _, event: &CoreEvent, cx| {
+            if event.name == "self-voice-enrollment-progress" {
+                if let Some(progress) = event.decode::<EnrollmentProgress>() {
+                    this.on_self_voice_progress(progress, cx);
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn on_self_voice_progress(&mut self, progress: EnrollmentProgress, cx: &mut Context<Self>) {
+        // A late tick from a session that's already been cancelled/saved —
+        // ignore it rather than resurrecting the recording UI.
+        if self.self_mode != SelfVoiceMode::Recording {
+            return;
+        }
+        // Stop on our own once they've talked long enough, so the happy
+        // path needs one click, not two.
+        if !self.self_finishing && logic::self_voice_should_auto_save(&progress) {
+            self.self_finishing = true;
+            self.self_progress = Some(progress);
+            cx.notify();
+            self.save_self_voice(cx);
+            return;
+        }
+        self.self_progress = Some(progress);
+        cx.notify();
+    }
+
+    fn refresh_self_voice(&mut self, cx: &mut Context<Self>) {
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let io = Io::global(cx);
+        cx.spawn(async move |this, cx| {
+            let result = io.spawn(async move { enrollment::self_voice_status_with_pool(&pool).await }).await;
+            let _ = this.update_in(cx, |this, window, cx| match result {
+                Ok(Ok(status)) => this.apply_self_status(status, window, cx),
+                Ok(Err(e)) => this.self_error = Some(e),
+                Err(e) => this.self_error = Some(format!("Self-voice status task panicked: {e}")),
+            });
+        })
+        .detach();
+    }
+
+    fn apply_self_status(
+        &mut self,
+        status: SelfVoiceStatus,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let label = status.name.clone().unwrap_or_else(|| "Me".to_string());
+        self.self_name_input.update(cx, |state, cx| {
+            state.set_value(label, window, cx);
+        });
+        self.self_status = Some(status);
+        cx.notify();
+    }
+
+    fn start_self_voice_record(&mut self, cx: &mut Context<Self>) {
+        self.self_error = None;
+        self.self_progress = None;
+        self.self_finishing = false;
+
+        let services = AppServices::global(cx);
+        let sink = services.sink.clone();
+        let io = services.io.clone();
+        let pool = services.pool();
+
+        cx.spawn(async move |this, cx| {
+            // Enroll through whichever mic the user records meetings with —
+            // a profile built on a different device generalises worse.
+            let handle = io.spawn(async move {
+                let prefs = recording_preferences::load_recording_preferences(pool)
+                    .await
+                    .unwrap_or_else(|_| RecordingPreferences::default());
+                let mic_device = prefs.preferred_mic_device;
+                enrollment::start_self_voice_enrollment_with_sink(sink, mic_device).await
+            });
+            let result = handle.await;
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(Ok(())) => {
+                    this.self_mode = SelfVoiceMode::Recording;
+                    cx.notify();
+                }
+                Ok(Err(e)) => this.toast(NotificationType::Error, e),
+                Err(e) => this.toast(NotificationType::Error, format!("Enrollment task panicked: {e}")),
+            });
+        })
+        .detach();
+    }
+
+    fn save_self_voice(&mut self, cx: &mut Context<Self>) {
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        self.self_mode = SelfVoiceMode::Saving;
+        cx.notify();
+
+        let name = self.self_name_input.read(cx).value().to_string();
+        let io = Io::global(cx);
+        cx.spawn(async move |this, cx| {
+            let handle = io.spawn(async move {
+                enrollment::finish_self_voice_enrollment_with_pool(&pool, Some(name)).await
+            });
+            let result = handle.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.self_mode = SelfVoiceMode::Idle;
+                this.self_progress = None;
+                this.self_finishing = false;
+                match result {
+                    Ok(Ok(status)) => this.apply_self_status(status, window, cx),
+                    Ok(Err(e)) => this.toast(NotificationType::Error, e),
+                    Err(e) => this.toast(NotificationType::Error, format!("Save task panicked: {e}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn cancel_self_voice_record(&mut self, cx: &mut Context<Self>) {
+        self.self_mode = SelfVoiceMode::Idle;
+        self.self_progress = None;
+        self.self_finishing = false;
+        cx.notify();
+
+        let io = Io::global(cx);
+        io.spawn(async move {
+            let _ = enrollment::cancel_self_voice_enrollment().await;
+        });
+    }
+
+    fn save_self_voice_name(&mut self, cx: &mut Context<Self>) {
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let name = self.self_name_input.read(cx).value().to_string();
+        let io = Io::global(cx);
+        cx.spawn(async move |this, cx| {
+            let handle = io.spawn(async move {
+                enrollment::rename_self_voice_profile_with_pool(&pool, name).await
+            });
+            let result = handle.await;
+            let _ = this.update_in(cx, |this, window, cx| match result {
+                Ok(Ok(status)) => this.apply_self_status(status, window, cx),
+                Ok(Err(e)) => this.toast(NotificationType::Error, e),
+                Err(e) => this.toast(NotificationType::Error, format!("Rename task panicked: {e}")),
+            });
+        })
+        .detach();
+    }
+
+    fn confirm_remove_self_voice(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let this = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let this = this.clone();
+            alert
+                .title("Remove your voice profile")
+                .description(
+                    "Deletes your self-enrolled voice. Past transcripts keep their \"Me\" \
+                     labels, but future meetings won't auto-tag your voice — it'll be \
+                     clustered as \"Speaker N\" again until you re-enroll.",
+                )
+                .show_cancel(true)
+                .on_ok(move |_, _, cx| {
+                    this.update(cx, |this, cx| this.remove_self_voice(cx));
+                    true
+                })
+        });
+    }
+
+    fn remove_self_voice(&mut self, cx: &mut Context<Self>) {
+        let Some(pool) = AppServices::global(cx).pool() else {
+            return;
+        };
+        let io = Io::global(cx);
+        cx.spawn(async move |this, cx| {
+            let handle = io.spawn(async move { enrollment::delete_self_voice_profile_with_pool(&pool).await });
+            let result = handle.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(Ok(_)) => this.refresh_self_voice(cx),
+                    Ok(Err(e)) => this.toast(NotificationType::Error, e),
+                    Err(e) => this.toast(NotificationType::Error, format!("Delete task panicked: {e}")),
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn toast(&mut self, kind: NotificationType, message: String) {
+        self.pending_toasts.push((kind, message));
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -233,8 +475,16 @@ impl SpeakersView {
 }
 
 impl Render for SpeakersView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex().size_full().child(self.render_header(cx)).child(self.render_body(cx))
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        for (kind, message) in self.pending_toasts.drain(..) {
+            window.push_notification(Notification::new().message(message).with_type(kind), cx);
+        }
+
+        v_flex()
+            .size_full()
+            .child(self.render_header(cx))
+            .child(self.render_self_voice_section(cx))
+            .child(self.render_body(cx))
     }
 }
 
@@ -258,6 +508,239 @@ impl SpeakersView {
                     "Voice profiles saved from your transcripts. Rename, merge duplicates, or \
                      remove one you no longer need.",
                 ),
+            )
+    }
+
+    fn render_self_voice_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .w_full()
+            .gap_2()
+            .p_4()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(div().text_sm().font_medium().child("Your voice"))
+            .child(
+                div().text_xs().text_color(cx.theme().muted_foreground).child(
+                    "Record a short sample of yourself speaking so meetings can label your \
+                     voice with the name below, instead of grouping you in with everyone else \
+                     the microphone picks up. Optional — skip it and nothing changes.",
+                ),
+            )
+            .child(
+                div()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .p_4()
+                    .child(if self.self_mode == SelfVoiceMode::Recording {
+                        self.render_self_voice_recording(cx).into_any_element()
+                    } else {
+                        self.render_self_voice_idle(cx).into_any_element()
+                    }),
+            )
+            .when_some(self.self_error.clone(), |el, err| {
+                el.child(div().text_xs().text_color(cx.theme().danger).child(err))
+            })
+    }
+
+    fn render_self_voice_idle(&self, cx: &mut Context<Self>) -> AnyElement {
+        let saving = self.self_mode == SelfVoiceMode::Saving;
+        let enrolled = self.self_status.as_ref().is_some_and(|s| s.enrolled);
+        let model_ready = self.self_status.as_ref().is_some_and(|s| s.model_ready);
+        let name_value = self.self_name_input.read(cx).value().to_string();
+        let stored_name = self.self_status.as_ref().and_then(|s| s.name.as_deref());
+        let name_changed = logic::self_voice_name_changed(enrolled, &name_value, stored_name);
+
+        v_flex()
+            .gap_4()
+            .child(
+                v_flex()
+                    .gap_1p5()
+                    .child(div().text_sm().font_medium().child("Name"))
+                    .child(
+                        h_flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().w_64().child(Input::new(&self.self_name_input)))
+                            .when(name_changed, |el| {
+                                el.child(
+                                    Button::new("self-voice-save-name")
+                                        .primary()
+                                        .label("Save")
+                                        .on_click(cx.listener(|this, _, _, cx| this.save_self_voice_name(cx))),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Shown in transcripts wherever your voice is recognised."),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .child(if enrolled {
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                h_flex()
+                                    .items_center()
+                                    .gap_1p5()
+                                    .child(Icon::new(AssetIcon::CircleCheck).text_color(cx.theme().success))
+                                    .child(div().text_sm().font_medium().child("Enrolled")),
+                            )
+                            .child(
+                                div().text_xs().text_color(cx.theme().muted_foreground).child(
+                                    logic::self_voice_enrolled_subtitle(
+                                        self.self_status.as_ref().and_then(|s| s.sample_count),
+                                        self.self_status.as_ref().and_then(|s| s.updated_at.as_deref()),
+                                    ),
+                                ),
+                            )
+                            .into_any_element()
+                    } else {
+                        v_flex()
+                            .gap_1()
+                            .child(div().text_sm().font_medium().child("Not enrolled"))
+                            .child(
+                                div().text_xs().text_color(cx.theme().muted_foreground).child(
+                                    if self.self_status.is_some() && !model_ready {
+                                        "Download the speaker model first — it's what recognises voices."
+                                    } else {
+                                        "Takes about 20 seconds."
+                                    },
+                                ),
+                            )
+                            .into_any_element()
+                    })
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(
+                                Button::new("self-voice-record")
+                                    .when(enrolled, |b| b.outline())
+                                    .when(!enrolled, |b| b.primary())
+                                    .icon(AssetIcon::Mic)
+                                    .label(if saving {
+                                        "Saving…"
+                                    } else if enrolled {
+                                        "Re-record"
+                                    } else {
+                                        "Record my voice"
+                                    })
+                                    .disabled(saving || !model_ready)
+                                    .on_click(cx.listener(|this, _, _, cx| this.start_self_voice_record(cx))),
+                            )
+                            .when(enrolled, |el| {
+                                el.child(
+                                    Button::new("self-voice-remove")
+                                        .ghost()
+                                        .icon(IconName::Delete)
+                                        .tooltip("Remove your voice profile")
+                                        .disabled(saving)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.confirm_remove_self_voice(window, cx);
+                                        })),
+                                )
+                            }),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_self_voice_recording(&self, cx: &mut Context<Self>) -> AnyElement {
+        let remaining = self
+            .self_progress
+            .as_ref()
+            .map(logic::self_voice_remaining_secs)
+            .unwrap_or(20);
+        let can_save = self.self_progress.as_ref().is_some_and(|p| p.can_save);
+        let level = self
+            .self_progress
+            .as_ref()
+            .map(|p| p.rms_level.max(p.peak_level))
+            .unwrap_or(0.0);
+
+        v_flex()
+            .gap_3()
+            .child(
+                h_flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .child(div().text_sm().font_medium().child("Read this aloud until the timer runs out"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!("{remaining}s")),
+                    ),
+            )
+            .child(
+                div()
+                    .rounded_md()
+                    .border_l_2()
+                    .border_color(cx.theme().primary)
+                    .bg(cx.theme().muted.opacity(0.5))
+                    .px_3()
+                    .py_2()
+                    .text_sm()
+                    .child(logic::SELF_VOICE_READING_PASSAGE),
+            )
+            .child(
+                div().text_xs().text_color(cx.theme().muted_foreground).child(
+                    "Speak at a normal, steady pace. Anything works if you'd rather not read — \
+                     just keep talking.",
+                ),
+            )
+            .child(self.self_voice_level_bar(level))
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Button::new("self-voice-save")
+                            .primary()
+                            .label("Save")
+                            .disabled(!can_save)
+                            .on_click(cx.listener(|this, _, _, cx| this.save_self_voice(cx))),
+                    )
+                    .child(
+                        Button::new("self-voice-cancel")
+                            .ghost()
+                            .label("Cancel")
+                            .on_click(cx.listener(|this, _, _, cx| this.cancel_self_voice_record(cx))),
+                    )
+                    .when(!can_save, |el| {
+                        el.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Keep going — we need a few more seconds."),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn self_voice_level_bar(&self, level: f32) -> impl IntoElement {
+        let level = level.clamp(0.0, 1.0);
+        div()
+            .w_full()
+            .h_2()
+            .rounded_full()
+            .bg(hsla(0., 0., 0.5, 0.15))
+            .overflow_hidden()
+            .child(
+                div()
+                    .h_full()
+                    .rounded_full()
+                    .w(relative(level))
+                    .bg(hsla(0.38 - 0.1 * level, 0.65, 0.5, 1.)),
             )
     }
 
