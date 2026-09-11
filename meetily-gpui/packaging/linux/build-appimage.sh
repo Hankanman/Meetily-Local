@@ -77,6 +77,11 @@ export LD_LIBRARY_PATH="$DIST_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # own stdout is captured by build.sh as `APPIMAGE=$(...)` and must contain
 # only the final path echoed below, so redirect linuxdeploy's stdout to
 # stderr here.
+# CUDA builds: never bundle the NVIDIA *driver* libraries (libcuda.so.1,
+# libnvidia-*) — they must match the host's kernel driver, so a bundled copy
+# breaks on any machine with a different driver version. The CUDA *runtime*
+# libraries (libcudart, libcublas, libcublasLt) are redistributable and are
+# still bundled so the AppImage runs without the CUDA toolkit installed.
 mkdir -p "$OUT_DIR"
 (
     cd "$OUT_DIR"
@@ -85,6 +90,8 @@ mkdir -p "$OUT_DIR"
         --executable "$APPDIR/usr/bin/meetily-gpui" \
         --desktop-file "$DESKTOP_FILE" \
         --icon-file "$APPDIR/usr/share/icons/hicolor/512x512/apps/com.meetily.ai.png" \
+        --exclude-library 'libcuda.so*' \
+        --exclude-library 'libnvidia-*' \
         --output appimage 1>&2
 )
 
