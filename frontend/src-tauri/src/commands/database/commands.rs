@@ -1,8 +1,8 @@
 use log::{error, info};
 use tauri::{AppHandle, Manager, State};
 
-use super::manager::DatabaseManager;
-use super::repositories::setting::{SettingsRepository, KEY_UI_CONFIG};
+use crate::database::manager::DatabaseManager;
+use crate::database::repositories::setting::{SettingsRepository, KEY_UI_CONFIG};
 use crate::events::EventSinkExt;
 use crate::state::AppState;
 
@@ -60,7 +60,8 @@ pub async fn initialize_fresh_database(app: AppHandle) -> Result<(), String> {
     info!("Fresh database initialized successfully with default models");
 
     // Emit event to notify frontend that database is ready
-    app.emit_event("database-initialized", &())
+    crate::tauri_events::TauriSink(app.clone())
+        .emit_event("database-initialized", &())
         .map_err(|e| format!("Failed to emit database-initialized event: {}", e))?;
 
     Ok(())

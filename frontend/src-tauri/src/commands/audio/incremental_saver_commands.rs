@@ -1,7 +1,7 @@
 // Tauri command wrappers around the checkpoint-recovery core logic in
 // `audio::incremental_saver`. Kept separate so that module stays Tauri-free.
 
-use super::incremental_saver::{self, AudioRecoveryStatus};
+use crate::audio::incremental_saver::{self, AudioRecoveryStatus};
 
 /// Recover audio from checkpoint files.
 /// This is called by the transcript recovery system after a crash: PCM

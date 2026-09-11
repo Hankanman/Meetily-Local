@@ -1,7 +1,7 @@
 // Tauri command wrappers for ffmpeg status/installation. Core logic lives in
 // `audio::ffmpeg`.
 
-use super::ffmpeg::FfmpegStatus;
+use crate::audio::ffmpeg::FfmpegStatus;
 
 /// Report whether ffmpeg is currently available and, if so, where it was
 /// found. Used by the settings UI to show install status without
@@ -9,5 +9,5 @@ use super::ffmpeg::FfmpegStatus;
 /// that).
 #[tauri::command]
 pub async fn ffmpeg_status() -> FfmpegStatus {
-    super::ffmpeg::ffmpeg_status()
+    crate::audio::ffmpeg::ffmpeg_status()
 }

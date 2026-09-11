@@ -154,7 +154,7 @@ pub async fn extract_action_items<R: Runtime>(
     // Prefer the transcript (timestamped ground truth). Fall back to the
     // summary only for meetings whose transcript segments aren't stored.
     match transcript_action_items::extract_from_transcript(
-        &app,
+        &crate::tauri_events::TauriSink(app.clone()),
         pool,
         &meeting_id,
         &config.provider,
@@ -189,7 +189,7 @@ pub async fn extract_action_items<R: Runtime>(
                 })?;
 
             action_extraction::extract_for_meeting(
-                &app,
+                &crate::tauri_events::TauriSink(app.clone()),
                 pool,
                 &meeting_id,
                 &markdown,

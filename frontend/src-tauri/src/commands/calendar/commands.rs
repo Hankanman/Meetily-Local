@@ -4,10 +4,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Runtime};
 
-use super::fetcher;
-use super::models::{CalendarEvent, CalendarSourceRow};
-use super::repository::CalendarRepository;
-use super::snapshot::{
+use crate::calendar::fetcher;
+use crate::calendar::models::{CalendarEvent, CalendarSourceRow};
+use crate::calendar::repository::CalendarRepository;
+use crate::calendar::snapshot::{
     self, lookup_meeting_folder, CalendarEventSnapshot, SNAPSHOT_FILENAME,
 };
 use crate::state::AppState;

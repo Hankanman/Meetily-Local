@@ -5,8 +5,8 @@ use tauri::{AppHandle, Runtime, State};
 
 use crate::events::EventSinkExt;
 
-use super::model_manager::ModelInfo;
-use super::service;
+use crate::summary::summary_engine::model_manager::ModelInfo;
+use crate::summary::summary_engine::service;
 
 // Re-export core state/logic so existing
 // `summary_engine::{init_model_manager, ModelManagerState}`-style paths keep

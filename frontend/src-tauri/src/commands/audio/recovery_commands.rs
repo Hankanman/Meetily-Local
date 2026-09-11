@@ -15,7 +15,7 @@ use tauri::State;
 use crate::database::repositories::meeting::{InterruptedMeetingRow, MeetingsRepository};
 use crate::state::AppState;
 
-use super::incremental_saver::{
+use crate::audio::incremental_saver::{
     cleanup_checkpoints, has_audio_checkpoints, recover_audio_from_checkpoints,
     AudioRecoveryStatus,
 };

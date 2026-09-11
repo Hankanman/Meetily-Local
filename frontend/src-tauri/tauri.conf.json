@@ -95,9 +95,6 @@
             "icons/icon.icns",
             "icons/icon.ico"
         ],
-        "resources": [
-            "templates/*.json"
-        ],
         "externalBin": [
             "binaries/llama-helper",
             "binaries/ffmpeg"

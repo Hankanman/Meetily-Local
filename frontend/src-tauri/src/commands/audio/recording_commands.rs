@@ -16,15 +16,15 @@
 
 use tauri::{AppHandle, Manager, Runtime};
 
-use super::recording_service::{self, RecordingContext, StartHooks, StartRequest};
+use crate::audio::recording_service::{self, RecordingContext, StartHooks, StartRequest};
 use crate::events::{EventSink, SharedEventSink};
 use crate::state::AppState;
 
 // Import transcription modules
-use super::transcription;
+use crate::audio::transcription;
 
 // Re-export TranscriptUpdate for backward compatibility
-pub use super::transcription::TranscriptUpdate;
+pub use crate::audio::transcription::TranscriptUpdate;
 
 // Re-export the service's public types/functions under their historical
 // `recording_commands::` path — every other module in the crate (tray.rs,
@@ -67,7 +67,7 @@ struct TrayRefreshingSink<R: Runtime> {
 
 impl<R: Runtime> EventSink for TrayRefreshingSink<R> {
     fn emit_value(&self, event: &str, payload: serde_json::Value) -> Result<(), String> {
-        let result = self.app.emit_value(event, payload);
+        let result = tauri::Emitter::emit(&self.app, event, payload).map_err(|e| e.to_string());
         if event == "recording-state" {
             crate::tray::update_tray_menu(&self.app);
         }
@@ -97,7 +97,7 @@ fn build_start_hooks<R: Runtime>(app: &AppHandle<R>) -> StartHooks {
         }),
         init_speaker_diarizer: Box::new(move || {
             Box::pin(async move {
-                crate::speaker_diarization::commands::try_init_for_recording(
+                crate::speaker_diarization::service::try_init_for_recording(
                     pool_for_diarizer.as_ref(),
                 )
                 .await
@@ -278,7 +278,7 @@ pub async fn trigger_post_meeting_refine<R: Runtime>(
         // pass — they're independent improvements to the same meeting.
         match db_pool(&app) {
             Some(pool) => {
-                if let Err(e) = crate::speaker_diarization::commands::refine_and_persist(
+                if let Err(e) = crate::speaker_diarization::service::refine_and_persist(
                     &crate::tauri_events::shared_sink(&app),
                     &pool,
                     &meeting_id,
@@ -298,7 +298,7 @@ pub async fn trigger_post_meeting_refine<R: Runtime>(
             ),
         }
 
-        super::retranscription::spawn_auto_refine(
+        crate::audio::retranscription::spawn_auto_refine(
             crate::tauri_events::shared_sink(&app),
             db_pool(&app),
             meeting_id,
