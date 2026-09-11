@@ -162,7 +162,7 @@ async fn split_chunk_by_speaker(chunk: AudioChunk) -> Vec<PendingChunk> {
 /// has been pulled and processed, so nothing is ever lost.
 pub fn start_transcription_task(
     sink: SharedEventSink,
-    pool: sqlx::SqlitePool,
+    pool: Option<sqlx::SqlitePool>,
     mut receiver: tokio::sync::mpsc::UnboundedReceiver<AudioChunk>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -177,7 +177,7 @@ pub fn start_transcription_task(
         // `whisper_engine::lease` for the full rationale.
         let _live_engine_lease = crate::whisper_engine::LIVE_ENGINE_LEASE.acquire_live();
 
-        let engine = match super::engine::get_or_init_transcription_engine(&pool).await {
+        let engine = match super::engine::get_or_init_transcription_engine(pool.as_ref()).await {
             Ok(engine) => engine,
             Err(e) => {
                 error!("Failed to initialize transcription engine: {}", e);

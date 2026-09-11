@@ -543,11 +543,9 @@ pub async fn start_recording_with_meeting_name<R: Runtime>(
     }
 
     // Start optimized parallel transcription task and store handle
-    let transcription_pool = db_pool(&app)
-        .ok_or_else(|| "Database not initialized yet; cannot start transcription".to_string())?;
     let task_handle = transcription::start_transcription_task(
         events::shared_sink(&app),
-        transcription_pool,
+        db_pool(&app),
         transcription_receiver,
     );
     {
@@ -795,11 +793,9 @@ pub async fn start_recording_with_devices_and_meeting<R: Runtime>(
     }
 
     // Start optimized parallel transcription task and store handle
-    let transcription_pool = db_pool(&app)
-        .ok_or_else(|| "Database not initialized yet; cannot start transcription".to_string())?;
     let task_handle = transcription::start_transcription_task(
         events::shared_sink(&app),
-        transcription_pool,
+        db_pool(&app),
         transcription_receiver,
     );
     {
