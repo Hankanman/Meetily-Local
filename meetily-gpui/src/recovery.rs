@@ -293,6 +293,7 @@ mod tests {
             speaker: None,
             voice_profile_id: None,
             source: None,
+            confidence: None,
         }
     }
 
