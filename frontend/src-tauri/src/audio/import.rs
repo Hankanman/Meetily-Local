@@ -4,6 +4,9 @@ use crate::api::TranscriptSegment;
 use crate::audio::decoder::{decode_audio_file, decode_audio_file_with_progress};
 use crate::audio::vad::get_speech_chunks_with_progress;
 use crate::config::DEFAULT_WHISPER_MODEL;
+use crate::database::repositories::setting::SettingsRepository;
+use crate::database::repositories::transcript::TranscriptsRepository;
+use crate::events::{EventSink, EventSinkExt};
 use crate::state::AppState;
 use crate::whisper_engine::WhisperEngine;
 use anyhow::{anyhow, Result};
@@ -12,9 +15,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_dialog::DialogExt;
-use uuid::Uuid;
 
 use super::audio_processing::create_meeting_folder;
 use super::common::{create_transcript_segments, write_transcripts_json};
@@ -279,9 +281,9 @@ pub async fn start_import<R: Runtime>(
 
     match &result {
         Ok(res) => {
-            let _ = app.emit(
+            let _ = app.emit_event(
                 "import-complete",
-                serde_json::json!({
+                &serde_json::json!({
                     "meeting_id": res.meeting_id,
                     "title": res.title,
                     "segments_count": res.segments_count,
@@ -290,9 +292,9 @@ pub async fn start_import<R: Runtime>(
             );
         }
         Err(e) => {
-            let _ = app.emit(
+            let _ = app.emit_event(
                 "import-error",
-                ImportError {
+                &ImportError {
                     error: e.to_string(),
                 },
             );
@@ -465,9 +467,9 @@ async fn run_import<R: Runtime>(
         warn!("No speech detected in audio");
 
         // Emit warning to frontend
-        let _ = app.emit(
+        let _ = app.emit_event(
             "import-warning",
-            ImportWarning {
+            &ImportWarning {
                 warning: "No speech detected in audio file".to_string(),
                 details: Some(
                     "The file was imported successfully, but VAD did not detect any speech. \
@@ -761,11 +763,12 @@ async fn run_import<R: Runtime>(
     })
 }
 
-/// Emit progress event
-fn emit_progress<R: Runtime>(app: &AppHandle<R>, stage: &str, progress: u32, message: &str) {
-    let _ = app.emit(
+/// Emit progress event. Takes a `&dyn EventSink` rather than an `AppHandle`
+/// since this only ever emits — see `events.rs`.
+fn emit_progress(sink: &dyn EventSink, stage: &str, progress: u32, message: &str) {
+    let _ = sink.emit_event(
         "import-progress",
-        ImportProgress {
+        &ImportProgress {
             stage: stage.to_string(),
             progress_percentage: progress,
             message: message.to_string(),
@@ -780,60 +783,9 @@ async fn create_meeting_with_transcripts(
     segments: &[TranscriptSegment],
     folder_path: String,
 ) -> Result<String> {
-    let meeting_id = format!("meeting-{}", Uuid::new_v4());
-    let now = chrono::Utc::now();
-
-    // Start transaction
-    let mut conn = pool
-        .acquire()
+    let meeting_id = TranscriptsRepository::save_transcript(pool, title, segments, Some(folder_path))
         .await
-        .map_err(|e| anyhow!("DB error: {}", e))?;
-    let mut tx = sqlx::Connection::begin(&mut *conn)
-        .await
-        .map_err(|e| anyhow!("Failed to start transaction: {}", e))?;
-
-    // Insert meeting
-    sqlx::query(
-        "INSERT INTO meetings (id, title, created_at, updated_at, folder_path)
-         VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&meeting_id)
-    .bind(title)
-    .bind(now)
-    .bind(now)
-    .bind(&folder_path)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| anyhow!("Failed to create meeting: {}", e))?;
-
-    // Insert transcripts
-    for segment in segments {
-        sqlx::query(
-            "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, voice_profile_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&segment.id)
-        .bind(&meeting_id)
-        .bind(&segment.text)
-        .bind(
-            segment
-                .timestamp
-                .clone()
-                .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-        )
-        .bind(segment.audio_start_time)
-        .bind(segment.audio_end_time)
-        .bind(segment.duration)
-        .bind(&segment.speaker)
-        .bind(&segment.voice_profile_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| anyhow!("Failed to insert transcript: {}", e))?;
-    }
-
-    tx.commit()
-        .await
-        .map_err(|e| anyhow!("Failed to commit transaction: {}", e))?;
+        .map_err(|e| anyhow!("Failed to create meeting: {}", e))?;
 
     info!(
         "Created meeting '{}' with {} transcripts",
@@ -928,14 +880,14 @@ async fn get_configured_model<R: Runtime>(app: &AppHandle<R>) -> Result<String> 
         .try_state::<AppState>()
         .ok_or_else(|| anyhow!("App state not available"))?;
 
-    let result: Option<(String, String)> =
-        sqlx::query_as("SELECT provider, model FROM transcript_settings WHERE id = '1'")
-            .fetch_optional(app_state.db_manager.pool())
-            .await
-            .map_err(|e| anyhow!("Failed to query config: {}", e))?;
+    let config = SettingsRepository::get_transcript_config(app_state.db_manager.pool())
+        .await
+        .map_err(|e| anyhow!("Failed to query config: {}", e))?;
 
-    match result {
-        Some((provider, model)) if provider == "localWhisper" || provider == "whisper" => Ok(model),
+    match config {
+        Some(config) if config.provider == "localWhisper" || config.provider == "whisper" => {
+            Ok(config.model)
+        }
         _ => Ok(DEFAULT_WHISPER_MODEL.to_string()),
     }
 }

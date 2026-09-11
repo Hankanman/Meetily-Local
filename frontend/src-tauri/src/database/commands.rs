@@ -1,13 +1,14 @@
 use log::{error, info};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use super::manager::DatabaseManager;
+use crate::events::EventSinkExt;
 use crate::state::AppState;
 
 /// Check if this is the first launch (no database exists yet)
 #[tauri::command]
-pub async fn check_first_launch(app: AppHandle) -> Result<bool, String> {
-    DatabaseManager::is_first_launch(&app)
+pub async fn check_first_launch(_app: AppHandle) -> Result<bool, String> {
+    DatabaseManager::is_first_launch()
         .await
         .map_err(|e| format!("Failed to check first launch: {}", e))
 }
@@ -17,12 +18,10 @@ pub async fn check_first_launch(app: AppHandle) -> Result<bool, String> {
 pub async fn initialize_fresh_database(app: AppHandle) -> Result<(), String> {
     info!("Initializing fresh database");
 
-    let db_manager = DatabaseManager::new_from_app_handle(&app)
-        .await
-        .map_err(|e| {
-            error!("Failed to initialize fresh database: {}", e);
-            format!("Failed to initialize database: {}", e)
-        })?;
+    let db_manager = DatabaseManager::new_default().await.map_err(|e| {
+        error!("Failed to initialize fresh database: {}", e);
+        format!("Failed to initialize database: {}", e)
+    })?;
 
     // Update app state with the new manager
     app.manage(AppState {
@@ -60,7 +59,7 @@ pub async fn initialize_fresh_database(app: AppHandle) -> Result<(), String> {
     info!("Fresh database initialized successfully with default models");
 
     // Emit event to notify frontend that database is ready
-    app.emit("database-initialized", ())
+    app.emit_event("database-initialized", &())
         .map_err(|e| format!("Failed to emit database-initialized event: {}", e))?;
 
     Ok(())
@@ -68,22 +67,16 @@ pub async fn initialize_fresh_database(app: AppHandle) -> Result<(), String> {
 
 /// Get the database directory path
 #[tauri::command]
-pub async fn get_database_directory(app: AppHandle) -> Result<String, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+pub async fn get_database_directory(_app: AppHandle) -> Result<String, String> {
+    let app_data_dir = crate::paths::app_data_dir()?;
 
     Ok(app_data_dir.to_string_lossy().to_string())
 }
 
 /// Open the database folder in the system file explorer
 #[tauri::command]
-pub async fn open_database_folder(app: AppHandle) -> Result<(), String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+pub async fn open_database_folder(_app: AppHandle) -> Result<(), String> {
+    let app_data_dir = crate::paths::app_data_dir()?;
 
     // Ensure directory exists before trying to open it
     if !app_data_dir.exists() {

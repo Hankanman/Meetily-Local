@@ -178,6 +178,58 @@ impl TranscriptsRepository {
         Ok(affected)
     }
 
+    /// Replace every transcript row for `meeting_id` with `segments`, in one
+    /// transaction — a full re-save (retranscription / auto-refine), not the
+    /// incremental `upsert_transcript_segments` the live-recording path uses.
+    pub async fn replace_transcripts_for_meeting(
+        pool: &SqlitePool,
+        meeting_id: &str,
+        segments: &[TranscriptSegment],
+    ) -> Result<(), SqlxError> {
+        let mut conn = pool.acquire().await?;
+        let mut transaction = conn.begin().await?;
+
+        sqlx::query("DELETE FROM transcripts WHERE meeting_id = ?")
+            .bind(meeting_id)
+            .execute(&mut *transaction)
+            .await?;
+
+        for segment in segments {
+            let result = sqlx::query(
+                "INSERT INTO transcripts (id, meeting_id, transcript, timestamp, audio_start_time, audio_end_time, duration, speaker, voice_profile_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&segment.id)
+            .bind(meeting_id)
+            .bind(&segment.text)
+            .bind(
+                segment
+                    .timestamp
+                    .clone()
+                    .unwrap_or_else(|| Utc::now().to_rfc3339()),
+            )
+            .bind(segment.audio_start_time)
+            .bind(segment.audio_end_time)
+            .bind(segment.duration)
+            .bind(&segment.speaker)
+            .bind(&segment.voice_profile_id)
+            .execute(&mut *transaction)
+            .await;
+
+            if let Err(e) = result {
+                error!(
+                    "Failed to insert transcript segment for meeting {}: {}",
+                    meeting_id, e
+                );
+                transaction.rollback().await?;
+                return Err(e);
+            }
+        }
+
+        transaction.commit().await?;
+        Ok(())
+    }
+
     /// Re-point every transcript that currently references `from_profile_id`
     /// to `to_profile_id`, also rewriting the displayed `speaker` text to
     /// `to_name`. Used when merging two stored voice profiles into one.

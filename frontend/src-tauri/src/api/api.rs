@@ -774,13 +774,9 @@ pub async fn open_meeting_folder<R: Runtime>(
     let pool = state.db_manager.pool();
 
     // Get meeting with folder_path
-    let meeting: Option<MeetingModel> = sqlx::query_as(
-        "SELECT id, title, created_at, updated_at, folder_path FROM meetings WHERE id = ?",
-    )
-    .bind(&meeting_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("Database error: {}", e))?;
+    let meeting = MeetingsRepository::get_meeting_metadata(pool, &meeting_id)
+        .await
+        .map_err(|e| format!("Database error: {}", e))?;
 
     match meeting {
         Some(m) => {
