@@ -342,7 +342,8 @@ mod tests {
     fn summary_reveal_chars_per_tick_scales_with_backlog() {
         // 80 pending chars / 8 target ticks = 10 chars/tick.
         assert_eq!(summary_reveal_chars_per_tick(80), 10);
-        // Never reveals more than what's pending.
-        assert_eq!(summary_reveal_chars_per_tick(3), 3);
+        // Below the floor of 2 chars/tick, still never exceeds what's pending.
+        assert_eq!(summary_reveal_chars_per_tick(3), 2);
+        assert_eq!(summary_reveal_chars_per_tick(1), 1);
     }
 }
