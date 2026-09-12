@@ -472,7 +472,19 @@ impl Render for AppShell {
                     import::open_with_file(window, cx, path.clone());
                 }
             })
-            .child(TitleBar::new().child("Parley"))
+            // Without `on_close_window`, gpui-kit's X calls
+            // `window.remove_window()` directly — bypassing
+            // `on_window_should_close` entirely. Route it through the same
+            // policy so both close paths behave identically.
+            .child(
+                TitleBar::new()
+                    .on_close_window(|_, window, cx| {
+                        if crate::window::close_to_tray_or_quit(cx) {
+                            window.remove_window();
+                        }
+                    })
+                    .child("Parley"),
+            )
             .child(
                 h_flex()
                     .flex_1()

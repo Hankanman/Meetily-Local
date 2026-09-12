@@ -63,6 +63,12 @@ struct AppTray {
 
 impl Global for AppTray {}
 
+/// Whether a tray icon is actually registered. Closing the window is only
+/// safe to treat as "close to tray" when there's a tray to get back from.
+pub fn is_installed(cx: &App) -> bool {
+    cx.has_global::<AppTray>()
+}
+
 /// A simple filled circle, red while idle/stopped-ish, matching the
 /// spike's icon. `gpui-tray::Tray::set_icon` could recolor this live; out
 /// of scope for phase 1.

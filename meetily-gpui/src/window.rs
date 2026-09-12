@@ -28,19 +28,13 @@ pub fn open_main_window(cx: &mut App) -> Result<WindowHandle<Root>> {
         cx.new(|cx| Root::new(view, window, cx))
     })?;
 
-    // Registering the close handler is not optional: it's what turns a close
-    // request into "finish the active recording, then quit" instead of the
-    // Wayland default of destroying the window (which leaves the app running
-    // with only a tray). Loud on failure — silence here is what hid exactly
-    // that bug.
+    // Registering the close handler is not optional: it's what puts a close
+    // request under [`close_to_tray_or_quit`] instead of the Wayland default
+    // of destroying the window regardless. Loud on failure — silence here is
+    // exactly what hid that bug.
     if let Err(e) = window.update(cx, |_, window, cx| {
         crate::views::settings::init_theme(window, cx);
-        window.on_window_should_close(cx, |_, cx| {
-            crate::request_quit(cx);
-            // Never let the compositor destroy the window: `request_quit`
-            // finishes any recording and then quits the whole app.
-            false
-        });
+        window.on_window_should_close(cx, |_, cx| close_to_tray_or_quit(cx));
     }) {
         log::error!(
             "Failed to register main-window handlers ({e}); closing the window \
@@ -50,6 +44,24 @@ pub fn open_main_window(cx: &mut App) -> Result<WindowHandle<Root>> {
 
     cx.set_global(crate::tray::MainWindow(window));
     Ok(window)
+}
+
+/// What a close request should do, for both close paths (the compositor's
+/// close button and gpui-kit's own title-bar X). With a tray registered the
+/// window closes and the app keeps running — an active recording continues,
+/// and the tray's "Open Parley" brings the UI back. Without a tray there'd
+/// be no way back, so a close means quit: [`crate::request_quit`] finishes
+/// any recording first.
+///
+/// Returns whether the window may actually close.
+pub fn close_to_tray_or_quit(cx: &mut App) -> bool {
+    if crate::tray::is_installed(cx) {
+        log::info!("Main window closed to tray; the app keeps running");
+        true
+    } else {
+        crate::request_quit(cx);
+        false
+    }
 }
 
 /// The live main window, re-opening it if it has gone away. `None` only if
