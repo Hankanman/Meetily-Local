@@ -14,6 +14,7 @@ use gpui_kit::component::{
     input::{Input, InputEvent, InputState},
     sidebar::{Sidebar, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem},
 };
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use meetily_core::database::models::MeetingModel;
 use meetily_core::database::repositories::meeting::MeetingsRepository;
@@ -396,7 +397,7 @@ fn meeting_row(model: MeetingModel) -> MeetingRow {
 }
 
 impl Render for AppShell {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let page: AnyView = match &self.route {
             Route::Recording => self.recording.clone().into(),
             Route::Meeting(_) => self.meeting.clone().into(),
@@ -472,18 +473,28 @@ impl Render for AppShell {
                     import::open_with_file(window, cx, path.clone());
                 }
             })
-            // Without `on_close_window`, gpui-kit's X calls
-            // `window.remove_window()` directly — bypassing
-            // `on_window_should_close` entirely. Route it through the same
-            // policy so both close paths behave identically.
-            .child(
-                TitleBar::new()
-                    .on_close_window(|_, window, cx| {
-                        if crate::window::close_to_tray_or_quit(cx) {
-                            window.remove_window();
-                        }
-                    })
-                    .child("Parley"),
+            // Our title bar is only for when the app has to draw its own
+            // window frame. When the compositor draws one (server-side
+            // decorations), this strip holds nothing the system bar doesn't
+            // already show, so skip it rather than stack two title bars.
+            //
+            // In the client-side case, `on_close_window` matters: without it
+            // gpui-kit's X calls `window.remove_window()` directly, bypassing
+            // `on_window_should_close`. Routing it through the same policy
+            // keeps both close paths identical.
+            .when(
+                matches!(window.window_decorations(), Decorations::Client { .. }),
+                |this| {
+                    this.child(
+                        TitleBar::new()
+                            .on_close_window(|_, window, cx| {
+                                if crate::window::close_to_tray_or_quit(cx) {
+                                    window.remove_window();
+                                }
+                            })
+                            .child("Parley"),
+                    )
+                },
             )
             .child(
                 h_flex()

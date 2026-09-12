@@ -21,7 +21,13 @@ use crate::root::RootView;
 pub fn open_main_window(cx: &mut App) -> Result<WindowHandle<Root>> {
     let mut options = TitleBar::window_options();
     options.window_bounds = Some(WindowBounds::centered(size(px(1100.), px(720.)), cx));
-    options.window_decorations = Some(WindowDecorations::Client);
+    // Prefer the system's own title bar and borders. GPUI asks the
+    // compositor for server-side decorations and silently falls back to
+    // client-side when it can't provide them (GNOME/Wayland, notably) —
+    // gpui-kit's `TitleBar` then draws our own controls, and skips them
+    // when the compositor is drawing its own, so there's never a double
+    // title bar either way.
+    options.window_decorations = Some(WindowDecorations::Server);
 
     let window = cx.open_window(options, |window, cx| {
         let view = cx.new(|cx| RootView::new(window, cx));
@@ -41,6 +47,19 @@ pub fn open_main_window(cx: &mut App) -> Result<WindowHandle<Root>> {
              would skip finishing an active recording"
         );
     }
+
+    // Report what we actually got, so "is this using system decorations /
+    // the system theme?" is answerable from the log.
+    let _ = window.update(cx, |_, window, cx| {
+        let decorations = match window.window_decorations() {
+            Decorations::Server => "server-side (system)",
+            Decorations::Client { .. } => "client-side (drawn by the app)",
+        };
+        log::info!(
+            "Main window: {decorations} decorations, system appearance {:?}",
+            cx.window_appearance()
+        );
+    });
 
     cx.set_global(crate::tray::MainWindow(window));
     Ok(window)
