@@ -63,6 +63,12 @@ struct AppTray {
 
 impl Global for AppTray {}
 
+/// Whether a tray icon is actually registered. Closing the window is only
+/// safe to treat as "close to tray" when there's a tray to get back from.
+pub fn is_installed(cx: &App) -> bool {
+    cx.has_global::<AppTray>()
+}
+
 /// A simple filled circle, red while idle/stopped-ish, matching the
 /// spike's icon. `gpui-tray::Tray::set_icon` could recolor this live; out
 /// of scope for phase 1.
@@ -134,15 +140,14 @@ fn build_menu(cx: &mut App) -> Vec<MenuItem> {
     ]
 }
 
-/// Focus/raise the main window. Best-effort: logs if the window has already
-/// been closed (shouldn't happen — the window only closes via
-/// `request_quit`, which also tears the tray down).
+/// Bring the main window back: re-opens it if it has been closed (the app
+/// keeps running without a window under `QuitMode::Explicit`), then asks the
+/// compositor to focus it. Wayland compositors commonly refuse an
+/// unsolicited raise, so the re-open is what actually gets the UI back.
 fn open_parley(cx: &mut App) {
-    let Some(main_window) = cx.try_global::<MainWindow>() else {
-        log::warn!("tray: Open Parley clicked before the main window was registered");
+    let Some(handle) = crate::window::ensure_main_window(cx) else {
         return;
     };
-    let handle = main_window.0;
     if let Err(e) = handle.update(cx, |_, window, _cx| window.activate_window()) {
         log::warn!("tray: failed to activate the main window: {}", e);
     }
