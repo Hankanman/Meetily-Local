@@ -134,15 +134,14 @@ fn build_menu(cx: &mut App) -> Vec<MenuItem> {
     ]
 }
 
-/// Focus/raise the main window. Best-effort: logs if the window has already
-/// been closed (shouldn't happen — the window only closes via
-/// `request_quit`, which also tears the tray down).
+/// Bring the main window back: re-opens it if it has been closed (the app
+/// keeps running without a window under `QuitMode::Explicit`), then asks the
+/// compositor to focus it. Wayland compositors commonly refuse an
+/// unsolicited raise, so the re-open is what actually gets the UI back.
 fn open_parley(cx: &mut App) {
-    let Some(main_window) = cx.try_global::<MainWindow>() else {
-        log::warn!("tray: Open Parley clicked before the main window was registered");
+    let Some(handle) = crate::window::ensure_main_window(cx) else {
         return;
     };
-    let handle = main_window.0;
     if let Err(e) = handle.update(cx, |_, window, _cx| window.activate_window()) {
         log::warn!("tray: failed to activate the main window: {}", e);
     }

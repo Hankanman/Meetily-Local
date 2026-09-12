@@ -11,12 +11,12 @@ mod runtime;
 mod shell;
 mod tray;
 mod ui;
+mod window;
 mod views;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
-use gpui_kit::component::{Root, TitleBar};
 use gpui_kit::*;
 use meetily_core::bootstrap;
 use meetily_core::database::setup::StartupOutcome;
@@ -24,7 +24,6 @@ use meetily_core::events::SharedEventSink;
 
 use app_state::AppServices;
 use core_events::CoreEvents;
-use root::RootView;
 use runtime::Io;
 
 /// Set once a close/quit request has started finishing the recording, so a
@@ -96,28 +95,14 @@ fn main() {
             builtin_manager,
         });
 
-        let mut window_options = TitleBar::window_options();
-        window_options.window_bounds = Some(WindowBounds::centered(size(px(1100.), px(720.)), cx));
-        window_options.window_decorations = Some(WindowDecorations::Client);
-
         cx.spawn(async move |cx| {
-            let window = cx
-                .open_window(window_options, |window, cx| {
-                    let view = cx.new(|cx| RootView::new(window, cx));
-                    cx.new(|cx| Root::new(view, window, cx))
-                })
-                .expect("failed to open window");
+            let _ = cx.update(|cx| {
+                // Opens the window and registers its theme + close handler;
+                // also stores the `MainWindow` handle the tray reaches for.
+                if let Err(e) = window::open_main_window(cx) {
+                    log::error!("Failed to open the main window: {}", e);
+                }
 
-            let _ = window.update(cx, |_, window, cx| {
-                views::settings::init_theme(window, cx);
-                window.on_window_should_close(cx, |_, cx| {
-                    request_quit(cx);
-                    false
-                });
-            });
-
-            cx.update(|cx| {
-                cx.set_global(tray::MainWindow(window));
                 if let Err(e) = tray::install(cx) {
                     log::warn!(
                         "Tray unavailable (no StatusNotifierItem host?), continuing without one: {}",
