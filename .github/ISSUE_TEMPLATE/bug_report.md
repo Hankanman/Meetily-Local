@@ -21,11 +21,10 @@ assignees: ''
 3. [And so on...]
 
 ## Environment
-- OS: [e.g., macOS, Windows, Linux]
-- Browser: [e.g., Chrome, Firefox, Safari]
-- Version: [e.g., 1.0.0]
-- Node Version: [e.g., 18.0.0]
-- npm/pnpm Version: [e.g., 8.0.0]
+- Distro: [e.g., Fedora 44, Ubuntu 24.04]
+- Parley version: [e.g., 0.4.0]
+- GPU / mode: [e.g., NVIDIA RTX 3080 (cuda), CPU-only]
+- Install method: [e.g., AppImage from Releases, built from source]
 
 ## Screenshots/Videos
 [If applicable, add screenshots or videos to help explain your problem]

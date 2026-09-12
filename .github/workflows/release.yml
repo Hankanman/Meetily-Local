@@ -52,7 +52,7 @@ jobs:
 
             if [ $NEXT_MINOR -gt 100 ]; then
               echo "ERROR: Maximum minor version (100) reached for ${BASE_VERSION}"
-              echo "Please update the version in tauri.conf.json"
+              echo "Please update the version in meetily-gpui/Cargo.toml"
               exit 1
             fi
 
