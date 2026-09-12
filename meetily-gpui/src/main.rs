@@ -4,6 +4,7 @@
 
 mod app_state;
 mod core_events;
+mod fonts;
 mod notifications;
 mod recovery;
 mod root;
@@ -32,7 +33,8 @@ static QUIT_STARTED: AtomicBool = AtomicBool::new(false);
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(
-        "info,whisper_rs=warn,zbus=warn,tracing=warn,wgpu_hal=warn,wgpu_core=warn,naga=warn",
+        "info,whisper_rs=warn,zbus=warn,tracing=warn,wgpu_hal=warn,wgpu_core=warn,naga=warn,\
+         wgpu_hal::vulkan::instance=error,gpui_component::theme::mono_font=error",
     ))
     .init();
 
@@ -84,6 +86,9 @@ fn main() {
     app.run(move |cx| {
         gpui_kit::init(cx);
         zorite_editor::bind_keys(cx);
+        // After `gpui_kit::init` (which sets the Theme global), before any
+        // text is laid out.
+        fonts::apply_system_mono_font(cx);
 
         let core_events = cx.new(|cx| CoreEvents::new(events_rx, cx));
         cx.set_global(io.clone());

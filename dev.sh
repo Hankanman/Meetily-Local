@@ -49,9 +49,17 @@ setup_common_env() {
     #   - zbus / tracing / wgpu / naga at warn → D-Bus (tray, portals) and
     #                          GPU-backend chatter the GPUI shell would
     #                          otherwise log at INFO on every tray poll
+    #   - wgpu_hal::vulkan::instance at error → the Vulkan loader warns once
+    #                          per incompatible ICD it skips (e.g. Mesa's
+    #                          dzn/D3D12 shim on a normal Linux box), which
+    #                          is expected and not actionable
+    #   - gpui_component::theme::mono_font at error → gpui-kit warns when its
+    #                          hard-coded default mono font is missing, from
+    #                          inside its own init; we replace the family with
+    #                          the desktop's a moment later (see fonts.rs)
     #   - everything else at info
     # Override by exporting RUST_LOG before invoking dev.sh.
-    export RUST_LOG="${RUST_LOG:-info,whisper_rs=warn,zbus=warn,tracing=warn,wgpu_hal=warn,wgpu_core=warn,naga=warn}"
+    export RUST_LOG="${RUST_LOG:-info,whisper_rs=warn,zbus=warn,tracing=warn,wgpu_hal=warn,wgpu_core=warn,naga=warn,wgpu_hal::vulkan::instance=error,gpui_component::theme::mono_font=error}"
 
     if command -v sccache >/dev/null 2>&1; then
         export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
