@@ -5,10 +5,11 @@ Stdio JSON-lines whisper.cpp transcription sidecar — prototype for
 Modelled directly on `../llama-helper` (see that crate + `llama-protocol`
 for the pattern this follows).
 
-**Status**: standalone spike crate. Not yet staged into
-`frontend/src-tauri/binaries/` by `build.sh`/`dev.sh`, and not spawned by the
-running app. See `docs/transcription-backends.md` for the design and
-implementation plan to get from here to a shipped sidecar.
+**Status**: standalone spike crate. Not yet staged by `build.sh`/`dev.sh`
+(which now build the GPUI app, not the retired Tauri shell this spike was
+originally scoped against), and not spawned by the running app. See
+`docs/transcription-backends.md` for the design and implementation plan to
+get from here to a shipped sidecar.
 
 ## Build matrix
 
@@ -32,10 +33,10 @@ main app's whisper.cpp runs here — no separate GPU toolchain setup beyond
 what `docs/building_in_linux.md` already documents for CUDA/Vulkan builds of
 the main app.
 
-Staging into `frontend/src-tauri/binaries/whisper-helper-<target-triple>`
-(Tauri's `externalBin` convention, same as `llama-helper-<target-triple>`)
-is a follow-up for `build.sh`/`dev.sh` once the sidecar is wired into the
-live path — see the design doc's implementation plan.
+Staging a `whisper-helper` binary into `target/gpui-dist/` next to
+`llama-helper` (the same way `build.sh` already stages that sidecar for the
+GPUI AppImage) is a follow-up for `build.sh`/`dev.sh` once the sidecar is
+wired into the live path — see the design doc's implementation plan.
 
 ## Protocol
 

@@ -4,105 +4,105 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Meetily-Local** is a privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on local infrastructure. It's a single self-contained Tauri desktop application — no separate backend server.
+**Meetily-Local** (branded **Parley** in the UI) is a privacy-first AI meeting assistant that captures, transcribes, and summarizes meetings entirely on local infrastructure. It's a single self-contained GPUI desktop application — no separate backend server, no webview, no JavaScript.
 
 ### Key Technology Stack
-- **Desktop shell**: Tauri 2.11 (Rust) + Next.js 16 + React 19 + Tailwind 4
+- **Desktop shell**: [GPUI](https://www.gpui.rs/) (Rust, the UI framework behind Zed) via `gpui-kit`/`gpui-component`
 - **Audio Processing**: Rust (native PipeWire capture, whisper-rs, professional audio mixing)
 - **Transcription**: Whisper.cpp (local, GPU-accelerated, in-process via whisper-rs)
-- **Persistence**: SQLite via sqlx in the Tauri Rust process
+- **Persistence**: SQLite via sqlx in the same Rust process
 - **LLM Integration**: built-in llama.cpp sidecar (`llama-helper` crate), or remote Ollama / Claude / Groq / OpenRouter / OpenAI-compatible endpoint
 
 ## Essential Development Commands
 
-### Frontend Development (Tauri Desktop App)
-
 Root-level scripts (recommended — handle CUDA/Vulkan env setup and the `llama-helper` sidecar build for you):
 
 ```bash
-./dev.sh                    # auto: full Tauri dev, CUDA on NVIDIA, CPU otherwise
+./dev.sh                    # auto: CUDA on NVIDIA, CPU otherwise — cargo run -p meetily-gpui
 ./dev.sh cuda                # NVIDIA CUDA
 ./dev.sh vulkan               # AMD/Intel Vulkan
 ./dev.sh cpu                  # CPU-only
-./dev.sh frontend             # frontend-only (next dev), no Tauri shell — fastest UI loop
-./dev.sh gpui [cuda|vulkan|cpu]   # GPUI shell (meetily-gpui) via cargo run — no Next.js/pnpm
-./build.sh                    # production build (same mode selection as dev.sh)
-./build.sh gpui [cuda|vulkan|cpu] # release build + AppImage of the GPUI shell (Parley-*.AppImage)
-./clean.sh                    # nuke target/ + node_modules/ + Next.js caches
+./build.sh                    # production build → Parley-<version>-x86_64.AppImage
+./build.sh cuda                # NVIDIA CUDA
+./build.sh vulkan               # AMD/Intel Vulkan
+./build.sh cpu                   # CPU-only
+./clean.sh                    # nuke target/
 ```
 
-**Location**: `/frontend` (manual `pnpm` commands, if you don't want the root scripts):
+`gpui` is also accepted as a no-op leading argument on both scripts (`./dev.sh gpui cuda`) for muscle memory — it's the only shell now, so it doesn't change anything.
+
+Manual `cargo` commands, if you don't want the root scripts:
 
 ```bash
-pnpm install                 # Install dependencies
-pnpm run dev                 # Next.js dev server (port 3118)
-pnpm run tauri:dev:cpu       # Full Tauri dev, CPU-only
-pnpm run tauri:dev:cuda      # Full Tauri dev, NVIDIA CUDA
-pnpm run tauri:dev:vulkan    # Full Tauri dev, AMD/Intel Vulkan
-pnpm run tauri:build:cpu     # Production build, CPU-only
-pnpm run tauri:build:cuda    # Production build, NVIDIA CUDA
-pnpm run tauri:build:vulkan  # Production build, AMD/Intel Vulkan
+cargo run -p meetily-gpui                       # debug run, CPU
+cargo run -p meetily-gpui --features cuda        # debug run, CUDA
+cargo build --release -p meetily-gpui --features vulkan   # release build
 ```
 
-### Service Endpoint
-- **Frontend Dev**: http://localhost:3118 (Next.js Turbopack with HMR)
-
-The Tauri Rust side has no HTTP listener — frontend ↔ Rust communication is
-all in-process via `invoke()` commands and emitted events.
+The app has no HTTP listener and no IPC boundary — the UI (`meetily-gpui`) calls into the core (`meetily-core`) as plain Rust function calls, in-process.
 
 ## High-Level Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Tauri Desktop App (single process)           │
+│                 meetily-gpui (single process)                   │
 │  ┌──────────────────┐    ┌──────────────────────────────────┐  │
-│  │ Next.js UI       │    │ Rust core                        │  │
-│  │ (React/TS)       │←──→│   • Audio capture + mixing + VAD │  │
-│  │                  │    │   • whisper-rs / parakeet        │  │
-│  └──────────────────┘    │   • SQLite via sqlx              │  │
-│         ↑ Tauri events   │   • Summary engine               │  │
-│         ↓ invoke()       │   • llama-helper sidecar         │  │
-│                          └──────────────────────────────────┘  │
+│  │ GPUI views       │    │ meetily-core                     │  │
+│  │ (Rust)           │←──→│   • Audio capture + mixing + VAD │  │
+│  │ recording,       │    │   • whisper-rs / parakeet        │  │
+│  │ meeting, settings│    │   • SQLite via sqlx              │  │
+│  │ speakers, tray   │    │   • Summary engine               │  │
+│  │                  │    │   • llama-helper sidecar         │  │
+│  └──────────────────┘    └──────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
                 ↓ optional outbound LLM calls
    Ollama (local or remote) / Claude / Groq / OpenRouter / custom OpenAI
 ```
 
-### Crate Layout: Tauri-free core + thin shell
-
-The Rust side is split so the UI shell can be replaced (a GPUI app is
-planned alongside the Tauri one):
+### Crate Layout: Tauri-free core + GPUI shell
 
 - **`meetily-core/`** (lib `meetily_core`) — everything that isn't UI glue:
   audio pipeline + PipeWire capture, transcription, recording orchestration
   (`audio/recording_service.rs`), SQLite repositories + `migrations/`,
   summaries/LLM providers + embedded `templates/`, model management, speaker
-  diarization. **It must never depend on `tauri`** — check with
+  diarization. **It must never depend on `tauri`** (there is no Tauri
+  dependency anywhere in the workspace anymore) — check with
   `cargo tree -p meetily-core | grep -i tauri` (must be empty).
-- **`frontend/src-tauri/`** (package `meetily`, lib `app_lib`) — the Tauri
-  shell only: `lib.rs` setup + `generate_handler!`, `tray.rs`,
-  `notifications/`, `api/`, and every `#[tauri::command]` under
-  `src/commands/<domain>/`. It re-exports the core's top-level modules
-  (`crate::audio`, `crate::summary`, …) so shell code uses the same paths.
-- **`meetily-gpui/`** (bin `meetily-gpui`) — GPUI shell, work in progress: a
-  second desktop UI on GPUI + gpui-kit that links `meetily-core` directly
-  (no webview, no IPC — core → UI goes through the same `EventSink` trait).
-  Run it with `./dev.sh gpui`, package it with `./build.sh gpui` (see
-  `meetily-gpui/packaging/linux/`).
+- **`meetily-gpui/`** (bin `meetily-gpui`) — the GPUI desktop shell: links
+  `meetily-core` directly (no webview, no IPC). See `meetily-gpui/src/`:
+  - `main.rs` — entry point, window setup, shutdown coordination
+  - `app_state.rs` — `AppServices`, the process-wide global (`cx.global::<AppServices>()`)
+    holding the DB slot, the event sink, and the summary model-manager state
+  - `core_events.rs` — `GpuiSink` (the `events::EventSink` impl) and
+    `CoreEvents`, the entity views subscribe to for core→UI updates
+  - `root.rs` — top-level view: onboarding gate, then the shell
+  - `shell/` — the main app chrome (sidebar, meeting list, recording bar)
+  - `views/` — one module per feature area: `recording/`, `meeting/`,
+    `settings/`, `speakers/`, `onboarding/`, `import/`, `action_items/`
+  - `tray.rs` — system tray (via `gpui-tray`)
+  - `notifications.rs`, `recovery.rs`, `runtime.rs` — desktop notifications,
+    interrupted-meeting recovery, the Tauri-free async runtime glue
+  - `packaging/linux/` — `build-appimage.sh` + the `.desktop` file + app icon
+    used to produce the AppImage
 
 Core → UI communication goes through the `events::EventSink` trait
-(`emit_event(name, &payload)`), never an `AppHandle`. The shell wraps its
-`AppHandle` in `tauri_events::TauriSink` / `tauri_events::shared_sink(&app)`;
-tests use `NullSink` / `RecordingSink`. Core resolves directories with
-`paths::app_data_dir()` (`~/.local/share/com.meetily.ai`) and takes the DB as
-a `SqlitePool` / `Option<SqlitePool>` argument instead of reading Tauri
-managed state. Recording persistence subscribes to finished segments on the
-in-process `audio::transcript_bus`, not to UI events. Event names and
-payloads are the frontend contract — don't change them when refactoring.
+(`emit_event(name, &payload)`), never a UI handle. The shell wraps this in
+`core_events::GpuiSink`, whose background task re-emits each event onto the
+`CoreEvents` entity so views subscribe with `cx.subscribe(&core_events, ...)`
+and decode payloads with `CoreEvent::decode::<T>()`. Tests use `NullSink` /
+`RecordingSink` (defined in `meetily-core::events`). Core resolves
+directories with `paths::app_data_dir()` (`~/.local/share/com.meetily.ai`)
+and takes the DB as a `SqlitePool` / `Option<SqlitePool>` argument instead of
+reading framework-managed state. Recording persistence subscribes to
+finished segments on the in-process `audio::transcript_bus`, not to UI
+events. Event names and payloads are a long-standing contract (originally
+shared with a since-retired Tauri/React shell) — don't change them casually
+when refactoring, since existing recovery/IndexedDB-shaped logic on the Rust
+side still keys off them.
 
 GPU features (`cuda`, `vulkan`, `hipblas`, `openblas`, `openmp`) live on
-`meetily-core`; the shell crate forwards the same feature names, so
-`./dev.sh cuda` etc. are unchanged.
+`meetily-core`; `meetily-gpui` and `llama-helper` forward the same feature
+names, so `./dev.sh cuda` etc. are unchanged.
 
 ### Audio Processing Pipeline (Critical Understanding)
 
@@ -149,7 +149,7 @@ meetily-core/src/audio/
 ├── device_detection.rs         # Bluetooth vs wired classification for adaptive buffering
 ├── hardware_detector.rs        # GPU/perf tier detection
 ├── recording_manager.rs        # High-level recording coordination
-├── recording_service.rs        # Tauri-free start/stop/pause orchestration (commands: src-tauri/src/commands/audio/)
+├── recording_service.rs        # start/stop/pause orchestration, called directly from meetily-gpui
 ├── recording_saver.rs          # Audio file writing
 ├── import.rs                   # Import external audio files as new meetings
 ├── retranscription.rs          # Re-process stored audio with different settings
@@ -162,53 +162,41 @@ meetily-core/src/audio/
 - Mixing/processing problems → `pipeline.rs`
 - Recording workflow → `recording_manager.rs`
 
-### Rust ↔ Frontend Communication (Tauri Architecture)
+### Rust core ↔ GPUI shell (in-process, no IPC)
 
-**Command Pattern** (Frontend → Rust):
-```typescript
-// Frontend: src/app/page.tsx
-await invoke('start_recording', {
-  mic_device_name: "Built-in Microphone",
-  system_device_name: "Family 17h/19h/1ah HD Audio Controller Analog Stereo",
-  meeting_name: "Team Standup"
-});
+**Call pattern** (shell → core): the shell calls core functions directly,
+usually from a GPUI view's event handler, spawned onto the app's async
+executor via `cx.spawn(...)`:
+
+```rust
+// meetily-gpui/src/views/recording/logic.rs (illustrative)
+let pool = AppServices::global(cx).pool();
+let sink = AppServices::global(cx).sink.clone();
+cx.spawn(async move |_, _| {
+    meetily_core::audio::recording_service::start_recording(pool, sink, mic, system, name).await
+}).detach();
+```
+
+**Event pattern** (core → shell): core code emits through the injected
+`SharedEventSink`, which the shell wired to `core_events::GpuiSink`:
+
+```rust
+// meetily-core: emit a transcript update
+sink.emit_event("transcript-update", &TranscriptUpdate { text, timestamp, .. })?;
 ```
 
 ```rust
-// Rust: src/lib.rs
-#[tauri::command]
-async fn start_recording<R: Runtime>(
-    app: AppHandle<R>,
-    mic_device_name: Option<String>,
-    system_device_name: Option<String>,
-    meeting_name: Option<String>
-) -> Result<(), String> {
-    // Implementation delegates to audio::recording_commands
-}
-```
-
-**Event Pattern** (Rust → Frontend):
-```rust
-// Rust: Emit transcript updates
-app.emit("transcript-update", TranscriptUpdate {
-    text: "Hello world".to_string(),
-    timestamp: chrono::Utc::now(),
-    // ...
-})?;
-```
-
-```typescript
-// Frontend: Listen for events
-await listen<TranscriptUpdate>('transcript-update', (event) => {
-  setTranscripts(prev => [...prev, event.payload]);
+// meetily-gpui: a view subscribes to CoreEvents and decodes the payload it cares about
+cx.subscribe(&core_events, |this, _, event: &CoreEvent, cx| {
+    if event.name == "transcript-update" {
+        if let Some(update) = event.decode::<TranscriptUpdate>() { /* ... */ }
+    }
 });
 ```
 
 ### Whisper Model Management
 
-**Model Storage Locations**:
-- **Development**: `frontend/models/`
-- **Production (Linux)**: `~/.local/share/com.meetily.ai/models/`
+**Model Storage Location**: `~/.local/share/com.meetily.ai/models/` (both dev and production — resolved via `paths::app_data_dir()`).
 
 **Model Loading** (meetily-core/src/whisper_engine/whisper_engine.rs):
 ```rust
@@ -266,14 +254,17 @@ macro_rules! perf_debug {
 
 **Usage**: Use `perf_debug!()` and `perf_trace!()` for hot-path logging that should be eliminated in production.
 
-### 4. Frontend State Management
+### 4. GPUI State Management
 
-**Sidebar Context** (components/Sidebar/SidebarProvider.tsx):
-- Global state for meetings list, current meeting, recording status
-- Communicates with the Rust side exclusively via Tauri `invoke()` commands
-- No HTTP/WebSocket — everything is in-process
+**`AppServices`** (`meetily-gpui/src/app_state.rs`) is the process-wide global
+(`cx.global::<AppServices>()`), holding:
+- `io: Io` — the Tauri-free async runtime glue (`runtime.rs`)
+- `sink: SharedEventSink` — where core code emits events
+- `core_events: Entity<CoreEvents>` — what views subscribe to for updates
+- `db: DbSlot` — `Arc<RwLock<Option<DatabaseManager>>>`, `None` until onboarding creates a database, filled in later without a restart
+- `builtin_manager: ModelManagerState` — the shared summary model-manager state
 
-**Pattern**: Tauri commands update Rust state → Emit events → Frontend listeners update React state → Context propagates to components
+**Pattern**: a view calls a core function via `cx.spawn(...)`, which reads/writes through `AppServices::global(cx)` → core emits events on the shared sink → `CoreEvents` re-emits them as GPUI events → subscribed views update their own state and call `cx.notify()`.
 
 **Meeting row ownership** (issue #57 slice 2): Rust owns the `meetings` row's
 whole lifecycle, not just its live-recording phase. `start_recording*`
@@ -282,39 +273,33 @@ inserts the row (status `"recording"`) and mints the `meeting_id` included in
 upserts each segment to SQLite as it arrives via a batched writer
 (`audio::transcript_db_writer`); `stop_recording` finalises the row
 (`"completed"`, or `"interrupted"` on a fatal-error stop), and a startup
-sweep marks any row still `"recording"` after a crash `"interrupted"`. The
-frontend's post-stop save is now an update to the one field it still owns
-(title, via `api_save_meeting_title`) instead of creating the row —
-`useRecordingStop` falls back to the old create-and-bulk-insert path only if
-`meeting_id` is missing (an older backend). Recovery of an interrupted
-meeting is a database query (`list_interrupted_meetings` /
-`recover_meeting`), not a scan over the IndexedDB cache, which now exists
-only as a per-viewer write-ahead cache for the live transcript list.
+sweep marks any row still `"recording"` after a crash `"interrupted"`.
+Recovery of an interrupted meeting is a database query
+(`list_interrupted_meetings` / `recover_meeting`), surfaced by
+`meetily-gpui/src/recovery.rs`.
 
 ## Common Development Tasks
 
-### Adding a New Tauri Command
+### Adding a New Feature
 
 1. Put the logic in `meetily-core` as a plain function (taking a
-   `SharedEventSink` / `SqlitePool` if it emits or touches the DB), then add a
-   thin wrapper in `frontend/src-tauri/src/commands/<domain>/`:
+   `SharedEventSink` / `SqlitePool` if it emits or touches the DB):
    ```rust
-   #[tauri::command]
-   pub async fn my_command(arg: String) -> Result<String, String> {
-       meetily_core::my_module::do_thing(arg).await.map_err(|e| e.to_string())
+   pub async fn do_thing(pool: SqlitePool, arg: String) -> Result<String> {
+       // ...
    }
    ```
-2. Register in `tauri::Builder` (`frontend/src-tauri/src/lib.rs`):
+2. Call it from a `meetily-gpui` view, usually via `cx.spawn(...)`:
    ```rust
-   .invoke_handler(tauri::generate_handler![
-       start_recording,
-       my_command,  // Add here
-   ])
+   let pool = AppServices::global(cx).pool();
+   cx.spawn(async move |this, cx| {
+       let result = meetily_core::my_module::do_thing(pool, arg).await;
+       this.update(cx, |this, cx| { /* apply result to view state */ cx.notify(); })
+   }).detach();
    ```
-3. Call from frontend:
-   ```typescript
-   const result = await invoke<string>('my_command', { arg: 'value' });
-   ```
+3. If the view needs to react to something happening elsewhere (e.g. a
+   recording event), subscribe to `AppServices::global(cx).core_events`
+   instead of polling.
 
 ### Modifying Audio Pipeline Behavior
 
@@ -337,17 +322,9 @@ RUST_LOG=meetily_core::audio=debug ./dev.sh
 # Check Developer Console in the app (Ctrl+Shift+I)
 ```
 
-### Adding a Tauri Command (Rust → frontend)
-
-Command wrappers live under `frontend/src-tauri/src/commands/<domain>/` (or
-`src/api/`), register in `lib.rs`'s `generate_handler![]` block, call from JS
-via `invoke()`. SQLite persistence goes through sqlx; see
-`meetily-core/src/database/repositories/*.rs` for the existing repository
-patterns.
-
 ## Testing and Debugging
 
-### Frontend Debugging
+### Debugging
 
 **Enable Rust Logging**:
 ```bash
@@ -395,8 +372,8 @@ Linux is the only supported platform (see [Repository-Specific Conventions](#rep
   while recording; import / retranscription / auto-refine wait on it before
   changing the loaded model
 
-### Frontend Performance
-- React state updates batched via Sidebar context
+### GPUI Performance
+- Views subscribe to `CoreEvents` instead of polling core state
 - Transcript rendering virtualized for large meetings
 - Audio level monitoring throttled to 60fps
 
@@ -409,18 +386,19 @@ Linux is the only supported platform (see [Repository-Specific Conventions](#rep
 3. **Whisper Model Loading**: Models are loaded once and cached. Changing models requires app restart or manual unload/reload.
 
 4. **No external server**: meeting persistence, transcription, summary
-   generation all happen inside the Tauri Rust process. The old `backend/`
-   FastAPI dir was deleted; if you see references to `:5167` they're
-   stale.
+   generation all happen inside the `meetily-gpui` process. The old
+   `backend/` FastAPI dir and the Tauri/Next.js shell were both deleted; if
+   you see references to `:5167`, `frontend/src-tauri`, or `tauri::command`
+   in code, they're stale (or, in doc comments, deliberately historical).
 
-5. **File Paths**: Use Tauri's path APIs (`downloadDir`, etc.) for cross-platform compatibility. Never hardcode paths.
+5. **File Paths**: Resolve directories with `meetily_core::paths::app_data_dir()` — never hardcode paths.
 
-7. **Audio Permissions**: Request microphone permission early; PipeWire handles system-audio routing without a separate OS-level screen-recording grant.
+6. **Audio Permissions**: Request microphone permission early; PipeWire handles system-audio routing without a separate OS-level screen-recording grant.
 
 ## Repository-Specific Conventions
 
-- **Logging Format**: Backend uses detailed formatting with filename:line:function
-- **Error Handling**: Rust uses `anyhow::Result`, frontend uses try-catch with user-friendly messages
+- **Logging Format**: Uses detailed formatting with filename:line:function
+- **Error Handling**: `anyhow::Result` throughout; user-facing errors get a friendly message before being surfaced in the UI
 - **Naming**: Audio devices use "microphone" and "system" consistently (not "input"/"output")
 - **Git Branches**:
   - `main`: Stable releases
@@ -430,9 +408,10 @@ Linux is the only supported platform (see [Repository-Specific Conventions](#rep
 ## Key Files Reference
 
 **Core Coordination**:
-- [frontend/src-tauri/src/lib.rs](frontend/src-tauri/src/lib.rs) - Main Tauri entry point, command registration
+- [meetily-gpui/src/main.rs](meetily-gpui/src/main.rs) - Entry point, window setup, `AppServices` wiring, shutdown coordination
+- [meetily-gpui/src/app_state.rs](meetily-gpui/src/app_state.rs) - `AppServices` global
+- [meetily-gpui/src/core_events.rs](meetily-gpui/src/core_events.rs) - `GpuiSink` / `CoreEvents`, the core→UI event bridge
 - [meetily-core/src/audio/mod.rs](meetily-core/src/audio/mod.rs) - Audio module exports
-- [frontend/src-tauri/src/api/api.rs](frontend/src-tauri/src/api/api.rs) - Tauri command handlers (meetings, summaries, transcripts)
 
 **Audio System**:
 - [meetily-core/src/audio/recording_manager.rs](meetily-core/src/audio/recording_manager.rs) - Recording orchestration
@@ -440,8 +419,9 @@ Linux is the only supported platform (see [Repository-Specific Conventions](#rep
 - [meetily-core/src/audio/recording_saver.rs](meetily-core/src/audio/recording_saver.rs) - Audio file writing
 
 **UI Components**:
-- [frontend/src/app/page.tsx](frontend/src/app/page.tsx) - Main recording interface
-- [frontend/src/components/Sidebar/SidebarProvider.tsx](frontend/src/components/Sidebar/SidebarProvider.tsx) - Global state management
+- [meetily-gpui/src/shell/mod.rs](meetily-gpui/src/shell/mod.rs) - Main app chrome (sidebar, meeting list, recording bar)
+- [meetily-gpui/src/views/recording/mod.rs](meetily-gpui/src/views/recording/mod.rs) - Recording home view
+- [meetily-gpui/src/views/meeting/](meetily-gpui/src/views/meeting/) - Meeting detail (transcript, summary)
 
 **Whisper Integration**:
 - [meetily-core/src/whisper_engine/whisper_engine.rs](meetily-core/src/whisper_engine/whisper_engine.rs) - Whisper model management and transcription

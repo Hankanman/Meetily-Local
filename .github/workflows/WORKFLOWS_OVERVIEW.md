@@ -4,76 +4,67 @@ This document provides a quick overview of all available CI/CD workflows in this
 
 **Note:** All workflows in this repository use **manual triggers only** (`workflow_dispatch`). There are no automatic triggers from push or pull request events.
 
-Meetily-Local is Linux-only (see [CLAUDE.md](../CLAUDE.md)); `build-macos.yml`
-and `build-windows.yml` were removed along with macOS/Windows CI support.
+Meetily-Local (Parley) is Linux-only (see [CLAUDE.md](../CLAUDE.md)) and ships
+a single GPUI desktop app (`meetily-gpui`) packaged as an AppImage via
+`./build.sh` — there is no Tauri shell, no Next.js frontend, and no
+auto-updater.
 
 ## Workflow Files
 
-### 2. **build-linux.yml** - Linux Standalone Builds
-**Purpose:** Build and test for Linux distributions
+### 1. **build-linux.yml** - Linux Standalone Build
+**Purpose:** One-off Linux AppImage build, run by hand
 
 **Key Features:**
 - Support for Ubuntu 22.04 and 24.04
-- Multiple bundle formats (DEB, AppImage, RPM)
-- Tauri updater signing
-- AppImage compatibility fixes
-- Package verification
+- Builds via `./build.sh` (CPU-only — GitHub-hosted runners have no GPU)
+- AppImage size/extraction/library verification
+- Optional artifact upload
 
 **Triggers:**
 - Manual dispatch only
 
 **Use When:**
 - Linux-specific development
-- Testing Vulkan GPU acceleration
-- Verifying package formats
+- Verifying the AppImage still bundles correctly
 
 **Outputs:**
-- `.deb` package (Ubuntu/Debian)
-- `.AppImage` portable
-- `.rpm` package (Fedora/RHEL)
+- `Parley-<version>-x86_64.AppImage`
 
 ---
 
-### 3. **build-test.yml** - Multi-Platform Test Builds
+### 2. **build-test.yml** - Multi-Platform Test Builds
 **Purpose:** Test builds using the reusable `build.yml` workflow
 
 **Key Features:**
-- Signing ON by default
 - Uses reusable `build.yml` workflow
+- Matrix over Ubuntu 22.04 / 24.04
 - 30-day artifact retention
-- Artifacts prefixed with `meetily-test-`
 
 **Triggers:**
 - Manual dispatch only
 
-**Note:** This workflow's matrix still lists `macos-latest` / `windows-latest`
-entries, but `build.yml` (the workflow it calls) no longer has macOS/Windows
-steps — those matrix legs will fail until the workflow is updated to
-Linux-only. Use `build-linux.yml` for Linux test builds in the meantime.
-
 ---
 
-### 4. **build.yml** - Reusable Build Workflow
+### 3. **build.yml** - Reusable Build Workflow
 **Purpose:** Shared, Linux-only workflow used by other workflows
 
 **Key Features:**
 - Reusable workflow (called by others)
-- Highly configurable inputs
+- Runs `./build.sh cpu` and verifies the resulting AppImage
 - Used by `build-test.yml` and `release.yml`
 
 **Not directly triggered** - used as a building block
 
 ---
 
-### 5. **release.yml** - Production Release
+### 4. **release.yml** - Production Release
 **Purpose:** Create official releases with the Linux AppImage
 
 **Key Features:**
 - Creates GitHub Release (draft)
-- Version tags from `tauri.conf.json`
-- Uploads release assets directly via `tauri-action`
-- Builds the Linux AppImage (`ubuntu-22.04`, `x86_64-unknown-linux-gnu`)
-- Auto-generates `latest.json` for Tauri updater
+- Version comes from `meetily-gpui/Cargo.toml`
+- Builds the Linux AppImage (`ubuntu-22.04`) via `build.yml` and uploads it
+  directly to the release
 - **Auto-increment versioning**: If tag exists, auto-increments (e.g., `0.1.1` -> `0.1.1.1` -> `0.1.1.2`, up to `.100`)
 
 **Triggers:**
@@ -85,19 +76,18 @@ Linux-only. Use `build-linux.yml` for Linux test builds in the meantime.
 
 **Outputs:**
 - GitHub Release (draft)
-- Linux: AppImage, .sig
-- Updater manifest: latest.json
+- Linux: `Parley-<version>-x86_64.AppImage`
 - Release notes auto-generated
 
 **Version Behavior:**
 - If `v0.1.1` tag doesn't exist: creates `v0.1.1`
 - If `v0.1.1` exists: creates `v0.1.1.1`
 - If `v0.1.1.1` exists: creates `v0.1.1.2`
-- Maximum: `v0.1.1.100` (then update `tauri.conf.json`)
+- Maximum: `v0.1.1.100` (then bump the version in `meetily-gpui/Cargo.toml`)
 
 ---
 
-### 6. **pr-main-check.yml** - Validation Check
+### 5. **pr-main-check.yml** - Validation Check
 **Purpose:** Quick validation of version and configuration
 
 **Key Features:**
@@ -121,7 +111,7 @@ Linux-only. Use `build-linux.yml` for Linux test builds in the meantime.
 2. **Select workflow** from left sidebar
 3. **Click "Run workflow"** button
 4. **Select branch** to run against
-5. **Configure options** (build type, signing, etc.)
+5. **Configure options** (Ubuntu version, artifact upload, etc.)
 6. **Click "Run workflow"** to start
 7. **Monitor progress** in the Actions tab
 
@@ -130,18 +120,11 @@ Linux-only. Use `build-linux.yml` for Linux test builds in the meantime.
 ## Quick Decision Guide
 
 ### "I'm developing a new feature..."
-- **Use `build-linux.yml`** (manual dispatch)
-- Fast builds, no signing by default
-- Enable signing checkbox if needed
+- Build locally with `./build.sh` — it's faster than CI for iteration
 
-### "I need to test Linux packages..."
+### "I need to verify the AppImage still builds/packages correctly in CI..."
 - **Use `build-linux.yml`** (manual dispatch)
 - Choose Ubuntu version
-- Choose bundle types
-
-### "I need a signed test build..."
-- **Use `build-test.yml`** (manual dispatch), keeping in mind it still
-  carries stale macOS/Windows matrix legs (see above)
 
 ### "I'm ready to release..."
 - **Use `release.yml`** (manual dispatch)
@@ -153,9 +136,9 @@ Linux-only. Use `build-linux.yml` for Linux test builds in the meantime.
 ## Workflow Dependencies
 
 ```
-build.yml (reusable, Linux-only)
-    |-- build-test.yml (calls build.yml — still has stale mac/win matrix legs)
-    |-- release.yml (calls build.yml with ubuntu-22.04 only)
+build.yml (reusable, Linux-only, CPU build via ./build.sh)
+    |-- build-test.yml (matrix over Ubuntu 22.04 / 24.04)
+    |-- release.yml (ubuntu-22.04 only, uploads to the release)
 
 Standalone (don't use build.yml):
     |-- build-linux.yml
@@ -166,46 +149,30 @@ Standalone (don't use build.yml):
 
 ## Comparison Matrix
 
-| Workflow | Platforms | Default Signing | Speed | Retention | Use Case |
-|----------|-----------|----------------|-------|-----------|----------|
-| `build-linux.yml` | Linux | Optional | Medium | 30 days | Linux dev |
-| `build-test.yml` | Linux | ON | Slow | 30 days | Pre-release |
-| `release.yml` | Linux | Tauri updater only | Slow | Permanent | Release |
+| Workflow | Platforms | Speed | Retention | Use Case |
+|----------|-----------|-------|-----------|----------|
+| `build-linux.yml` | Linux | Medium | 30 days | Linux dev |
+| `build-test.yml` | Linux | Medium | 30 days | Pre-release |
+| `release.yml` | Linux | Medium | Permanent | Release |
 
 ---
 
 ## Required Secrets
 
-### Tauri Updater (all builds)
-- `TAURI_SIGNING_PRIVATE_KEY` - Ed25519 private key
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` - Key password
-
-### Application Configuration
-- `MEETILY_RSA_PUBLIC_KEY` - License validation public key
-- `SUPABASE_URL` - Online license verification
-- `SUPABASE_ANON_KEY` - Supabase anonymous key
-
-macOS (`APPLE_*`) and Windows (`SM_*` DigiCert) signing secrets are no longer
-consumed by `build.yml`/`release.yml` — they were removed along with the
-macOS/Windows build steps.
-
----
-
-## Performance Tips
-
-1. **Use build-linux.yml** for routine development
-2. **Enable signing** only when necessary (adds a few minutes for updater signing)
-3. **Run full builds** (`build-test.yml` or `build-linux.yml`) before releases
-4. **Cache is enabled** - subsequent builds are faster
+None of the current workflows depend on repository secrets beyond the
+default `GITHUB_TOKEN` (for release creation/upload). The old Tauri updater
+signing keys (`TAURI_SIGNING_PRIVATE_KEY*`), license-validation key
+(`MEETILY_RSA_PUBLIC_KEY`), and Supabase secrets were removed along with the
+Tauri shell.
 
 ---
 
 ## Troubleshooting
 
-### Signing fails
-- Verify all required secrets are configured
-- Check secret expiration dates
-- Review workflow logs for specific errors
+### AppImage fails to extract or is missing a library
+- Check `./build.sh` ran cleanly in the workflow logs
+- The `Verify AppImage` step fails loudly if `libsherpa-onnx-c-api.so` isn't
+  bundled or the file is implausibly small — see `docs/building_in_linux.md`
 
 ### Artifacts not available
 - Check build succeeded completely
@@ -224,4 +191,4 @@ macOS/Windows build steps.
 For issues with workflows:
 1. Check workflow logs in Actions tab
 2. Review this documentation
-4. Check `ACCELERATION_GUIDE.md` for GPU/performance info
+3. Check `ACCELERATION_GUIDE.md` for GPU/performance info

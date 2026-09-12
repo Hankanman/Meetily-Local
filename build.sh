@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# Meetily — all-in-one build script (Linux focus)
+# Parley (meetily-gpui) — all-in-one build script (Linux focus)
 #
 # Usage:
 #   ./build.sh              # default: cuda on Linux with NVIDIA, cpu otherwise
 #   ./build.sh cuda         # NVIDIA CUDA
 #   ./build.sh vulkan       # AMD/Intel Vulkan
 #   ./build.sh cpu          # CPU-only
-#   ./build.sh gpui [cuda|vulkan|cpu]   # release build of the GPUI shell
-#                                        # (meetily-gpui), staged + packaged
-#                                        # into a Parley AppImage
+#   ./build.sh gpui [cuda|vulkan|cpu]   # same as above — accepted as a
+#                                        # no-op alias for muscle memory
 #   ./build.sh --help
 #
 # Environment overrides (pre-set if you know better):
@@ -17,13 +16,11 @@
 #   NO_STRIP            keep set to 1 on Fedora 43+ (linuxdeploy SHT_RELR incompatibility)
 #
 # Produces:
-#   Tauri:  target/release/bundle/appimage/meetily_<ver>_amd64.AppImage
-#   GPUI:   target/gpui-dist/ (self-contained staged dir)
-#           Parley-<ver>-x86_64.AppImage (repo root)
-#
-# (The .deb target is intentionally skipped — it doesn't bundle
-# libsherpa-onnx-c-api.so so the resulting package wouldn't run on a clean
-# host. Use the AppImage, which embeds all native libs via linuxdeploy.)
+#   target/gpui-dist/               self-contained staged dir (binary + libs)
+#   Parley-<ver>-x86_64.AppImage    repo root (version from meetily-gpui/Cargo.toml)
+#   target/release/meetily-mcp      MCP server, left for the user to register
+#                                    (not bundled into the AppImage — see
+#                                    meetily-mcp/README.md)
 
 set -euo pipefail
 
@@ -129,9 +126,9 @@ case "$FIRST" in
         ;;
 esac
 
-GPUI=0
+# "gpui" is accepted as a no-op alias for muscle memory from when the GPUI
+# shell was opt-in; the GPUI shell is the only app now.
 if [[ "$FIRST" == "gpui" ]]; then
-    GPUI=1
     MODE="${2:-auto}"
 else
     MODE="$FIRST"
@@ -149,171 +146,75 @@ case "$MODE" in
         ;;
 esac
 
-if [[ "$GPUI" -eq 1 ]]; then
-    echo "==> Build mode: gpui ($MODE)"
-else
-    echo "==> Build mode: $MODE"
-fi
+echo "==> Build mode: $MODE"
 
 setup_sccache
-
-# ==========================================================================
-# GPUI build path
-# ==========================================================================
-if [[ "$GPUI" -eq 1 ]]; then
-    cd "$ROOT"
-    setup_linux_build_env "$MODE"
-
-    build_llama_helper "$MODE" >/dev/null
-
-    GPUI_FEATURES=()
-    case "$MODE" in
-        cuda)   GPUI_FEATURES=(--features cuda) ;;
-        vulkan) GPUI_FEATURES=(--features vulkan) ;;
-        cpu)    ;;
-    esac
-
-    echo "==> Building meetily-gpui (${MODE}, release)"
-    cargo build --release -p meetily-gpui "${GPUI_FEATURES[@]}"
-
-    GPUI_BIN="$ROOT/target/release/meetily-gpui"
-    if [[ ! -x "$GPUI_BIN" ]]; then
-        echo "error: $GPUI_BIN not found after build" >&2
-        exit 1
-    fi
-
-    # ----- stage a self-contained dist dir -----
-    DIST_DIR="$ROOT/target/gpui-dist"
-    rm -rf "$DIST_DIR"
-    mkdir -p "$DIST_DIR"
-
-    cp "$GPUI_BIN" "$DIST_DIR/meetily-gpui"
-
-    # Dynamically-linked sherpa-onnx / onnxruntime libs, dropped into
-    # target/release/ by sherpa-onnx-sys's build script (see meetily-gpui's
-    # $ORIGIN rpath in build.rs, which expects them next to the binary).
-    shopt -s nullglob
-    SO_FILES=("$ROOT"/target/release/*.so*)
-    shopt -u nullglob
-    if (( ${#SO_FILES[@]} == 0 )); then
-        echo "error: no .so files found in target/release (expected libsherpa-onnx-c-api.so / libonnxruntime.so)" >&2
-        exit 1
-    fi
-    cp -P "${SO_FILES[@]}" "$DIST_DIR/"
-
-    # llama-helper sidecar: meetily-core's resolver fuzzy-matches any file
-    # starting with "llama-helper" next to the executable, so the plain name
-    # works both here and once packaged into the AppImage.
-    cp "$ROOT/target/release/llama-helper" "$DIST_DIR/llama-helper"
-
-    echo "==> Staged: $DIST_DIR"
-    du -sh "$DIST_DIR"/* | sed 's/^/    /'
-
-    # ----- package as an AppImage -----
-    GPUI_VERSION=$(awk -F'"' '/^version/ {print $2; exit}' "$ROOT/meetily-gpui/Cargo.toml")
-    echo "==> Packaging AppImage (version $GPUI_VERSION)"
-    APPIMAGE=$("$ROOT/meetily-gpui/packaging/linux/build-appimage.sh" "$DIST_DIR" "$GPUI_VERSION" "$ROOT")
-
-    echo
-    echo "==> Build succeeded"
-    echo "    Dist dir: $DIST_DIR"
-    echo "    AppImage: $APPIMAGE ($(du -h "$APPIMAGE" | cut -f1))"
-    exit 0
-fi
-
-# ==========================================================================
-# Tauri build path
-# ==========================================================================
-cd "$ROOT/frontend"
-
+cd "$ROOT"
 setup_linux_build_env "$MODE"
 
-# ----- pre-flight -----
-if ! command -v pnpm >/dev/null 2>&1; then
-    echo "error: pnpm not found (install via 'npm i -g pnpm' or 'corepack enable')" >&2
-    exit 1
-fi
+build_llama_helper "$MODE" >/dev/null
 
-if [[ ! -d node_modules ]]; then
-    echo "==> Installing JS deps"
-    pnpm install --frozen-lockfile
-fi
-
-# ----- build -----
-# Feature flag matches the tauri:build:* npm scripts, but we drop the npm-script
-# layer so we can pass `--bundles appimage` to tauri without touching
-# tauri.conf.json (which still needs deb/msi/dmg for other platforms).
-TAURI_FEATURES=()
+GPUI_FEATURES=()
 case "$MODE" in
-    cuda)   TAURI_FEATURES=(--features cuda) ;;
-    vulkan) TAURI_FEATURES=(--features vulkan) ;;
+    cuda)   GPUI_FEATURES=(--features cuda) ;;
+    vulkan) GPUI_FEATURES=(--features vulkan) ;;
     cpu)    ;;
 esac
 
-# ----- llama-helper sidecar -----
-# Tauri's externalBin expects binaries/llama-helper-<target-triple>; build it
-# with the same GPU backend as the main app.
-TARGET_TRIPLE="$(rustc -vV | awk '/^host:/ {print $2}')"
-HELPER_BIN_NAME="llama-helper"
-HELPER_SIDECAR_NAME="llama-helper-${TARGET_TRIPLE}"
-if [[ "$(uname -s)" == "MINGW"* || "$(uname -s)" == "MSYS"* ]]; then
-    HELPER_BIN_NAME="llama-helper.exe"
-    HELPER_SIDECAR_NAME="llama-helper-${TARGET_TRIPLE}.exe"
-fi
+echo "==> Building meetily-gpui (${MODE}, release)"
+cargo build --release -p meetily-gpui "${GPUI_FEATURES[@]}"
 
-HELPER_SRC=$(build_llama_helper "$MODE")
-HELPER_DEST_DIR="$ROOT/frontend/src-tauri/binaries"
-HELPER_DEST="$HELPER_DEST_DIR/$HELPER_SIDECAR_NAME"
-mkdir -p "$HELPER_DEST_DIR"
-find "$HELPER_DEST_DIR" -maxdepth 1 -name 'llama-helper-*' -delete
-cp "$HELPER_SRC" "$HELPER_DEST"
-echo "==> Staged sidecar: $HELPER_DEST"
+GPUI_BIN="$ROOT/target/release/meetily-gpui"
+if [[ ! -x "$GPUI_BIN" ]]; then
+    echo "error: $GPUI_BIN not found after build" >&2
+    exit 1
+fi
 
 # ----- meetily-mcp -----
-# Not a Tauri sidecar: it's a standalone MCP server that an external client
-# (Claude Desktop / Claude Code) spawns by absolute path, and it talks to the
-# SQLite database directly rather than to the app. So it's built and left in
-# target/release for the user to register — deliberately not staged into
-# frontend/src-tauri/binaries. It has no GPU backend, hence no feature flags.
+# Not bundled into the app: it's a standalone MCP server that an external
+# client (Claude Desktop / Claude Code) spawns by absolute path, and it talks
+# to the SQLite database directly rather than to the app. So it's built and
+# left in target/release for the user to register. It has no GPU backend,
+# hence no feature flags.
 echo "==> Building meetily-mcp (MCP server)"
 cargo build --release -p meetily-mcp
+MCP_BIN="$ROOT/target/release/meetily-mcp"
 
-MCP_BIN_NAME="meetily-mcp"
-if [[ "$(uname -s)" == "MINGW"* || "$(uname -s)" == "MSYS"* ]]; then
-    MCP_BIN_NAME="meetily-mcp.exe"
+# ----- stage a self-contained dist dir -----
+DIST_DIR="$ROOT/target/gpui-dist"
+rm -rf "$DIST_DIR"
+mkdir -p "$DIST_DIR"
+
+cp "$GPUI_BIN" "$DIST_DIR/meetily-gpui"
+
+# Dynamically-linked sherpa-onnx / onnxruntime libs, dropped into
+# target/release/ by sherpa-onnx-sys's build script (see meetily-gpui's
+# $ORIGIN rpath in build.rs, which expects them next to the binary).
+shopt -s nullglob
+SO_FILES=("$ROOT"/target/release/*.so*)
+shopt -u nullglob
+if (( ${#SO_FILES[@]} == 0 )); then
+    echo "error: no .so files found in target/release (expected libsherpa-onnx-c-api.so / libonnxruntime.so)" >&2
+    exit 1
 fi
-MCP_BIN="$ROOT/target/release/$MCP_BIN_NAME"
+cp -P "${SO_FILES[@]}" "$DIST_DIR/"
 
-echo "==> Running tauri build --bundles appimage (${MODE})"
-# Tauri exits 1 on the post-bundle TAURI_SIGNING_PRIVATE_KEY warning even when
-# bundles succeeded — verify by artifact existence rather than exit code.
-# `--` separates tauri-cli flags from cargo flags; only emit it when we have
-# cargo features to pass, otherwise tauri sees a bare `--` and parses oddly.
-set +e
-if (( ${#TAURI_FEATURES[@]} )); then
-    pnpm exec tauri build --bundles appimage -- "${TAURI_FEATURES[@]}"
-else
-    pnpm exec tauri build --bundles appimage
-fi
-BUILD_RC=$?
-set -e
+# llama-helper sidecar: meetily-core's resolver fuzzy-matches any file
+# starting with "llama-helper" next to the executable, so the plain name
+# works both here and once packaged into the AppImage.
+cp "$ROOT/target/release/llama-helper" "$DIST_DIR/llama-helper"
 
-# ----- post-flight: locate artifacts -----
-# `set -o pipefail` makes the ls-glob-then-head idiom abort the script when no
-# match exists, so use find — which simply emits zero lines without failing.
-APPIMAGE=$(find "$ROOT/target/release/bundle/appimage" -maxdepth 1 -name '*.AppImage' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)
+echo "==> Staged: $DIST_DIR"
+du -sh "$DIST_DIR"/* | sed 's/^/    /'
 
-if [[ -n "$APPIMAGE" ]]; then
-    echo
-    echo "==> Build succeeded"
-    echo "    AppImage: $APPIMAGE ($(du -h "$APPIMAGE" | cut -f1))"
-    if [[ -f "$MCP_BIN" ]]; then
-        echo "    MCP server: $MCP_BIN ($(du -h "$MCP_BIN" | cut -f1))"
-        echo "                register it with your MCP client — see meetily-mcp/README.md"
-    fi
-    exit 0
-else
-    echo
-    echo "==> Build FAILED (no AppImage found, tauri exit code $BUILD_RC)" >&2
-    exit "$BUILD_RC"
-fi
+# ----- package as an AppImage -----
+GPUI_VERSION=$(awk -F'"' '/^version/ {print $2; exit}' "$ROOT/meetily-gpui/Cargo.toml")
+echo "==> Packaging AppImage (version $GPUI_VERSION)"
+APPIMAGE=$("$ROOT/meetily-gpui/packaging/linux/build-appimage.sh" "$DIST_DIR" "$GPUI_VERSION" "$ROOT")
+
+echo
+echo "==> Build succeeded"
+echo "    Dist dir: $DIST_DIR"
+echo "    AppImage: $APPIMAGE ($(du -h "$APPIMAGE" | cut -f1))"
+echo "    MCP server: $MCP_BIN ($(du -h "$MCP_BIN" | cut -f1))"
+echo "                register it with your MCP client — see meetily-mcp/README.md"

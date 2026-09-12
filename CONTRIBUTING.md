@@ -1,41 +1,40 @@
-# Contributing to Meeting Minutes Updates
+# Contributing to Meetily-Local (Parley)
 
-Thank you for your interest in contributing to Meetily! This document provides guidelines and instructions for contributing to this project.
+Thank you for your interest in contributing! This document provides guidelines and instructions for contributing to this project.
+
+Meetily-Local is an independent fork — see [README.md](README.md#about-this-fork). PRs and issues go to
+[Hankanman/Meetily-Local](https://github.com/Hankanman/Meetily-Local), not the upstream Zackriya-Solutions project.
 
 ## Development Workflow
 
 ### Branch Strategy
 
-- `main` - Production branch
-- `devtest` - Development and testing branch
-- Feature branches should be created from `devtest`
+- `main` - Stable branch
+- `fix/*` - Bug fixes
+- `enhance/*` - Feature enhancements
 
 ### Getting Started
 
 1. Fork the repository
 2. Clone your fork:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/meeting-minutes.git
+   git clone https://github.com/YOUR_USERNAME/Meetily-Local.git
    ```
-3. Add the original repository as upstream:
+3. Create a new branch from `main`:
    ```bash
-   git remote add upstream https://github.com/Zackriya-Solutions/meeting-minutes.git
-   ```
-4. Create a new branch from `devtest`:
-   ```bash
-   git checkout devtest
-   git pull upstream devtest
-   git checkout -b feature/your-feature-name
+   git checkout main
+   git pull origin main
+   git checkout -b enhance/your-feature-name   # or fix/your-bug-name
    ```
 
 ### Development Process
 
-1. Always start your work from the `devtest` branch
-2. Create a new branch for each feature/fix
+1. Always start your work from `main`
+2. Create a new branch for each feature/fix, named `fix/*` or `enhance/*`
 3. Make your changes
 4. Write or update tests as needed
-5. Ensure all tests pass
-6. Update documentation if necessary
+5. Ensure all tests pass (`cargo test -p meetily-core -p meetily-gpui`)
+6. Update documentation if necessary — see [CLAUDE.md](CLAUDE.md) for where things live
 
 ### Issue Creation
 
@@ -52,13 +51,14 @@ Before starting work on a new feature or bug fix:
 
 ### Pull Request Process
 
-1. Create a PR from your feature branch to `devtest`
+1. Create a PR from your feature branch to `main`
 2. Link the PR to the related issue using the issue number (e.g., "Fixes #123")
 3. Fill out the PR template completely
-4. Ensure CI checks pass
-5. Request review from at least one maintainer
-6. Address any review comments
-7. Once approved, the PR will be merged into `devtest`
+4. If you're contributing a Linux fix, make sure `./build.sh` produces a working AppImage on your distro first
+5. Ensure CI checks pass
+6. Request review from at least one maintainer
+7. Address any review comments
+8. Once approved, the PR will be merged into `main`
 
 ### PR Template
 
@@ -138,7 +138,7 @@ Types:
 
 1. PRs require at least one review
 2. Address all review comments
-3. Keep the PR up to date with `devtest`
+3. Keep the PR up to date with `main`
 4. Squash commits if requested
 
 ## Getting Help

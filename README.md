@@ -26,8 +26,9 @@ This fork is **fully independent** — not technically a GitHub fork anymore —
 
 **What's different in Meetily-Local vs. upstream as of v0.4.0:**
 
-- ✅ **Linux-only.** This fork dropped macOS/Windows support to focus on one platform done well — native PipeWire audio capture (mic + system, no cpal/BlackHole-style virtual device needed), WebKitGTK rendering, and ALSA device enumeration all fixed and tested.
-- ✅ **Modern dependencies.** `whisper-rs` 0.13 → 0.16 (drops ~30 MB of vendored patches), Tauri 2.6 → 2.11, all plugins current.
+- ✅ **Linux-only.** This fork dropped macOS/Windows support to focus on one platform done well — native PipeWire audio capture (mic + system, no cpal/BlackHole-style virtual device needed) and ALSA device enumeration all fixed and tested.
+- ✅ **Native desktop shell.** No webview: the UI is [GPUI](https://www.gpui.rs/) (the framework behind Zed), talking to the Rust core in-process with no IPC/serialization overhead. The original Tauri + Next.js/React shell was retired once the GPUI app reached parity.
+- ✅ **Modern dependencies.** `whisper-rs` 0.13 → 0.16 (drops ~30 MB of vendored patches), all crates current.
 
 Credit for the original architecture, models, and significant feature work goes to [Sujith S](https://github.com/sujithatzackriya) and the original Zackriya-Solutions community. See [Acknowledgments](#acknowledgments).
 
@@ -64,10 +65,11 @@ Pre-built binaries are published to this fork's [Releases](https://github.com/Ha
 
 The `.AppImage` works on most distros (Fedora 43+, Ubuntu 22.04+, Arch, etc.):
 
+Download `Parley-<version>-x86_64.AppImage` from the [latest release](https://github.com/Hankanman/Meetily-Local/releases/latest), then:
+
 ```bash
-curl -LO https://github.com/Hankanman/Meetily-Local/releases/latest/download/meetily_amd64.AppImage
-chmod +x meetily_amd64.AppImage
-./meetily_amd64.AppImage
+chmod +x Parley-*-x86_64.AppImage
+./Parley-*-x86_64.AppImage
 ```
 
 The `.deb` target is intentionally not shipped — it doesn't bundle `libsherpa-onnx-c-api.so`, so it wouldn't run on a clean host. The AppImage embeds all native libs via linuxdeploy and is the only supported bundle.
@@ -88,7 +90,7 @@ cd Meetily-Local
 
 `build.sh` handles the gnarly Fedora 44 / CUDA 13 build environment (gcc 16 → g++-15 host, `CUDAARCHS` for Turing+, `NO_STRIP=1` for linuxdeploy). On other distros you can override individual env vars.
 
-To start fresh: `./clean.sh` (nukes `target/` + `node_modules/` + Next.js caches; preserves user data and models).
+To start fresh: `./clean.sh` (nukes `target/`; preserves user data and models).
 
 For platform-specific deep-dives, see [`docs/building_in_linux.md`](docs/building_in_linux.md) and [`docs/BUILDING.md`](docs/BUILDING.md).
 
@@ -144,11 +146,11 @@ Selected automatically at build time by `build.sh` (or pass `cuda` / `vulkan` / 
 
 ## System architecture
 
-Meetily-Local is a single self-contained Tauri 2.x desktop application:
+Meetily-Local (Parley) is a single self-contained GPUI desktop application:
 
-- **Backend (Rust)**: audio capture, mixing, VAD, Whisper/Parakeet inference, sqlite persistence
-- **Frontend (Next.js + React)**: UI, meeting management, settings
-- **No external server required** — meeting/summary persistence, transcription, and LLM calls all happen inside the Tauri Rust process.
+- **`meetily-core`**: audio capture, mixing, VAD, Whisper/Parakeet inference, SQLite persistence, summary/LLM providers — no UI dependency.
+- **`meetily-gpui`**: the native [GPUI](https://www.gpui.rs/) desktop shell — meeting list, recording UI, settings — linking `meetily-core` directly, no IPC.
+- **No external server required** — meeting/summary persistence, transcription, and LLM calls all happen inside the same Rust process.
 
 For more details, see [docs/architecture.md](docs/architecture.md).
 

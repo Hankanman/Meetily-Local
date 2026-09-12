@@ -3,14 +3,13 @@ name: "Build and Test - Linux"
 on:
   workflow_dispatch:
     inputs:
-      build-type:
-        description: 'Build type'
+      mode:
+        description: 'GPU mode'
         required: true
         type: choice
         options:
-          - debug
-          - release
-        default: release
+          - cpu
+        default: cpu
       ubuntu-version:
         description: 'Ubuntu version'
         required: true
@@ -19,21 +18,6 @@ on:
           - ubuntu-22.04
           - ubuntu-24.04
         default: ubuntu-22.04
-      bundle-type:
-        description: 'Bundle type'
-        required: true
-        type: choice
-        options:
-          - deb
-          - appimage
-          - rpm
-          - all
-        default: all
-      sign-build:
-        description: 'Sign the build'
-        required: true
-        type: boolean
-        default: true
       upload-artifacts:
         description: 'Upload build artifacts'
         required: true
@@ -65,68 +49,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get version from tauri.conf.json
+      - name: Get version from meetily-gpui/Cargo.toml
         id: get-version
         shell: bash
         run: |
-          VERSION=$(grep -o '"version": "[^"]*"' frontend/src-tauri/tauri.conf.json | cut -d'"' -f4)
+          VERSION=$(awk -F'"' '/^version/ {print $2; exit}' meetily-gpui/Cargo.toml)
           echo "Application version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Determine build profile and bundle args
-        id: build-profile
-        shell: bash
-        run: |
-          # Determine build profile
-          if [[ "${{ github.event.inputs.build-type }}" == "debug" ]]; then
-            echo "profile=debug" >> "$GITHUB_OUTPUT"
-            echo "Build profile: debug"
-          else
-            echo "profile=release" >> "$GITHUB_OUTPUT"
-            echo "Build profile: release"
-          fi
-
-          # Determine bundle arguments
-          BUNDLE_TYPE="${{ github.event.inputs.bundle-type }}"
-          # AppImage is the only supported bundle: deb/rpm do not carry
-          # libsherpa-onnx-c-api.so and fail on a clean host (see
-          # docs/building_in_linux.md). Keep the input for experiments only.
-          if [[ "$BUNDLE_TYPE" == "all" ]] || [[ -z "$BUNDLE_TYPE" ]]; then
-            BUNDLES="appimage"
-          else
-            BUNDLES="$BUNDLE_TYPE"
-          fi
-
-          if [[ "${{ github.event.inputs.build-type }}" == "debug" ]]; then
-            echo "args=--debug --bundles $BUNDLES" >> "$GITHUB_OUTPUT"
-          else
-            echo "args=--bundles $BUNDLES" >> "$GITHUB_OUTPUT"
-          fi
-          echo "Bundle types: $BUNDLES"
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 8
-          run_install: false
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Get pnpm store directory
-        shell: bash
-        run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
-
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -137,216 +66,56 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          key: ${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}-x86_64-unknown-linux-gnu
+          key: ${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}-x86_64-unknown-linux-gnu-gpui
 
-      - name: Install dependencies (Ubuntu 24.04)
-        if: github.event.inputs.ubuntu-version == 'ubuntu-24.04'
+      - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libpipewire-0.3-dev libclang-dev meson ninja-build \
-            libwebkit2gtk-4.1-0=2.44.0-2 \
-            libwebkit2gtk-4.1-dev=2.44.0-2 \
-            libjavascriptcoregtk-4.1-0=2.44.0-2 \
-            libjavascriptcoregtk-4.1-dev=2.44.0-2 \
-            gir1.2-javascriptcoregtk-4.1=2.44.0-2 \
-            gir1.2-webkit2-4.1=2.44.0-2
-
-      - name: Install dependencies (Ubuntu 22.04)
-        if: github.event.inputs.ubuntu-version == 'ubuntu-22.04' || github.event.inputs.ubuntu-version == ''
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libpipewire-0.3-dev libclang-dev meson ninja-build
+          sudo apt-get install -y \
+            patchelf libasound2-dev libx11-dev libxtst-dev libxrandr-dev \
+            libpipewire-0.3-dev libclang-dev meson ninja-build
 
       - name: Install FUSE for AppImage
         run: |
           sudo apt-get update
           sudo apt-get install -y fuse libfuse2
 
-      - name: Install frontend dependencies
-        run: |
-          cd frontend
-          pnpm install
-
-      - name: Build llama-helper sidecar
-        run: |
-          echo "Building llama-helper sidecar (CPU mode)..."
-          cargo build --release -p llama-helper
-          
-          # Copy binary to binaries directory
-          mkdir -p frontend/src-tauri/binaries
-          cp target/release/llama-helper frontend/src-tauri/binaries/llama-helper-x86_64-unknown-linux-gnu
-          
-          echo "Copied llama-helper to frontend/src-tauri/binaries/"
-          ls -la frontend/src-tauri/binaries/
-
-      - name: Cache FFmpeg binary
-        uses: actions/cache@v4
-        with:
-          path: frontend/src-tauri/binaries/ffmpeg-*
-          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('frontend/src-tauri/build.rs', 'frontend/src-tauri/build/ffmpeg.rs') }}
-
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # sherpa-onnx-sys drops libsherpa-onnx-c-api.so into the cargo output
-          # dir without a RUNPATH on the binary; linuxdeploy needs this to find
-          # and bundle it (same as build.sh). Without it the AppImage is either
-          # missing the lib or truncated (issue #3).
-          LD_LIBRARY_PATH: ${{ github.workspace }}/target/x86_64-unknown-linux-gnu/release:${{ github.workspace }}/target/release
-          # Tauri updater signing (ALWAYS enabled for .sig files)
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # License validation RSA public key (embedded at build time)
-          MEETILY_RSA_PUBLIC_KEY: ${{ secrets.MEETILY_RSA_PUBLIC_KEY }}
-          # Supabase configuration (for online license verification)
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-        with:
-          projectPath: frontend
-          args: --target x86_64-unknown-linux-gnu --features openblas ${{ steps.build-profile.outputs.args }}
-
-      - name: Verify build artifacts
-        run: |
-          echo "Build artifacts:"
-          find target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle -type f
-          # A bundling failure can leave a tiny/empty AppImage behind (issue #3).
-          # Refuse to ship anything implausibly small or missing sherpa-onnx.
-          for f in target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/appimage/*.AppImage; do
-            [ -f "$f" ] || { echo "::error::no AppImage produced"; exit 1; }
-            size=$(stat -c%s "$f")
-            echo "$f: $size bytes"
-            if [ "$size" -lt 50000000 ]; then echo "::error::AppImage is only $size bytes"; exit 1; fi
-            chmod +x "$f"
-            (cd "$(dirname "$f")" && "./$(basename "$f")" --appimage-extract >/dev/null 2>&1) || { echo "::error::AppImage does not extract"; exit 1; }
-            if ! find "$(dirname "$f")/squashfs-root" -name 'libsherpa-onnx-c-api.so*' | grep -q .; then
-              echo "::error::libsherpa-onnx-c-api.so is not bundled in the AppImage"; exit 1
-            fi
-            rm -rf "$(dirname "$f")/squashfs-root"
-          done
-
-      - name: Remove libwayland-client.so from AppImage
-        if: contains(steps.build-profile.outputs.args, 'appimage')
-        run: |
-          # Find the AppImage file
-          APPIMAGE_PATH=$(find target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/appimage -name "*.AppImage" | head -1)
-
-          if [ -n "$APPIMAGE_PATH" ]; then
-            echo "Processing AppImage: $APPIMAGE_PATH"
-
-            # Make AppImage executable
-            chmod +x "$APPIMAGE_PATH"
-
-            # Extract AppImage
-            cd "$(dirname "$APPIMAGE_PATH")"
-            APPIMAGE_NAME=$(basename "$APPIMAGE_PATH")
-
-            # Extract using the AppImage itself
-            "./$APPIMAGE_NAME" --appimage-extract
-
-            # Remove libwayland-client.so files
-            echo "Removing libwayland-client.so files..."
-            find squashfs-root -name "libwayland-client.so*" -type f -delete
-
-            # List what was removed for verification
-            echo "Files remaining in lib directories:"
-            find squashfs-root -name "lib*" -type d | head -5 | while read dir; do
-              echo "Contents of $dir:"
-              ls "$dir" | grep -E "(wayland|fuse)" || echo "  No wayland/fuse libraries found"
-            done
-
-            # Get appimagetool
-            wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-            chmod +x appimagetool-x86_64.AppImage
-
-            # Repackage AppImage with no-appstream to avoid warnings
-            ARCH=x86_64 ./appimagetool-x86_64.AppImage --no-appstream squashfs-root "$APPIMAGE_NAME"
-
-            # Clean up
-            rm -rf squashfs-root appimagetool-x86_64.AppImage
-
-            echo "libwayland-client.so removed from AppImage successfully"
-          else
-            echo "No AppImage found to process"
-          fi
-
-      - name: Verify DEB package
-        if: contains(steps.build-profile.outputs.args, 'deb')
-        run: |
-          DEB_PATH=$(find target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/deb -name "*.deb" | head -1)
-          if [ -n "$DEB_PATH" ]; then
-            echo "Verifying DEB package: $DEB_PATH"
-            dpkg-deb --info "$DEB_PATH"
-            dpkg-deb --contents "$DEB_PATH" | head -20
-            echo "DEB package is valid"
-          else
-            echo "No DEB package found to verify"
-          fi
-
-      - name: Verify RPM package
-        if: contains(steps.build-profile.outputs.args, 'rpm')
-        run: |
-          RPM_PATH=$(find target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/rpm -name "*.rpm" | head -1)
-          if [ -n "$RPM_PATH" ]; then
-            echo "Verifying RPM package: $RPM_PATH"
-            sudo apt-get install -y rpm
-            rpm -qip "$RPM_PATH"
-            echo "RPM package is valid"
-          else
-            echo "No RPM package found to verify"
-          fi
+      - name: Build AppImage
+        run: ./build.sh "${{ github.event.inputs.mode || 'cpu' }}"
 
       - name: Verify AppImage
-        if: contains(steps.build-profile.outputs.args, 'appimage')
         run: |
-          APPIMAGE_PATH=$(find target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/appimage -name "*.AppImage" | head -1)
-          if [ -n "$APPIMAGE_PATH" ]; then
-            echo "Verifying AppImage: $APPIMAGE_PATH"
-            chmod +x "$APPIMAGE_PATH"
-            "$APPIMAGE_PATH" --appimage-help
-            echo "AppImage is valid"
-          else
-            echo "No AppImage found to verify"
+          f="Parley-${{ steps.get-version.outputs.version }}-x86_64.AppImage"
+          [ -f "$f" ] || { echo "::error::no AppImage produced ($f)"; exit 1; }
+          size=$(stat -c%s "$f")
+          echo "$f: $size bytes"
+          if [ "$size" -lt 50000000 ]; then echo "::error::AppImage is only $size bytes"; exit 1; fi
+          chmod +x "$f"
+          ./"$f" --appimage-extract >/dev/null 2>&1 || { echo "::error::AppImage does not extract"; exit 1; }
+          if ! find squashfs-root -name 'libsherpa-onnx-c-api.so*' | grep -q .; then
+            echo "::error::libsherpa-onnx-c-api.so is not bundled in the AppImage"; exit 1
           fi
+          ./"$f" --appimage-help
+          rm -rf squashfs-root
 
       - name: Upload artifacts
         if: ${{ github.event.inputs.upload-artifacts == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: meetily-linux-${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}-x64-${{ steps.build-profile.outputs.profile }}-${{ steps.get-version.outputs.version }}
-          path: |
-            target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/deb/*.deb
-            target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/appimage/*.AppImage
-            target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/rpm/*.rpm
+          name: parley-linux-${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }}-x64-${{ steps.get-version.outputs.version }}
+          path: Parley-*.AppImage
           retention-days: 30
 
       - name: Generate build summary
         run: |
-          echo "## 🐧 Linux Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Version** | ${{ steps.get-version.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Build Profile** | ${{ steps.build-profile.outputs.profile }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Target** | x86_64-unknown-linux-gnu |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Ubuntu Version** | ${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Bundle Types** | ${{ steps.build-profile.outputs.args }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Signed** | ${{ github.event.inputs.sign-build == 'true' && '✅ Yes' || '❌ No' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 Build Artifacts" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| File Type | Count |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| DEB Packages | $(find target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/deb -name "*.deb" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
-          echo "| AppImages | $(find target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/appimage -name "*.AppImage" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
-          echo "| RPM Packages | $(find target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle/rpm -name "*.rpm" 2>/dev/null | wc -l) |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details>" >> $GITHUB_STEP_SUMMARY
-          echo "<summary>📋 File List</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          find target/x86_64-unknown-linux-gnu/${{ steps.build-profile.outputs.profile }}/bundle -type f \( -name "*.deb" -o -name "*.AppImage" -o -name "*.rpm" \) 2>/dev/null >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Linux Build Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Property | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Version** | ${{ steps.get-version.outputs.version }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Mode** | ${{ github.event.inputs.mode || 'cpu' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Ubuntu Version** | ${{ github.event.inputs.ubuntu-version || 'ubuntu-22.04' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Build Artifact" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          ls -la Parley-*.AppImage >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "No AppImage found" >> "$GITHUB_STEP_SUMMARY"

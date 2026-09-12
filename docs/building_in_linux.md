@@ -15,18 +15,16 @@ selection, the gnarly Fedora/CUDA build-environment quirks, and the
 # Ubuntu/Debian
 sudo apt update
 sudo apt install build-essential cmake git \
-  libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-  libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev \
+  patchelf libasound2-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev \
   libpipewire-0.3-dev libclang-dev meson ninja-build
 
 # Fedora/RHEL
 sudo dnf install gcc-c++ cmake git llvm openmp-devel \
-  webkit2gtk4.1-devel libappindicator-gtk3-devel librsvg2-devel patchelf \
-  alsa-lib-devel openblas-devel pipewire-devel clang-devel meson ninja-build
+  patchelf alsa-lib-devel openblas-devel pipewire-devel clang-devel meson ninja-build
 
 # Arch Linux
-sudo pacman -S base-devel cmake git webkit2gtk-4.1 libappindicator-gtk3 \
-  librsvg patchelf alsa-lib openblas pipewire clang meson ninja
+sudo pacman -S base-devel cmake git \
+  patchelf alsa-lib openblas pipewire clang meson ninja
 ```
 
 `libpipewire` is the audio capture backend (PipeWire ≥ 0.3.44 at runtime),
@@ -36,10 +34,9 @@ bundled WebRTC echo-cancellation library (the app no longer needs the system
 
 ### Building offline or behind a proxy
 
-Three things are fetched at build time: whisper.cpp sources (via
-`whisper-rs-sys`), a prebuilt `sherpa-onnx` archive (via `sherpa-onnx-sys`),
-and a static `ffmpeg` binary (via `build.rs`). Cargo's registry proxy settings
-cover the first; the other two can be pre-seeded:
+Two things are fetched at build time: whisper.cpp sources (via
+`whisper-rs-sys`) and a prebuilt `sherpa-onnx` archive (via `sherpa-onnx-sys`).
+Cargo's registry proxy settings cover the first; the second can be pre-seeded:
 
 ```bash
 # sherpa-onnx: download the archive the sys crate expects and point it there
@@ -47,17 +44,16 @@ mkdir -p ~/.cache/sherpa-onnx
 curl -L -o ~/.cache/sherpa-onnx/sherpa-onnx-v1.13.7-linux-x64-shared-lib.tar.bz2 \
   https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.7/sherpa-onnx-v1.13.7-linux-x64-shared-lib.tar.bz2
 export SHERPA_ONNX_ARCHIVE_DIR=~/.cache/sherpa-onnx
-
-# ffmpeg: drop a static binary at this path and build.rs will skip the download
-cp /path/to/ffmpeg frontend/src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu
 ```
+
+(`ffmpeg` is fetched lazily at *runtime* by `meetily-core`'s
+`audio/ffmpeg.rs`, not at build time — nothing to pre-seed for a build.)
 
 The exact sherpa-onnx version is the one pinned in `Cargo.lock`
 (`sherpa-onnx-sys`); once built, the archive is cached under
 `target/sherpa-onnx-prebuilt/`.
 
-You'll also need [pnpm](https://pnpm.io/installation) and a Rust toolchain
-(`rustup`).
+You'll also need a Rust toolchain (`rustup`).
 
 ### 2. Build and Run
 
@@ -75,7 +71,6 @@ override:
 ./dev.sh cuda          # NVIDIA CUDA
 ./dev.sh vulkan        # AMD/Intel Vulkan
 ./dev.sh cpu           # CPU-only
-./dev.sh frontend      # frontend-only (next dev), no Tauri shell — fastest UI loop
 
 ./build.sh cuda
 ./build.sh vulkan
@@ -99,10 +94,14 @@ is involved:
    `CMAKE_POSITION_INDEPENDENT_CODE` (required for `rust-lld` to link the CUDA
    `.cu.o` objects), and sets `NO_STRIP=1` (linuxdeploy's bundled `strip`
    chokes on Fedora 43+'s `SHT_RELR` sections).
-3. **Sidecar build**: builds the `llama-helper` crate with the matching GPU
-   feature and stages it into `frontend/src-tauri/binaries/`.
-4. **Tauri build/dev**: runs `pnpm exec tauri build --bundles appimage` (or
-   `tauri dev`) with `--features {cuda,vulkan}` passed through as needed.
+3. **Sidecar build**: builds the `llama-helper` crate (release) with the
+   matching GPU feature; `dev.sh` points `MEETILY_LLAMA_HELPER` at it directly,
+   `build.sh` stages a copy into `target/gpui-dist/`.
+4. **GPUI build/run**: `dev.sh` runs `cargo run -p meetily-gpui --features
+   {cuda,vulkan}` as needed; `build.sh` runs `cargo build --release -p
+   meetily-gpui`, stages the binary + native libs into `target/gpui-dist/`,
+   and packages that into an AppImage via
+   `meetily-gpui/packaging/linux/build-appimage.sh`.
 
 | Mode     | Feature Flag          | Typical Speedup |
 | -------- | ---------------------- | ---------------- |
@@ -160,11 +159,13 @@ them, build the workspace directly, e.g.:
 
 ```bash
 cargo build --release -p llama-helper --features hipblas
-cd frontend && pnpm exec tauri build -- --features hipblas
+cargo build --release -p meetily-gpui --features hipblas
 ```
 
 This path is unsupported by the helper scripts — expect to hand-manage the
-`llama-helper` sidecar staging step yourself (see step 3 above).
+`llama-helper` sidecar staging and AppImage packaging steps yourself (see
+step 3-4 above, or run `meetily-gpui/packaging/linux/build-appimage.sh`
+directly against a dist dir you assemble by hand).
 
 ---
 
@@ -183,12 +184,13 @@ This path is unsupported by the helper scripts — expect to hand-manage the
 ### Build Output Location
 
 ```
-target/release/bundle/appimage/meetily_<version>_amd64.AppImage
+target/gpui-dist/                       staged binary + native libs
+Parley-<version>-x86_64.AppImage        repo root — the final packaged app
 ```
 
-The `.deb` bundle target is intentionally not produced — it doesn't bundle
-`libsherpa-onnx-c-api.so`, so it wouldn't run on a clean host. The AppImage
-embeds all native libs via linuxdeploy.
+Only the AppImage bundle is produced — it embeds all native libs (sherpa-onnx,
+onnxruntime, llama-helper) via linuxdeploy, so it runs on a clean host without
+a `.deb`/`.rpm`'s dependency resolution.
 
 ---
 
@@ -208,12 +210,13 @@ embeds all native libs via linuxdeploy.
   bundled `strip`).
 
 ### `Could not find dependency: libsherpa-onnx-c-api.so`
-- **Fix:** Already handled — `build.sh` (and the CI workflows) point
-  linuxdeploy at `target/release` via `LD_LIBRARY_PATH` so it can find and
-  bundle the lib. If you invoke `cargo tauri build` by hand, export it
+- **Fix:** Already handled — `build.sh` and
+  `meetily-gpui/packaging/linux/build-appimage.sh` point linuxdeploy at the
+  staged dist dir via `LD_LIBRARY_PATH` so it can find and bundle the lib. If
+  you invoke `build-appimage.sh` by hand against your own dist dir, export it
   yourself; a build without it produces an AppImage that is missing the
-  library or is truncated to a few bytes. CI now refuses to upload an
-  AppImage under 50 MB or without the library inside.
+  library or is truncated to a few bytes. CI verifies the AppImage is at
+  least 50 MB and contains the library before treating the build as green.
 
 ### Build works but no GPU acceleration
 - **Check:** `nvidia-smi` (NVIDIA) should work before `./build.sh` (or

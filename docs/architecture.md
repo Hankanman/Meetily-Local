@@ -1,41 +1,46 @@
 # System Architecture
 
-Meetily is a self-contained desktop application built with [Tauri](https://tauri.app/). It combines a Rust-based backend with a Next.js frontend into a single, efficient, and cross-platform application.
+Meetily-Local (Parley) is a self-contained desktop application built with
+[GPUI](https://www.gpui.rs/) (the UI framework behind Zed). A Tauri-free
+Rust core (`meetily-core`) and the GPUI shell (`meetily-gpui`) link into a
+single native binary — no webview, no JavaScript, no IPC layer.
 
 ## High-Level Architecture Diagram
 
 ```mermaid
 graph TD
-    subgraph User Interface
-        A[Next.js Frontend]
+    subgraph "meetily-gpui (UI)"
+        A[GPUI Views: recording, meeting, settings, tray]
     end
 
-    subgraph "Core Logic (Rust)"
-        B[Tauri Core]
+    subgraph "meetily-core (Tauri-free)"
         C[Audio Engine]
         D[Transcription Engine]
         E[Database]
         F[Summary Engine]
     end
 
-    A -- Tauri Commands --> B
-    B -- Manages --> C
-    B -- Manages --> D
-    B -- Manages --> E
-    B -- Manages --> F
+    A -- calls plain Rust fns --> C
+    A -- calls plain Rust fns --> D
+    A -- calls plain Rust fns --> E
+    A -- calls plain Rust fns --> F
+    C -- events::EventSink --> A
+    D -- events::EventSink --> A
 ```
 
 ## Component Details
 
-### Frontend (Next.js)
+### UI shell (`meetily-gpui`)
 
-*   Provides the user interface for managing meetings, displaying transcriptions, and configuring the application.
-*   Communicates with the Rust core through Tauri's command system.
+*   Provides the user interface for managing meetings, displaying transcriptions, and configuring the application, plus the system tray.
+*   Calls into `meetily-core` as plain Rust function calls — no command/IPC boundary — and receives updates back through the `events::EventSink` trait (`emit_event(name, &payload)`), which the shell wires to GPUI's own update loop.
 
-### Backend (Rust Core)
+### Core (`meetily-core`)
 
-*   **Tauri Core:** The heart of the application, responsible for managing the window, handling events, and exposing the Rust core to the frontend.
-*   **Audio Engine:** Captures audio from the microphone and system, processes it, and prepares it for transcription.
-*   **Transcription Engine:** Uses local speech-to-text models (Whisper or Parakeet) to transcribe the captured audio. It can be accelerated with a GPU.
-*   **Database:** A local SQLite database that stores meeting metadata, transcripts, and summaries.
-*   **Summary Engine:** Generates meeting summaries using various Large Language Models (LLMs), including local models via Ollama.
+*   **Audio Engine:** Captures audio from the microphone and system via native PipeWire, processes it (AEC, VAD, loudness normalisation), and prepares it for transcription.
+*   **Transcription Engine:** Uses local speech-to-text models (Whisper or Parakeet) to transcribe the captured audio. It can be accelerated with a GPU (CUDA/Vulkan) or run on CPU.
+*   **Database:** A local SQLite database (via sqlx) that stores meeting metadata, transcripts, and summaries.
+*   **Summary Engine:** Generates meeting summaries using various Large Language Models (LLMs), including a built-in llama.cpp sidecar (`llama-helper`) or remote Ollama / Claude / Groq / OpenRouter / OpenAI-compatible endpoints.
+
+`meetily-core` has no dependency on `meetily-gpui` or any UI framework, so a
+future UI shell could link it the same way.
